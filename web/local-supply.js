@@ -64,7 +64,7 @@ function renderSupplier() {
     const data = collect();
     for (const control of form.elements) control.disabled = true;
     try {
-      await purchaseAction('/api/local-supplier', data);
+      await submitAction('/api/local-supplier', data);
       supplierDraft = null;
       supplierSignature = '';
       document.activeElement?.blur();
@@ -93,7 +93,7 @@ function cleanerPanel(issue) {
         button.type = 'button';
         button.onclick = async () => {
           button.disabled = true;
-          try { await purchaseAction(`/api/local-requests/${request.id}/${action}`, {version: request.version}); await load(); }
+          try { await submitAction(`/api/local-requests/${request.id}/${action}`, {version: request.version}); await load(); }
           catch (error) { notice.textContent = error.message; }
           finally { button.disabled = false; }
         };
@@ -122,7 +122,7 @@ function cleanerPanel(issue) {
           event.preventDefault();
           save.disabled = true;
           try {
-            await purchaseAction(`/api/local-requests/${request.id}/available`, {version: request.version, arrival: new Date(arrival.value).toISOString().replace('Z', '+00:00'), items_confirmed: check.checked});
+            await submitAction(`/api/local-requests/${request.id}/available`, {version: request.version, arrival: new Date(arrival.value).toISOString().replace('Z', '+00:00'), items_confirmed: check.checked});
             document.activeElement?.blur();
             await load();
           } catch (error) { feedback.textContent = error.message; }
@@ -162,7 +162,7 @@ function cleanerPanel(issue) {
     event.preventDefault();
     send.disabled = true;
     try {
-      await purchaseAction('/api/local-requests', {issue_id: issue.id, needed_by: new Date(needed.value).toISOString().replace('Z', '+00:00'), reply_minutes: Number(minutes.value)});
+      await submitAction('/api/local-requests', {issue_id: issue.id, needed_by: new Date(needed.value).toISOString().replace('Z', '+00:00'), reply_minutes: Number(minutes.value)});
       localDrafts.delete(issue.id);
       document.activeElement?.blur();
       await load();

@@ -1,6 +1,7 @@
 import datetime as dt
 from contextlib import contextmanager
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -12,6 +13,11 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from urllib.parse import quote, urlsplit
+
+from settings import load_environment, public_origin
+
+load_environment()
 
 ROOT = Path(__file__).resolve().parent
 DATABASE = os.environ.get('DATABASE_PATH', str(ROOT / 'recovery.sqlite3'))
@@ -39,6 +45,9 @@ def initialize():
     with connect() as db:
         db.executescript('''
         PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, salt BLOB NOT NULL, password_hash BLOB NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','manager')), created_at REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires_at REAL NOT NULL, login_key TEXT NOT NULL, UNIQUE(user_id, login_key));
+        CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, failures INTEGER NOT NULL, expires_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS incidents (
             id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL, property_id TEXT NOT NULL,
             message TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL,
@@ -211,12 +220,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-    def respond(self, status, data, content_type='application/json'):
+    def respond(self, status, data, content_type='application/json', headers=None):
         body = json.dumps(data).encode() if content_type == 'application/json' else data
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('X-Frame-Options', 'DENY')
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         self.end_headers()
@@ -225,27 +238,72 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch(self):
         started = time.monotonic()
         trace = str(uuid.uuid4())
+        from auth import AuthError, cookie, create_user, login, new_session, require_csrf, session
+        requested = self.path
         try:
+            self.path = urlsplit(self.path).path
             host = self.headers.get('Host', '')
-            allowed_hosts = {f'localhost:{self.server.server_port}', f'127.0.0.1:{self.server.server_port}'}
-            if host not in allowed_hosts or self.headers.get('Origin', 'http://' + host) != 'http://' + host:
-                self.respond(403, {'error': 'Local same-origin access required'})
+            local_hosts = {f'localhost:{self.server.server_port}', f'127.0.0.1:{self.server.server_port}'}
+            configured_origin = public_origin()
+            remote_host = urlsplit(configured_origin).netloc if configured_origin else ''
+            local_request = host in local_hosts and ipaddress.ip_address(self.client_address[0]).is_loopback and not self.headers.get('X-Forwarded-For') and not self.headers.get('X-Forwarded-Proto')
+            proxy_ranges = [ipaddress.ip_network(value.strip()) for value in os.environ.get('TRUSTED_PROXY_CIDRS', '127.0.0.1/32,::1/128').split(',')]
+            if any(network.prefixlen == 0 for network in proxy_ranges):
+                raise ValueError('Trusted proxies cannot include all addresses')
+            trusted_proxy = any(ipaddress.ip_address(self.client_address[0]) in network for network in proxy_ranges)
+            remote_request = bool(remote_host and host == remote_host and trusted_proxy and self.headers.get('X-Forwarded-Proto') == 'https')
+            if not local_request and not remote_request:
+                self.respond(403, {'error': 'Use the configured HTTPS dashboard or local address'})
                 return
+            origin = configured_origin if remote_request else 'http://' + host
+            if self.command == 'POST' and self.headers.get('Origin') != origin:
+                self.respond(403, {'error': 'Same-origin access required'})
+                return
+            client_address = self.client_address[0]
+            if remote_request:
+                for value in reversed(self.headers.get('X-Forwarded-For', '').split(',')):
+                    if value.strip():
+                        address = ipaddress.ip_address(value.strip())
+                        client_address = str(address)
+                        if not any(address in network for network in proxy_ranges):
+                            break
             with LOCK:
                 current = time.monotonic()
                 for address in list(RATE):
                     if current - RATE[address][0] >= 60:
                         del RATE[address]
-                address = self.client_address[0]
+                address = client_address
                 bucket = RATE.setdefault(address, [current, 0])
                 bucket[1] += 1
                 if bucket[1] > 120:
                     self.respond(429, {'error': 'Rate limit exceeded'})
                     return
-            assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+            with connect() as db:
+                actor = session(db, self.headers, origin)
+                setup_allowed = local_request and not configured_origin and not db.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+            if self.command == 'GET' and self.path == '/api/auth/session':
+                self.respond(200, {'authenticated': bool(actor), 'setup_allowed': setup_allowed, 'username': actor['username'] if actor else None, 'role': actor['role'] if actor else None, 'csrf': actor['csrf'] if actor else None})
+                return
+            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+            if self.command == 'GET' and self.path == '/':
+                if not actor:
+                    target = requested if re.fullmatch(r'/\?purchase=[a-f0-9-]{36}', requested) else '/'
+                    self.respond(303, b'', 'text/plain', {'Location': '/login?next=' + quote(target, safe='')})
+                    return
+                self.respond(200, (ROOT / 'web' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
+                return
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
+                return
+            auth_action = self.command == 'POST' and self.path in ('/api/auth/login', '/api/auth/setup', '/api/auth/logout')
+            if not actor and not auth_action:
+                raise AuthError(401, 'Sign in to continue')
+            if self.command == 'GET' and self.path == '/api/settings/email':
+                if actor['role'] != 'admin':
+                    raise AuthError(403, 'Administrator access required')
+                from settings import email_status
+                self.respond(200, email_status())
                 return
             if self.command == 'GET' and self.path == '/api/research':
                 from research import analyze
@@ -262,8 +320,9 @@ class Handler(BaseHTTPRequestHandler):
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
                     from purchases import AUTO_LIMIT_CENTS, VETO_SECONDS, describe, email_settings
+                    from mailer import email_ready
                     settings = email_settings()
-                    result['purchase_policy'] = {'auto_limit_cents': AUTO_LIMIT_CENTS, 'veto_seconds': VETO_SECONDS, 'email_configured': all(settings.values()), 'checkout_connected': False, 'simulation': True}
+                    result['purchase_policy'] = {'auto_limit_cents': AUTO_LIMIT_CENTS, 'veto_seconds': VETO_SECONDS, 'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
                     for issue in result['issues']:
                         issue['purchases'] = [describe(row) for row in db.execute('SELECT * FROM purchase_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     result['integration'] = dict(state) if state else {'status': 'starting', 'last_attempt': None, 'last_success': None, 'error': None}
@@ -284,7 +343,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/local-supplier', '/api/local-requests') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel))', self.path):
+            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -292,25 +351,66 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= 20000 or self.headers.get('Transfer-Encoding'):
                 raise ValueError('Invalid request size')
-            key = self.headers.get('Idempotency-Key', '')
-            if not 8 <= len(key) <= 200:
-                raise ValueError('Idempotency-Key required')
             raw = self.rfile.read(length)
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise ValueError('JSON object required')
+            key = self.headers.get('Idempotency-Key', '')
+            if not 8 <= len(key) <= 200:
+                raise ValueError('Idempotency-Key required')
+            if auth_action:
+                if self.path == '/api/auth/login':
+                    token = login(connect, data, client_address, key)
+                elif self.path == '/api/auth/setup':
+                    if not setup_allowed:
+                        raise AuthError(403, 'Initial account setup is available only on the local computer before remote hosting is enabled')
+                    with connect() as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        if db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
+                            raise AuthError(403, 'Initial setup has already been completed')
+                        user = create_user(db, data, 'admin')
+                        token = new_session(db, user, key)
+                else:
+                    if actor:
+                        require_csrf(actor, self.headers)
+                        with connect() as db:
+                            db.execute('DELETE FROM sessions WHERE token_hash = ?', (actor['token_hash'],))
+                            audit(db, actor['user_id'], 'manager_signed_out', {'actor': actor['username']})
+                    token = ''
+                self.respond(200, {'ok': True}, headers={'Set-Cookie': cookie(token, origin)})
+                return
+            require_csrf(actor, self.headers)
+            if self.path == '/api/settings/email' and actor['role'] != 'admin':
+                raise AuthError(403, 'Administrator access required')
+            key = hashlib.sha256((actor['user_id'] + '\n' + key).encode()).hexdigest()
             fingerprint = hashlib.sha256(self.path.encode() + b'\n' + raw).hexdigest()
             with connect() as db:
                 db.execute('BEGIN IMMEDIATE')
+                current_actor = session(db, self.headers, origin)
+                if not current_actor or current_actor['user_id'] != actor['user_id']:
+                    raise AuthError(401, 'Session expired or was revoked. Sign in again.')
+                if self.path == '/api/settings/email' and current_actor['role'] != 'admin':
+                    raise AuthError(403, 'Administrator access required')
                 previous = db.execute('SELECT * FROM operations WHERE key = ?', (key,)).fetchone()
                 if previous:
                     if previous['fingerprint'] != fingerprint:
                         raise ValueError('Idempotency key reused with different request')
                     result = json.loads(previous['response'])
                 else:
-                    result = mutate(db, self.path, data)
+                    audit_start = db.execute('SELECT COALESCE(MAX(id), 0) FROM audit').fetchone()[0]
+                    if self.path == '/api/settings/email':
+                        from settings import save_email
+                        result = save_email(data)
+                        audit(db, actor['user_id'], 'email_settings_updated', {'actor': actor['username']})
+                    else:
+                        result = mutate(db, self.path, data)
+                    for event in db.execute('SELECT id, details FROM audit WHERE id > ?', (audit_start,)).fetchall():
+                        details = json.loads(event['details']) | {'actor': actor['username']}
+                        db.execute('UPDATE audit SET details = ? WHERE id = ?', (json.dumps(details), event['id']))
                     db.execute('INSERT INTO operations VALUES (?, ?, ?)', (key, fingerprint, json.dumps(result)))
             self.respond(200, result)
+        except AuthError as error:
+            self.respond(error.status, {'error': str(error)})
         except (ValueError, UnicodeDecodeError) as error:
             self.respond(400, {'error': str(error)})
         except Exception:
@@ -352,7 +452,15 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     os.umask(0o077)
     initialize()
-    server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '3000'))), Handler)
+    configured_origin = public_origin()
+    if configured_origin:
+        with connect() as db:
+            if not db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone():
+                raise SystemExit('Create an administrator locally before enabling APP_PUBLIC_URL')
+    bind_host = os.environ.get('BIND_HOST', '127.0.0.1')
+    if bind_host != '127.0.0.1' and not configured_origin:
+        raise SystemExit('Remote binding requires APP_PUBLIC_URL and an existing administrator')
+    server = ThreadingHTTPServer((bind_host, int(os.environ.get('PORT', '3000'))), Handler)
     worker = threading.Thread(target=poll_hospitable, daemon=True)
     worker.start()
     from purchases import deliver_notices

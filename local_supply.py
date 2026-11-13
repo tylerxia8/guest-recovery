@@ -4,7 +4,8 @@ import logging
 import re
 import uuid
 
-from purchases import email_settings, resend
+from purchases import email_settings
+from mailer import email_ready, send_email
 
 SUPPORTED = ('laundry_pods', 'trash_bags', 'dish_pods', 'toilet_paper', 'soap', 'shampoo')
 
@@ -35,7 +36,7 @@ def describe(row):
         else:
             request['status'] = 'Cleaner reported available; delivery is not dispatched'
     elif row['notice_status'] == 'failed':
-        request['status'] = 'Cleaner email failed — use Amazon'
+        request['status'] = 'Cleaner email send is unconfirmed — use Amazon' if (row['error'] or '').startswith('Gmail send') else 'Cleaner email failed — use Amazon'
         request['fallback'] = True
     elif current >= dt.datetime.fromisoformat(details['reply_by']):
         request['status'] = 'No confirmed reply before the deadline — use Amazon'
@@ -126,7 +127,7 @@ def deliver_requests(connect, stop):
     from catalog import ITEMS
     while not stop.is_set():
         settings = email_settings()
-        if settings['RESEND_API_KEY'] and settings['NOTIFICATION_FROM'] and settings['MANAGER_EMAIL']:
+        if email_ready(settings):
             with connect() as db:
                 rows = db.execute("SELECT * FROM local_requests WHERE state = 'pending' AND notice_status = 'pending' ORDER BY created_at LIMIT 10").fetchall()
             for row in rows:
@@ -145,22 +146,27 @@ def deliver_requests(connect, stop):
                     with connect() as db:
                         db.execute('BEGIN IMMEDIATE')
                         current = db.execute('SELECT * FROM local_requests WHERE id = ?', (row['id'],)).fetchone()
-                        if current['state'] != 'pending':
+                        if current['state'] != 'pending' or current['notice_status'] != 'pending':
                             continue
                         payload = json.loads(current['payload']) if current['payload'] else None
                         if payload is None:
                             text = '\n'.join(('[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]', 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + ', '.join(ITEMS[item][0] for item in details['item_types']), 'Needed by: ' + details['needed_by'], 'Please reply by: ' + details['reply_by'], 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
                             payload = {'from': settings['NOTIFICATION_FROM'], 'to': [details['email']], 'reply_to': settings['MANAGER_EMAIL'], 'subject': '[SIMULATION] Hiddenbrook supply availability request', 'text': text}
                             db.execute('UPDATE local_requests SET payload = ? WHERE id = ?', (json.dumps(payload), row['id']))
-                    result = resend('emails', settings, payload, 'cleaner-availability/' + row['id'])
-                    email_id = str(uuid.UUID(result['id']))
+                        if settings['EMAIL_PROVIDER'] == 'gmail':
+                            db.execute("UPDATE local_requests SET notice_status = 'failed', error = 'Gmail send is in progress or unconfirmed; do not resend automatically' WHERE id = ?", (row['id'],))
+                    result = send_email(settings, payload, 'cleaner-availability/' + row['id'])
+                    email_id = result['id']
+                    if not email_id.startswith('smtp:'):
+                        email_id = str(uuid.UUID(email_id))
                     with connect() as db:
-                        db.execute("UPDATE local_requests SET notice_status = 'sent', email_id = ? WHERE id = ?", (email_id, row['id']))
+                        db.execute("UPDATE local_requests SET notice_status = 'sent', email_id = ?, error = NULL WHERE id = ?", (email_id, row['id']))
                         db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_email_sent', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
                 except Exception as error:
                     logging.error(json.dumps({'event': 'cleaner_email_failed', 'request_id': row['id'], 'error_type': type(error).__name__}))
+                    message = 'Gmail send outcome is unconfirmed. The email may have arrived; check before resending. Use Amazon if the cleaner cannot confirm in time.' if settings['EMAIL_PROVIDER'] == 'gmail' else 'Email failed; use Amazon or cancel and retry the availability check'
                     with connect() as db:
-                        db.execute("UPDATE local_requests SET notice_status = 'failed', error = 'Email failed; use Amazon or cancel and retry the availability check' WHERE id = ?", (row['id'],))
+                        db.execute("UPDATE local_requests SET notice_status = 'failed', error = ? WHERE id = ?", (message, row['id']))
                 if stop.wait(0.6):
                     return
         stop.wait(15)

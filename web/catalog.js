@@ -40,7 +40,7 @@ function renderCatalog() {
     remove.onclick = async () => {
       remove.disabled = true;
       try {
-        await purchaseAction('/api/catalog/archive', {id: product.id, version: product.version});
+        await submitAction('/api/catalog/archive', {id: product.id, version: product.version});
         preferenceDrafts.delete(product.property_id + ':' + product.id);
         if (selectedProduct === product.id) selectedProduct = null;
         document.activeElement?.blur();
@@ -105,7 +105,7 @@ function renderCatalog() {
     const data = {...base, ...Object.fromEntries(new FormData(form))};
     for (const control of form.elements) control.disabled = true;
     try {
-      await purchaseAction('/api/catalog', data);
+      await submitAction('/api/catalog', data);
       preferenceDrafts.delete(key);
       selectedProduct = null;
       document.activeElement?.blur();

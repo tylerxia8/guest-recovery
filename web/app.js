@@ -18,11 +18,11 @@ const purchaseDrafts = new Map();
 let renderedIssues = '';
 let renderedPreferences = '';
 let renderedSupplier = '';
-async function purchaseAction(path, data) {
+async function submitAction(path, data) {
   const key = crypto.randomUUID();
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: JSON.stringify(data), signal: AbortSignal.timeout(15000)});
+      const response = await apiFetch(path, {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: JSON.stringify(data), signal: AbortSignal.timeout(15000)});
       if ((response.status === 429 || response.status >= 500) && !attempt) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
@@ -37,11 +37,11 @@ function purchasePanel(issue) {
   const section = node('section', '', 'purchase-panel');
   section.append(node('h3', 'Purchase notice & manager decision'));
   section.append(node('p', '$25 or less: email the manager, then wait 10 minutes for a possible veto. Above $25: get explicit approval. The total includes all items, gifts, tax, shipping, and fees.', 'help-text'));
-  section.append(node('p', 'Simulation only · Amazon checkout is not connected. Manager controls currently work on this computer.', 'delivery-status'));
-  if (!dataset.purchase_policy.email_configured) section.append(node('p', 'Email setup incomplete. Proposals can be saved, but notices and timers remain blocked until a sending key and sender are configured.', 'context-note'));
+  section.append(node('p', 'Simulation only · Amazon checkout is not connected. Manager decisions require sign-in.', 'delivery-status'));
+  if (!dataset.purchase_policy.email_configured) section.append(node('p', 'Email setup incomplete. An administrator can configure sending under Email delivery settings. Notices and timers remain blocked until then.', 'context-note'));
   for (const request of issue.purchases) {
     const card = node('div', '', 'purchase-request');
-    card.append(node('strong', request.summary), node('p', `$${(request.total_cents / 100).toFixed(2)} total · $${(request.gift_cents / 100).toFixed(2)} gift included`, 'help-text'), node('p', request.status, 'purchase-status'));
+    card.append(node('strong', request.summary), node('p', `$${(request.total_cents / 100).toFixed(2)} total · $${(request.gift_cents / 100).toFixed(2)} gift included`, 'help-text'), node('p', request.status, 'purchase-status'), node('p', request.email_evidence, 'help-text'));
     if (request.eligible_at && request.decision !== 'vetoed') {
       const countdown = node('p', '', 'countdown');
       countdown.dataset.deadline = request.eligible_at;
@@ -55,7 +55,7 @@ function purchasePanel(issue) {
         button.type = 'button';
         button.onclick = async () => {
           button.disabled = true;
-          try { await purchaseAction(`/api/purchases/${request.id}/${action}`, {}); await load(); }
+          try { await submitAction(`/api/purchases/${request.id}/${action}`, {}); await load(); }
           catch (error) { notice.textContent = error.message; }
           finally { button.disabled = false; }
         };
@@ -100,12 +100,12 @@ function purchasePanel(issue) {
     const data = {issue_id: issue.id, summary: form.elements.summary.value, total_cents: Math.round(Number(form.elements.total.value) * 100), gift_cents: Math.round(Number(form.elements.gift.value) * 100), all_in_confirmed: check.checked};
     for (const control of form.elements) control.disabled = true;
     try {
-      await purchaseAction('/api/purchases', data);
+      await submitAction('/api/purchases', data);
       purchaseDrafts.delete(issue.id);
       form.blur();
       document.activeElement?.blur();
       await load();
-      notice.textContent = 'Proposal saved. The clock starts only after email delivery is confirmed. No purchase will be made in simulation mode.';
+      notice.textContent = 'Proposal saved. The clock starts after a successful Gmail send or confirmed Resend delivery; uncertain sends stay blocked. No purchase will be made in simulation mode.';
     } catch (error) { feedback.textContent = error.message; }
     finally { for (const control of form.elements) control.disabled = false; }
   };
@@ -123,6 +123,10 @@ function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
   const visible = dataset.issues.filter(issue => (!category || issue.category === category) && (!search || `${issue.property} ${issue.category} ${issue.evidence.map(message => message.body).join(' ')}`.toLowerCase().includes(search)));
+  if (!selected) {
+    const requestedPurchase = new URLSearchParams(window.location.search).get('purchase');
+    selected = visible.find(issue => issue.purchases.some(request => request.id === requestedPurchase))?.id || null;
+  }
   if (!visible.some(issue => issue.id === selected)) selected = (visible.find(issue => issue.worksheet) || visible[0])?.id;
   document.querySelector('#result-count').textContent = String(visible.length);
   const requests = document.querySelector('#requests');
@@ -255,17 +259,7 @@ async function load() {
   refresh.disabled = true;
   notice.textContent = '';
   try {
-    let response;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        response = await fetch('/api/research', {signal: AbortSignal.timeout(15000)});
-        if ((response.status === 429 || response.status >= 500) && attempt === 0) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
-        break;
-      } catch (error) {
-        if (attempt) throw error;
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
+    const response = await apiFetch('/api/research');
     if (!response.ok) throw new Error('Could not load saved requests. Please try again.');
     const next = await response.json();
     const previousIssues = renderedIssues;
@@ -294,7 +288,7 @@ document.querySelector('#refresh').onclick = async () => {
     let response;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        response = await fetch('/api/integration/sync', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: '{}', signal: AbortSignal.timeout(15000)});
+        response = await apiFetch('/api/integration/sync', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: '{}', signal: AbortSignal.timeout(15000)});
         if ((response.status === 429 || response.status >= 500) && !attempt) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
         break;
       } catch (error) {
