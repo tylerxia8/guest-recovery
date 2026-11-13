@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from app import DATABASE, audit, connect, initialize, mutate
+from app import DATABASE, ROOT, audit, connect, initialize, mutate
 
 
 def get(path, token):
@@ -81,9 +81,70 @@ def sync(identifier):
     print(json.dumps({'event': 'hospitable_sync', 'imported_messages': imported}))
 
 
+def research():
+    token = os.environ.get('HOSPITABLE_TOKEN', '')
+    if not token:
+        for line in (ROOT / '.env').read_text().splitlines():
+            key, separator, value = line.partition('=')
+            if separator and key.strip() == 'HOSPITABLE_TOKEN':
+                token = value.strip().strip('\"\'')
+    if not token:
+        raise ValueError('HOSPITABLE_TOKEN is empty')
+    properties = []
+    for page in range(1, 101):
+        rows = get('properties?' + urllib.parse.urlencode({'per_page': 100, 'page': page}), token)
+        properties.extend(rows)
+        if len(rows) < 100:
+            break
+    else:
+        raise ValueError('Property pagination limit reached; previous snapshot preserved')
+    current = dt.datetime.now(dt.timezone.utc)
+    end = current.date() + dt.timedelta(days=365 * 2)
+    params = [('properties[]', item['id']) for item in properties] + [('status[]', 'accepted'), ('date_query', 'checkout'), ('start_date', str(current.date() - dt.timedelta(days=1))), ('end_date', str(end)), ('include', 'properties'), ('per_page', 100)]
+    reservations = []
+    if properties:
+        for page in range(1, 101):
+            rows = get('reservations?' + urllib.parse.urlencode(params + [('page', page)]), token)
+            for reservation in rows:
+                check_in = dt.datetime.fromisoformat(reservation['check_in'].replace('Z', '+00:00'))
+                check_out = dt.datetime.fromisoformat(reservation['check_out'].replace('Z', '+00:00'))
+                if check_in <= current < check_out and reservation['reservation_status']['current']['category'] == 'accepted':
+                    reservations.append(reservation)
+            if len(rows) < 100:
+                break
+        else:
+            raise ValueError('Reservation pagination limit reached; previous snapshot preserved')
+    conversations = []
+    nontext = 0
+    for reservation in reservations:
+        identifier = str(uuid.UUID(reservation['id']))
+        rows = get('reservations/' + identifier + '/messages', token)
+        messages = []
+        for message in rows:
+            if message.get('reservation_id') not in (None, identifier) or message['conversation_id'] != reservation['conversation_id']:
+                raise ValueError('Message does not match its reservation')
+            body = message.get('body')
+            if body is None:
+                nontext += 1
+                continue
+            if not isinstance(body, str):
+                raise ValueError('Unexpected message body; previous snapshot preserved')
+            timestamp = dt.datetime.fromisoformat(message['created_at'].replace('Z', '+00:00'))
+            if timestamp.tzinfo is None:
+                raise ValueError('Message timestamp requires timezone')
+            messages.append({'id': str(message['id']), 'sender_type': message['sender_type'], 'body': body, 'created_at': timestamp.astimezone(dt.timezone.utc).isoformat()})
+        conversations.append({'reservation_id': identifier, 'property': ', '.join(item['name'] for item in reservation['properties']), 'check_in': reservation['check_in'], 'check_out': reservation['check_out'], 'messages': messages})
+        print(json.dumps({'event': 'research_progress', 'conversations': len(conversations), 'total': len(reservations)}), flush=True)
+    snapshot = {'synced_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'property_count': len(properties), 'conversations': conversations, 'nontext_message_count': nontext, 'scope': 'Active accepted reservations with checkout within two years. Full returned conversations; text only. Rule-based candidates require human review.'}
+    with connect() as db:
+        db.execute('INSERT INTO research_snapshot VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body', (json.dumps(snapshot),))
+    print(json.dumps({'event': 'research_complete', 'conversations': len(conversations)}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('research')
     sync_parser = commands.add_parser('sync')
     sync_parser.add_argument('reservation')
     backup_parser = commands.add_parser('backup')
@@ -92,7 +153,9 @@ if __name__ == '__main__':
     os.umask(0o077)
     initialize()
     try:
-        if args.command == 'sync':
+        if args.command == 'research':
+            research()
+        elif args.command == 'sync':
             sync(args.reservation)
         else:
             destination = os.path.abspath(args.destination)

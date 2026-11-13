@@ -46,6 +46,7 @@ def initialize():
             WHERE status IN ('pending', 'approved', 'ordered', 'ordered_review');
         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, incident_id TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, details TEXT NOT NULL);
         ''')
     os.chmod(DATABASE, 0o600)
@@ -187,16 +188,25 @@ class Handler(BaseHTTPRequestHandler):
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
                 return
+            if self.command == 'GET' and self.path == '/api/research':
+                from research import analyze
+                with connect() as db:
+                    snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+                self.respond(200, analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None})
+                return
             if self.command == 'GET' and self.path == '/api/incidents':
                 with connect() as db:
                     rows = [dict(row) for row in db.execute('SELECT * FROM incidents ORDER BY created_at DESC LIMIT 200')]
                     for row in rows:
                         row['messages'] = [json.loads(message['body'])['message'] for message in db.execute('SELECT body FROM messages WHERE incident_id = ? ORDER BY rowid', (row['id'],))]
                         row['audit'] = [dict(event) for event in db.execute('SELECT action, at, details FROM audit WHERE incident_id = ? ORDER BY id', (row['id'],))]
-                self.respond(200, {'incidents': rows, 'incident_limit_cents': LIMIT, 'mode': 'manual_approval'})
+                self.respond(200, {'incidents': rows, 'incident_limit_cents': LIMIT, 'mode': 'research'})
                 return
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
+                return
+            if self.path != '/api/intake':
+                self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 raise ValueError('JSON content type required')

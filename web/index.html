@@ -3,27 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guest Recovery</title>
+<title>Guest Recovery · Research</title>
 <link rel="stylesheet" href="/style.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header><span class="brand">Lucena / Guest Recovery</span><span class="badge">Manager approval required</span></header>
+<header><span class="brand">Lucena / Guest Recovery</span><span class="badge">Research mode · Read only</span></header>
 <main>
-<section class="intro"><p class="eyebrow">A better stay, one thoughtful fix at a time</p><h1>Small problems.<br>Thoughtful resolutions.</h1><p>Review guest requests, approve a sensible replacement, and keep every resolution on track.</p></section>
+<section class="intro"><p class="eyebrow">Listen closely. Resolve thoughtfully.</p><h1>Real guest friction.<br>A clearer next step.</h1><p>Explore what guests report, see the conversation behind each issue, and plan a practical remedy.</p></section>
+<div class="mode-note">Suggestions are hypothetical. Guest replies, approvals, and purchasing are disabled.</div>
 <p id="notice" role="status"></p>
-<section id="workspace" hidden>
-<div class="toolbar"><h2>Guest requests</h2><button id="refresh" type="button">Refresh</button></div>
-<p id="policy"></p>
-<div id="incidents"></div>
-<details class="panel"><summary>Add a guest request manually</summary><p>Use this while connecting Hospitable. Copy the source identifiers so repeated messages are recognized.</p><form id="intake">
-<label>Hospitable message ID<input name="message_id" required maxlength="200"></label>
-<label>Reservation ID<input name="reservation_id" required maxlength="200"></label>
-<label>Property ID<input name="property_id" required maxlength="200"></label>
-<label>Guest message<textarea name="message" required maxlength="10000"></textarea></label>
-<button>Add for review</button></form></details>
-</section>
+<section id="stats" class="stats" aria-label="Research overview"></section>
+<section class="panel overview"><div class="toolbar"><h2>Where the friction is</h2><button id="refresh" type="button">Reload saved data</button></div><div id="categories" class="categories"></div><p id="scope"></p><p id="updated"></p></section>
+<section aria-labelledby="issues-heading"><div class="toolbar"><h2 id="issues-heading">Detected issue candidates</h2><span id="result-count"></span></div><p>Rules flag possible problems; they do not establish whether a complaint is valid or still unresolved. Review the full conversation before acting.</p>
+<div class="filters"><label>Search<input id="search" type="search" placeholder="Property, item, or guest wording"></label><label>Category<select id="category"><option value="">All categories</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label><label>Resolution context<select id="status"><option value="">All candidates</option><option>Needs review</option><option>Possible resolution</option></select></label></div>
+<div id="issues"></div></section>
 </main>
-<template id="incident"><article class="panel"><div class="toolbar"><h2 class="category"></h2><span class="badge status"></span></div><p class="context"></p><div class="messages"></div><p class="proposal"></p><p class="order-reference"></p><div class="actions"></div><details><summary>Decision history</summary><ul class="history"></ul></details></article></template>
+<template id="issue"><article class="panel issue"><div class="toolbar"><div><p class="eyebrow property"></p><h2 class="category"></h2></div><span class="badge status"></span></div><p class="dates"></p><div class="evidence"></div><div class="remedy"><span class="eyebrow route"></span><h3>Suggested next step</h3><p class="recommendation"></p></div><div class="resolution"></div><details><summary class="conversation-title"></summary><div class="conversation"></div></details></article></template>
 </body>
 </html>
