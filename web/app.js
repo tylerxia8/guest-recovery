@@ -73,23 +73,18 @@ function worksheet(issue) {
   }
   function draw() {
     form.replaceChildren();
-    const route = ['need'];
-    if (inputs.guest_need === 'open') route.push('offering');
-    if (inputs.guest_need === 'open' && inputs.provided === 'yes') route.push('stock');
+    const route = ['offering'];
+    if (inputs.provided === 'yes') route.push('stock');
     if (route.includes('stock') && inputs.stock === 'unavailable') route.push('housekeeping');
     if (route.includes('housekeeping') && inputs.housekeeping === 'unavailable') route.push('purchase');
     route.push('review');
     let index = Math.min(steps.get(issue.id) || 0, route.length - 1);
     steps.set(issue.id, index);
     const step = route[index];
-    const names = {need: 'Check the request', offering: 'Check the property', stock: 'Look for spares', housekeeping: 'Check delivery help', purchase: 'Plan a replacement', review: 'Review your plan'};
+    const names = {offering: 'Check the property', stock: 'Look for spares', housekeeping: 'Check delivery help', purchase: 'Plan a replacement', review: 'Review your plan'};
     const progress = node('div', '', 'progress');
     progress.append(node('span', `Step ${index + 1} of ${route.length}`), node('span', names[step]));
     form.append(progress);
-    if (step === 'need') {
-      form.append(node('h3', 'Does the guest still need hand towels?'), node('p', 'Read the conversation below. Check for later messages, an existing order, or a manager who already handled it.'));
-      choice('guest_need', [['open', 'Yes, they still need them'], ['resolved', 'It’s already taken care of'], ['unknown', 'I need to check']]);
-    }
     if (step === 'offering') {
       form.append(node('h3', 'Should this property have hand towels?'), node('p', 'Confirm what’s normally provided before arranging a replacement.'));
       choice('provided', [['yes', 'Yes, hand towels are included'], ['no', 'No, this needs a manager’s decision'], ['unknown', 'I’m not sure yet']]);
@@ -188,7 +183,7 @@ function worksheet(issue) {
           if (!response.ok) throw new Error(result.error);
           if (!drafts.has(issue.id) || JSON.stringify(drafts.get(issue.id).inputs) === JSON.stringify(submitted)) drafts.delete(issue.id);
           await load();
-          notice.textContent = 'Plan saved. No message sent and nothing ordered.';
+          notice.textContent = 'Scenario plan saved. No message sent and nothing ordered.';
           return;
         } catch (error) {
           if (attempt === 0 && ['TimeoutError', 'TypeError', 'AbortError'].includes(error.name)) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
@@ -198,10 +193,10 @@ function worksheet(issue) {
     } catch (error) { feedback.textContent = error.message; }
     finally { saving = false; for (const control of form.elements) control.disabled = false; }
   };
-  section.append(form);
+  section.append(node('p', 'Assume the guest still needs hand towels. Plan for a stay ending in 48 hours.', 'context-note'), form);
   if (plan.saved_at) {
     const saved = node('div', '', 'saved-plan');
-    saved.append(node('span', 'Saved recommendation', 'eyebrow'), node('h3', plan.route), node('p', plan.proposal));
+    saved.append(node('span', 'Saved scenario recommendation', 'eyebrow'), node('h3', plan.route), node('p', plan.proposal));
     if (plan.blockers.length) {
       const details = document.createElement('details');
       details.append(node('summary', `${plan.blockers.length} things still need checking`));
@@ -239,12 +234,15 @@ function render() {
   const issue = visible.find(item => item.id === selected);
   if (!issue) { container.append(node('p', 'No requests match your filters.', 'empty')); return; }
   const card = node('article', '', 'detail-card');
-  card.append(node('p', issue.property, 'eyebrow'), node('h2', title(issue)), node('p', `Guest checkout: ${date(issue.check_out)}`, 'help-text'));
+  card.append(node('p', issue.property, 'eyebrow'), node('h2', title(issue)), node('p', `Original checkout: ${date(issue.check_out)} · Used as a live scenario`, 'help-text'));
   const quote = node('blockquote', issue.evidence[issue.evidence.length - 1].body);
   quote.append(node('cite', `Guest · ${date(issue.latest_at)}`));
   card.append(quote);
-  if (issue.resolution_hint) card.append(node('p', 'A later message suggests this may already be resolved. Check the conversation first.', 'context-note'));
-  if (issue.worksheet) card.append(worksheet(issue));
+  if (issue.resolution_hint) card.append(node('p', 'The original conversation contains a possible resolution. For this exercise, assume the request is still open.', 'context-note'));
+  if (issue.worksheet) {
+    card.append(node('p', `Scenario checkout: ${date(issue.worksheet.scenario_checkout)}`, 'help-text'));
+    card.append(worksheet(issue));
+  }
   else {
     const remedy = node('div', '', 'saved-plan');
     remedy.append(node('h3', 'Suggested next step'), node('p', issue.recommendation));

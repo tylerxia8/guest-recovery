@@ -38,7 +38,8 @@ def analyze(snapshot):
                     if later['created_at'] > last['created_at'] and later['sender_type'] == 'guest' and re.search(r'\b(found|located)\b.{0,35}\b' + towel + r'\b', later['body'], re.I) and not SIGNAL.search(later['body']):
                         issue['resolution_hint'] = later
             issue.update({'property': conversation['property'], 'reservation_id': conversation['reservation_id'], 'check_in': conversation['check_in'], 'check_out': conversation['check_out'], 'messages': messages, 'latest_at': issue['evidence'][-1]['created_at']})
-            issue['status'] = 'Possible resolution' if issue['resolution_hint'] else 'Needs review'
+            issue['recorded_status'] = 'Possible resolution' if issue['resolution_hint'] else 'Needs review'
+            issue['status'] = 'Needs review'
             issues.append(issue)
     issues.sort(key=lambda issue: issue['latest_at'], reverse=True)
     return {'issues': issues, 'synced_at': snapshot['synced_at'], 'property_count': snapshot['property_count'], 'reservation_count': len(snapshot['conversations']), 'guest_message_count': sum(message['sender_type'] == 'guest' for conversation in snapshot['conversations'] for message in conversation['messages']), 'nontext_message_count': snapshot['nontext_message_count'], 'scope': snapshot['scope']}

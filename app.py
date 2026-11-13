@@ -82,14 +82,14 @@ def mutate(db, path, data):
         issue = next((item for item in analyze(json.loads(snapshot['body']))['issues'] if item['id'] == issue_id and item['hand_towel']), None)
         if not issue:
             raise ValueError('Hand-towel issue is no longer present; reload research')
-        saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', (issue_id,)).fetchone()
+        saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', ('simulation:' + issue_id,)).fetchone()
         current = build(issue, saved)
         if version != current['version'] or data.get('source_fingerprint') != current['source_fingerprint']:
             raise ValueError('Worksheet or conversation changed; reload before saving')
         inputs = validate(data.get('inputs'))
         timestamp = now()
-        db.execute('INSERT INTO worksheets VALUES (?, ?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET body = excluded.body, version = excluded.version, source_fingerprint = excluded.source_fingerprint, updated_at = excluded.updated_at', (issue_id, json.dumps(inputs), version + 1, current['source_fingerprint'], timestamp))
-        audit(db, issue_id, 'worksheet_saved', {'version': version + 1, 'inputs': inputs})
+        db.execute('INSERT INTO worksheets VALUES (?, ?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET body = excluded.body, version = excluded.version, source_fingerprint = excluded.source_fingerprint, updated_at = excluded.updated_at', ('simulation:' + issue_id, json.dumps(inputs), version + 1, current['source_fingerprint'], timestamp))
+        audit(db, 'simulation:' + issue_id, 'scenario_plan_saved', {'version': version + 1, 'inputs': inputs})
         return {'saved_at': timestamp, 'version': version + 1}
     if path == '/api/intake':
         message_id = required(data, 'message_id')
@@ -219,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None}
                     for issue in result['issues']:
                         if issue['hand_towel']:
-                            saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', (issue['id'],)).fetchone()
+                            saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', ('simulation:' + issue['id'],)).fetchone()
                             issue['worksheet'] = build(issue, saved)
                 self.respond(200, result)
                 return

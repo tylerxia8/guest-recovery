@@ -8,16 +8,16 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header><a class="brand" href="/">Lucena <span>/ Guest Recovery</span></a><span class="badge">Planning only</span></header>
+<header><a class="brand" href="/">Lucena <span>/ Guest Recovery</span></a><span class="badge">Simulation mode</span></header>
 <main>
 <div class="page-heading"><div><h1>Help guests get back to their stay.</h1><p>Choose a request. Understand what happened. Make a plan.</p></div><button id="refresh" type="button" class="secondary">Refresh saved data</button></div>
-<div class="mode-note"><span class="status-dot"></span>Nothing gets sent or purchased. You’re only preparing a plan.</div>
+<div class="mode-note"><span class="status-dot"></span>Every request is treated as open for practice, with an assumed checkout in 48 hours. Nothing gets sent or purchased.</div>
 <p id="notice" role="status"></p>
 <div class="workspace">
-<aside aria-label="Guest requests"><div class="inbox-heading"><h2>Guest requests</h2><span id="result-count"></span></div><label class="search-label"><span class="sr-only">Search requests</span><input id="search" type="search" placeholder="Search property or problem…"></label><div class="filters"><label><span class="sr-only">Category</span><select id="category"><option value="">Every type</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label><label><span class="sr-only">Resolution status</span><select id="status"><option value="">All requests</option><option value="Needs review">Needs review</option><option value="Possible resolution">May be resolved</option></select></label></div><nav id="requests" aria-label="Choose a request"></nav></aside>
+<aside aria-label="Guest requests"><div class="inbox-heading"><h2>Guest requests</h2><span id="result-count"></span></div><label class="search-label"><span class="sr-only">Search requests</span><input id="search" type="search" placeholder="Search property or problem…"></label><div class="filters"><label><span class="sr-only">Category</span><select id="category"><option value="">Every type</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label><label><span class="sr-only">Resolution status</span><select id="status"><option value="">All scenarios</option><option value="Needs review">Ready to plan</option></select></label></div><nav id="requests" aria-label="Choose a request"></nav></aside>
 <section id="issues" aria-label="Selected request"></section>
 </div>
-<details class="data-details"><summary>About this data</summary><div id="stats"></div><p id="scope"></p><p id="updated"></p><p>These are possible issues found in guest messages. A person needs to check whether each issue is still open.</p></details>
+<details class="data-details"><summary>About this data</summary><div id="stats"></div><p id="scope"></p><p id="updated"></p><p>Original guest messages and dates are preserved. Every request is assumed open in this simulation, even if the real issue was resolved.</p></details>
 </main>
 </body>
 </html>
