@@ -56,6 +56,32 @@ function render() {
     const [heading, action, budget] = fixes[issue.category];
     solution.append(node('h3', heading), node('p', action), node('p', budget, 'help-text'));
   }
+  if (issue.category === 'Supplies') {
+    const shopping = node('section', '', 'shopping');
+    shopping.append(node('h3', 'Find options on Amazon'));
+    const wording = issue.evidence.map(message => message.body).join(' ').toLowerCase();
+    const searches = issue.hand_towel ? [['Hand towels', 'white cotton hand towels pack']] : [
+      ['Bath towels', 'white cotton bath towels'], ['Toilet paper', 'toilet paper small pack'], ['Soap', 'hand soap'], ['Shampoo', 'shampoo'], ['Blanket', 'washable blanket'], ['Pillow', 'bed pillow'], ['Batteries', 'batteries'], ['Remote', 'replacement remote control'],
+    ].filter(([item]) => new RegExp(`\\b${item.toLowerCase().replace('bath towels', 'towels?')}s?\\b`).test(wording));
+    if (!searches.length) shopping.append(node('p', 'Identify the missing item in the guest message before choosing a replacement.', 'help-text'));
+    const links = node('div', '', 'shopping-links');
+    for (const [label, query] of searches) {
+      const link = node('a', `Find ${label.toLowerCase()} ↗`, 'amazon-link');
+      link.href = 'https://www.amazon.com/s?' + new URLSearchParams({k: query});
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      links.append(link);
+    }
+    if (searches.length) {
+      const gift = node('a', 'Optional chocolates, up to $3 ↗', 'amazon-link gift-link');
+      gift.href = 'https://www.amazon.com/s?' + new URLSearchParams({k: 'small chocolate gift under 3 dollars'});
+      gift.target = '_blank';
+      gift.rel = 'noopener noreferrer';
+      links.append(gift);
+    }
+    shopping.append(links, node('p', 'Delivery not connected', 'delivery-status'), node('p', 'These are Amazon searches, not selected products or verified offers. In Amazon, select the property address and check the price and arrival date for both items. Do not place an order yet.', 'help-text'));
+    solution.append(shopping);
+  }
   solution.append(node('p', 'Proposal only. Nothing has been sent, booked, or purchased.', 'help-text'));
   card.append(solution);
   const history = node('details', '', 'conversation-details');
