@@ -14,6 +14,109 @@ function date(value) {
 function title(issue) {
   return issue.worksheet ? 'Missing hand towels' : {Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
 }
+const purchaseDrafts = new Map();
+let renderedIssues = '';
+async function purchaseAction(path, data) {
+  const key = crypto.randomUUID();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: JSON.stringify(data), signal: AbortSignal.timeout(15000)});
+      if ((response.status === 429 || response.status >= 500) && !attempt) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      return result;
+    } catch (error) {
+      if (!attempt && ['TimeoutError', 'TypeError', 'AbortError'].includes(error.name)) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+      throw error;
+    }
+  }
+}
+function purchasePanel(issue) {
+  const section = node('section', '', 'purchase-panel');
+  section.append(node('h3', 'Purchase notice & manager decision'));
+  section.append(node('p', '$25 or less: email the manager, then wait 10 minutes for a possible veto. Above $25: get explicit approval. The total includes all items, gifts, tax, shipping, and fees.', 'help-text'));
+  section.append(node('p', 'Simulation only · Amazon checkout is not connected. Manager controls currently work on this computer.', 'delivery-status'));
+  if (!dataset.purchase_policy.email_configured) section.append(node('p', 'Email setup incomplete. Proposals can be saved, but notices and timers remain blocked until a sending key and sender are configured.', 'context-note'));
+  for (const request of issue.purchases) {
+    const card = node('div', '', 'purchase-request');
+    card.append(node('strong', request.summary), node('p', `$${(request.total_cents / 100).toFixed(2)} total · $${(request.gift_cents / 100).toFixed(2)} gift included`, 'help-text'), node('p', request.status, 'purchase-status'));
+    if (request.eligible_at && request.decision !== 'vetoed') {
+      const countdown = node('p', '', 'countdown');
+      countdown.dataset.deadline = request.eligible_at;
+      card.append(countdown);
+    }
+    if (request.error) card.append(node('p', request.error, 'warning'));
+    if (request.decision !== 'vetoed') {
+      const actions = node('div', '', 'purchase-actions');
+      for (const [action, label] of [['veto', 'Veto / cancel'], ...(request.approval_required && request.decision !== 'approved' ? [['approve', 'Manager: approve this total']] : [])]) {
+        const button = node('button', label, action === 'veto' ? 'secondary' : '');
+        button.type = 'button';
+        button.onclick = async () => {
+          button.disabled = true;
+          try { await purchaseAction(`/api/purchases/${request.id}/${action}`, {}); await load(); }
+          catch (error) { notice.textContent = error.message; }
+          finally { button.disabled = false; }
+        };
+        actions.append(button);
+      }
+      card.append(actions);
+    }
+    section.append(card);
+  }
+  if (issue.purchases.some(request => request.decision !== 'vetoed')) return section;
+  const details = document.createElement('details');
+  details.open = purchaseDrafts.has(issue.id);
+  details.append(node('summary', 'Prepare a purchase notice'));
+  const form = node('form', '', 'purchase-form');
+  const draft = purchaseDrafts.get(issue.id) || {summary: '', total: '', gift: '0', all_in_confirmed: false};
+  for (const [name, title, type] of [['summary', 'Proposed items (include any chocolates)', 'text'], ['total', 'Full order total ($)', 'number'], ['gift', 'Gift cost already included in total ($)', 'number']]) {
+    const label = node('label', title);
+    const input = document.createElement('input');
+    input.name = name;
+    input.type = type;
+    input.value = draft[name];
+    input.required = true;
+    if (type === 'number') { input.min = name === 'total' ? '0.01' : '0'; input.max = name === 'gift' ? '3' : '10000'; input.step = '0.01'; }
+    else input.maxLength = 1000;
+    label.append(input);
+    form.append(label);
+  }
+  const label = node('label', '', 'checkbox-label');
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.name = 'all_in_confirmed';
+  check.checked = draft.all_in_confirmed;
+  check.required = true;
+  label.append(check, node('span', 'This total includes all items, tax, shipping, and fees.'));
+  const feedback = node('p', '', 'save-status');
+  feedback.setAttribute('role', 'status');
+  const submit = node('button', 'Save proposal & queue email notice');
+  form.append(label, submit, feedback);
+  form.oninput = () => purchaseDrafts.set(issue.id, {summary: form.elements.summary.value, total: form.elements.total.value, gift: form.elements.gift.value, all_in_confirmed: check.checked});
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const data = {issue_id: issue.id, summary: form.elements.summary.value, total_cents: Math.round(Number(form.elements.total.value) * 100), gift_cents: Math.round(Number(form.elements.gift.value) * 100), all_in_confirmed: check.checked};
+    for (const control of form.elements) control.disabled = true;
+    try {
+      await purchaseAction('/api/purchases', data);
+      purchaseDrafts.delete(issue.id);
+      form.blur();
+      document.activeElement?.blur();
+      await load();
+      notice.textContent = 'Proposal saved. The clock starts only after email delivery is confirmed. No purchase will be made in simulation mode.';
+    } catch (error) { feedback.textContent = error.message; }
+    finally { for (const control of form.elements) control.disabled = false; }
+  };
+  details.append(form);
+  section.append(details);
+  return section;
+}
+function updateCountdowns() {
+  for (const element of document.querySelectorAll('[data-deadline]')) {
+    const seconds = Math.max(0, Math.ceil((new Date(element.dataset.deadline) - Date.now()) / 1000));
+    element.textContent = seconds ? `Manager veto time remaining: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : 'Veto window complete. Purchase remains blocked because checkout is not connected.';
+  }
+}
 function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
@@ -44,10 +147,10 @@ function render() {
   const solution = node('div', '', 'saved-plan');
   solution.append(node('span', 'Suggested fix', 'eyebrow'));
   if (issue.worksheet) {
-    solution.append(node('h3', 'Send hand towels. Add a small apology gift.'), node('p', 'Propose a pack of hand towels and optional chocolates up to $3, delivered together on the same day.'), node('p', 'Suggested spending cap: $35 total, including tax and delivery.', 'budget'), node('p', 'Before acting: confirm the property address, actual price, and delivery availability. If same-day delivery is unavailable, ask housekeeping to bring towels.', 'help-text'));
+    solution.append(node('h3', 'Send hand towels. Add a small apology gift.'), node('p', 'Propose a pack of hand towels and optional chocolates up to $3, delivered together on the same day.'), node('p', '$25 or less: 10-minute manager veto window. Above $25: manager approval required.', 'budget'), node('p', 'Before acting: confirm the property address, actual price, and delivery availability. If same-day delivery is unavailable, ask housekeeping to bring towels.', 'help-text'));
   } else {
     const fixes = {
-      Supplies: ['Replace the missing item.', 'Use the guest’s message to identify the item, then propose a suitable replacement. Check existing stock first.', 'Keep the proposal within $35 total; confirm the actual price and arrival date.'],
+      Supplies: ['Replace the missing item.', 'Use the guest’s message to identify the item, then propose a suitable replacement. Check existing stock first.', '$25 or less uses the 10-minute veto policy; higher totals require manager approval.'],
       Maintenance: ['Have maintenance fix it.', 'Send the reported fault and property details to the maintenance team for assessment.', 'Get a quote before approving parts or repairs.'],
       Cleaning: ['Arrange a cleaning touch-up.', 'Ask housekeeping to address the reported area and check for related problems.', 'Confirm availability and any cleaning charge.'],
       Instructions: ['Give the guest the right instructions.', 'Find the property-specific answer and prepare a short, clear explanation.', 'Usually no purchase needed.'],
@@ -82,8 +185,9 @@ function render() {
     shopping.append(links, node('p', 'Delivery not connected', 'delivery-status'), node('p', 'These are Amazon searches, not selected products or verified offers. In Amazon, select the property address and check the price and arrival date for both items. Do not place an order yet.', 'help-text'));
     solution.append(shopping);
   }
-  solution.append(node('p', 'Proposal only. Nothing has been sent, booked, or purchased.', 'help-text'));
+  solution.append(node('p', 'No guest messages, bookings, or purchases. Manager notice emails can be sent when configured.', 'help-text'));
   card.append(solution);
+  if (issue.category === 'Supplies' && dataset.purchase_policy) card.append(purchasePanel(issue));
   const history = node('details', '', 'conversation-details');
   history.append(node('summary', `Read the full conversation (${issue.messages.length} messages)`));
   const conversation = node('div', '', 'conversation');
@@ -101,6 +205,8 @@ function render() {
     card.append(evidence);
   }
   container.append(card);
+  renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
+  updateCountdowns();
 }
 async function load() {
   if (loading) return;
@@ -122,7 +228,7 @@ async function load() {
     }
     if (!response.ok) throw new Error('Could not load saved requests. Please try again.');
     const next = await response.json();
-    const previousIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
+    const previousIssues = renderedIssues;
     const nextIssues = JSON.stringify(next.issues.map(({worksheet, ...issue}) => issue));
     const changed = previousIssues !== nextIssues || !document.querySelector('#issues').firstChild;
     dataset = next;
@@ -133,7 +239,7 @@ async function load() {
     document.querySelector('#stats').textContent = `${dataset.property_count || 0} properties · ${dataset.reservation_count || 0} saved conversations · ${dataset.guest_message_count || 0} guest messages`;
     document.querySelector('#scope').textContent = dataset.scope || 'Waiting for the first import.';
     document.querySelector('#updated').textContent = dataset.synced_at ? `Last imported ${date(dataset.synced_at)}. ${dataset.nontext_message_count} messages without text were excluded in the latest update.` : '';
-    if (changed) render();
+    if (changed && !document.querySelector('.purchase-form')?.contains(document.activeElement)) render();
   } catch (error) { notice.textContent = error.message; }
   finally { loading = false; refresh.disabled = false; }
 }
@@ -162,4 +268,6 @@ document.querySelector('#refresh').onclick = async () => {
   finally { button.disabled = false; }
 };
 setInterval(() => { if (!document.hidden) load(); }, 15000);
+setInterval(updateCountdowns, 1000);
+window.addEventListener('beforeunload', event => { if (purchaseDrafts.size) { event.preventDefault(); event.returnValue = ''; } });
 load();

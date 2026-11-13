@@ -48,6 +48,8 @@ def initialize():
             WHERE status IN ('pending', 'approved', 'ordered', 'ordered_review');
         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS purchase_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, property TEXT NOT NULL, summary TEXT NOT NULL, total_cents INTEGER NOT NULL CHECK(total_cents > 0), gift_cents INTEGER NOT NULL CHECK(gift_cents >= 0 AND gift_cents <= 300 AND gift_cents <= total_cents), decision TEXT NOT NULL CHECK(decision IN ('pending', 'approved', 'vetoed')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending', 'sent', 'delivered', 'failed')), email_payload TEXT, email_id TEXT, notified_at TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS active_purchase_proposal ON purchase_requests(issue_id) WHERE decision != 'vetoed';
         CREATE TABLE IF NOT EXISTS integration_state (id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT NOT NULL, last_attempt TEXT, last_success TEXT, error TEXT);
         CREATE TABLE IF NOT EXISTS worksheets (issue_id TEXT PRIMARY KEY, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
@@ -72,6 +74,9 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path == '/api/purchases' or path.startswith('/api/purchases/'):
+        from purchases import change
+        return change(db, path, data, now())
     if path == '/api/integration/sync':
         state = db.execute('SELECT status FROM integration_state WHERE id = 1').fetchone()
         if state and state['status'] == 'syncing':
@@ -227,6 +232,11 @@ class Handler(BaseHTTPRequestHandler):
                     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
                     result = analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None}
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
+                    from purchases import AUTO_LIMIT_CENTS, VETO_SECONDS, describe, email_settings
+                    settings = email_settings()
+                    result['purchase_policy'] = {'auto_limit_cents': AUTO_LIMIT_CENTS, 'veto_seconds': VETO_SECONDS, 'email_configured': all(settings.values()), 'checkout_connected': False, 'simulation': True}
+                    for issue in result['issues']:
+                        issue['purchases'] = [describe(row) for row in db.execute('SELECT * FROM purchase_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     result['integration'] = dict(state) if state else {'status': 'starting', 'last_attempt': None, 'last_success': None, 'error': None}
                     for issue in result['issues']:
                         if issue['hand_towel']:
@@ -245,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync'):
+            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases') and not re.fullmatch(r'/api/purchases/[a-f0-9-]{36}/(approve|veto)', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -316,6 +326,9 @@ if __name__ == '__main__':
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '3000'))), Handler)
     worker = threading.Thread(target=poll_hospitable, daemon=True)
     worker.start()
+    from purchases import deliver_notices
+    notifications = threading.Thread(target=deliver_notices, args=(connect, SYNC_STOP), daemon=True)
+    notifications.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
