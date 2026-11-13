@@ -46,6 +46,7 @@ def initialize():
             WHERE status IN ('pending', 'approved', 'ordered', 'ordered_review');
         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS worksheets (issue_id TEXT PRIMARY KEY, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, incident_id TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, details TEXT NOT NULL);
         ''')
@@ -68,6 +69,28 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path == '/api/worksheets':
+        from research import analyze
+        from worksheet import build, validate
+        issue_id = required(data, 'issue_id')
+        version = data.get('version')
+        if type(version) is not int or version < 0:
+            raise ValueError('Invalid worksheet version')
+        snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+        if not snapshot:
+            raise ValueError('Research snapshot is missing')
+        issue = next((item for item in analyze(json.loads(snapshot['body']))['issues'] if item['id'] == issue_id and item['hand_towel']), None)
+        if not issue:
+            raise ValueError('Hand-towel issue is no longer present; reload research')
+        saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', (issue_id,)).fetchone()
+        current = build(issue, saved)
+        if version != current['version'] or data.get('source_fingerprint') != current['source_fingerprint']:
+            raise ValueError('Worksheet or conversation changed; reload before saving')
+        inputs = validate(data.get('inputs'))
+        timestamp = now()
+        db.execute('INSERT INTO worksheets VALUES (?, ?, ?, ?, ?) ON CONFLICT(issue_id) DO UPDATE SET body = excluded.body, version = excluded.version, source_fingerprint = excluded.source_fingerprint, updated_at = excluded.updated_at', (issue_id, json.dumps(inputs), version + 1, current['source_fingerprint'], timestamp))
+        audit(db, issue_id, 'worksheet_saved', {'version': version + 1, 'inputs': inputs})
+        return {'saved_at': timestamp, 'version': version + 1}
     if path == '/api/intake':
         message_id = required(data, 'message_id')
         reservation = required(data, 'reservation_id')
@@ -190,9 +213,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.command == 'GET' and self.path == '/api/research':
                 from research import analyze
+                from worksheet import build
                 with connect() as db:
                     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
-                self.respond(200, analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None})
+                    result = analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None}
+                    for issue in result['issues']:
+                        if issue['hand_towel']:
+                            saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', (issue['id'],)).fetchone()
+                            issue['worksheet'] = build(issue, saved)
+                self.respond(200, result)
                 return
             if self.command == 'GET' and self.path == '/api/incidents':
                 with connect() as db:
@@ -205,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path != '/api/intake':
+            if self.path not in ('/api/intake', '/api/worksheets'):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':

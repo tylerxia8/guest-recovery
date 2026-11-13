@@ -8,10 +8,10 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header><span class="brand">Lucena / Guest Recovery</span><span class="badge">Research mode · Read only</span></header>
+<header><span class="brand">Lucena / Guest Recovery</span><span class="badge">Research mode · Proposals only</span></header>
 <main>
 <section class="intro"><p class="eyebrow">Listen closely. Resolve thoughtfully.</p><h1>Real guest friction.<br>A clearer next step.</h1><p>Explore what guests report, see the conversation behind each issue, and plan a practical remedy.</p></section>
-<div class="mode-note">Suggestions are hypothetical. Guest replies, approvals, and purchasing are disabled.</div>
+<div class="mode-note">Save reviewer findings and prepare hypothetical remedies. Guest replies, approvals, and purchasing are disabled.</div>
 <p id="notice" role="status"></p>
 <section id="stats" class="stats" aria-label="Research overview"></section>
 <section class="panel overview"><div class="toolbar"><h2>Where the friction is</h2><button id="refresh" type="button">Reload saved data</button></div><div id="categories" class="categories"></div><p id="scope"></p><p id="updated"></p></section>
@@ -19,6 +19,6 @@
 <div class="filters"><label>Search<input id="search" type="search" placeholder="Property, item, or guest wording"></label><label>Category<select id="category"><option value="">All categories</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label><label>Resolution context<select id="status"><option value="">All candidates</option><option>Needs review</option><option>Possible resolution</option></select></label></div>
 <div id="issues"></div></section>
 </main>
-<template id="issue"><article class="panel issue"><div class="toolbar"><div><p class="eyebrow property"></p><h2 class="category"></h2></div><span class="badge status"></span></div><p class="dates"></p><div class="evidence"></div><div class="remedy"><span class="eyebrow route"></span><h3>Suggested next step</h3><p class="recommendation"></p></div><div class="resolution"></div><details><summary class="conversation-title"></summary><div class="conversation"></div></details></article></template>
+<template id="issue"><article class="panel issue"><div class="toolbar"><div><p class="eyebrow property"></p><h2 class="category"></h2></div><span class="badge status"></span></div><p class="dates"></p><div class="evidence"></div><div class="remedy"><span class="eyebrow route"></span><h3>Suggested next step</h3><p class="recommendation"></p></div><div class="resolution"></div><div class="worksheet-slot"></div><details><summary class="conversation-title"></summary><div class="conversation"></div></details></article></template>
 </body>
 </html>

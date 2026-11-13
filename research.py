@@ -26,8 +26,10 @@ def analyze(snapshot):
                     candidates = [clause for clause in candidates if not re.search(r'\b((?:do not|don.t|no longer|never) need|not missing|have enough|no need)\b', clause, re.I) and re.search(r'\b(no|not|missing|weren.t|aren.t|out of|need|bring|can we|could we|can you|could you|please)\b', clause, re.I)]
                 if not candidates:
                     continue
-                issue = grouped.setdefault(category, {'id': conversation['reservation_id'] + ':' + category.lower(), 'category': category, 'priority': priority, 'route': route, 'recommendation': remedy, 'evidence': [], 'resolution_hint': None})
+                issue = grouped.setdefault(category, {'id': conversation['reservation_id'] + ':' + category.lower(), 'category': category, 'priority': priority, 'route': route, 'recommendation': remedy, 'evidence': [], 'resolution_hint': None, 'hand_towel': False})
                 issue['evidence'].append(message)
+                if category == 'Supplies' and any(re.search(r'\bhand towels?\b', clause, re.I) for clause in candidates):
+                    issue['hand_towel'] = True
         for issue in grouped.values():
             if issue['category'] == 'Supplies' and all(re.search(r'\btowels?\b', evidence['body'], re.I) for evidence in issue['evidence']):
                 last = issue['evidence'][-1]
