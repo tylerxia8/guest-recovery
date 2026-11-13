@@ -17,6 +17,7 @@ function title(issue) {
 const purchaseDrafts = new Map();
 let renderedIssues = '';
 let renderedPreferences = '';
+let renderedSupplier = '';
 async function purchaseAction(path, data) {
   const key = crypto.randomUUID();
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -161,6 +162,8 @@ function render() {
     solution.append(node('h3', heading), node('p', action), node('p', budget, 'help-text'));
   }
   if (issue.category === 'Supplies') {
+    const cleaner = cleanerPanel(issue);
+    if (cleaner) solution.append(cleaner);
     const shopping = node('section', '', 'shopping');
     shopping.append(node('h3', 'Find options on Amazon'));
     shopping.append(node('p', 'Delivery speed comes first', 'delivery-priority'), node('p', 'Choose the earliest verified arrival for the correct unit. Start with its preferred item, then use a compatible alternative if it can arrive sooner. Skip chocolates if they would delay the essential item.', 'help-text'));
@@ -242,6 +245,7 @@ function render() {
   container.append(card);
   renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
   renderedPreferences = JSON.stringify(dataset.catalog);
+  renderedSupplier = JSON.stringify(dataset.local_supplier);
   updateCountdowns();
 }
 async function load() {
@@ -266,7 +270,7 @@ async function load() {
     const next = await response.json();
     const previousIssues = renderedIssues;
     const nextIssues = JSON.stringify(next.issues.map(({worksheet, ...issue}) => issue));
-    const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || !document.querySelector('#issues').firstChild;
+    const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || renderedSupplier !== JSON.stringify(next.local_supplier) || !document.querySelector('#issues').firstChild;
     dataset = next;
     const connection = dataset.integration;
     const connectionText = connection.status === 'syncing' ? 'Updating guest messages from Hospitable…' : connection.status === 'connected' ? `Hospitable connected · Updated ${date(connection.last_success)} · Checks every 5 minutes` : connection.status === 'error' ? connection.error : 'Starting Hospitable connection…';
@@ -275,8 +279,9 @@ async function load() {
     document.querySelector('#stats').textContent = `${dataset.property_count || 0} properties · ${dataset.reservation_count || 0} saved conversations · ${dataset.guest_message_count || 0} guest messages`;
     document.querySelector('#scope').textContent = dataset.scope || 'Waiting for the first import.';
     document.querySelector('#updated').textContent = dataset.synced_at ? `Last imported ${date(dataset.synced_at)}. ${dataset.nontext_message_count} messages without text were excluded in the latest update.` : '';
-    if (changed && !document.querySelector('.purchase-form')?.contains(document.activeElement)) render();
+    if (changed && !document.querySelector('#issues form:focus-within')) render();
     renderCatalog();
+    renderSupplier();
   } catch (error) { notice.textContent = error.message; }
   finally { loading = false; refresh.disabled = false; }
 }

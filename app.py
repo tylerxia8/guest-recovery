@@ -48,6 +48,9 @@ def initialize():
             WHERE status IN ('pending', 'approved', 'ordered', 'ordered_review');
         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS local_supplier (id INTEGER PRIMARY KEY CHECK(id = 1), body TEXT NOT NULL, version INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS local_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','available','unavailable','cancelled')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending','sent','failed')), email_id TEXT, payload TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS active_local_request ON local_requests(issue_id) WHERE state IN ('pending','available');
         CREATE TABLE IF NOT EXISTS rental_units (id TEXT PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS preferred_products (id TEXT PRIMARY KEY, property_id TEXT NOT NULL REFERENCES rental_units(id), item_type TEXT NOT NULL, room TEXT NOT NULL, tv_brand TEXT NOT NULL, tv_model TEXT NOT NULL, title TEXT NOT NULL, asin TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS preferred_product_per_unit ON preferred_products(property_id, item_type, lower(room)) WHERE active = 1;
@@ -77,6 +80,9 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path in ('/api/local-supplier', '/api/local-requests') or path.startswith('/api/local-requests/'):
+        from local_supply import change
+        return change(db, path, data, now())
     if path == '/api/catalog':
         from catalog import save
         return save(db, data, now())
@@ -236,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
                 if bucket[1] > 120:
                     self.respond(429, {'error': 'Rate limit exceeded'})
                     return
-            assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+            assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
@@ -247,6 +253,11 @@ class Handler(BaseHTTPRequestHandler):
                 with connect() as db:
                     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
                     result = analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None}
+                    from local_supply import SUPPORTED, profile, describe as describe_local
+                    result['local_supplier'] = profile(db)
+                    result['local_supply_types'] = list(SUPPORTED)
+                    for issue in result['issues']:
+                        issue['local_requests'] = [describe_local(row) for row in db.execute('SELECT * FROM local_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     from catalog import ITEMS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
@@ -273,7 +284,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive') and not re.fullmatch(r'/api/purchases/[a-f0-9-]{36}/(approve|veto)', self.path):
+            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/local-supplier', '/api/local-requests') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -347,6 +358,9 @@ if __name__ == '__main__':
     from purchases import deliver_notices
     notifications = threading.Thread(target=deliver_notices, args=(connect, SYNC_STOP), daemon=True)
     notifications.start()
+    from local_supply import deliver_requests
+    cleaner_notices = threading.Thread(target=deliver_requests, args=(connect, SYNC_STOP), daemon=True)
+    cleaner_notices.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
