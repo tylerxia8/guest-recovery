@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guest Recovery</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header><span class="brand">Lucena / Guest Recovery</span><span class="badge">Manager approval required</span></header>
+<main>
+<section class="intro"><p class="eyebrow">A better stay, one thoughtful fix at a time</p><h1>Small problems.<br>Thoughtful resolutions.</h1><p>Review guest requests, approve a sensible replacement, and keep every resolution on track.</p></section>
+<form id="login" class="panel"><label>Manager access token<input id="token" type="password" required autocomplete="off" minlength="32"></label><button>Unlock workspace</button></form>
+<p id="notice" role="status"></p>
+<section id="workspace" hidden>
+<div class="toolbar"><h2>Guest requests</h2><button id="refresh" type="button">Refresh</button></div>
+<p id="policy"></p>
+<div id="incidents"></div>
+<details class="panel"><summary>Add a guest request manually</summary><p>Use this while connecting Hospitable. Copy the source identifiers so repeated messages are recognized.</p><form id="intake">
+<label>Hospitable message ID<input name="message_id" required maxlength="200"></label>
+<label>Reservation ID<input name="reservation_id" required maxlength="200"></label>
+<label>Property ID<input name="property_id" required maxlength="200"></label>
+<label>Guest message<textarea name="message" required maxlength="10000"></textarea></label>
+<button>Add for review</button></form></details>
+</section>
+</main>
+<template id="incident"><article class="panel"><div class="toolbar"><h2 class="category"></h2><span class="badge status"></span></div><p class="context"></p><div class="messages"></div><p class="proposal"></p><p class="order-reference"></p><div class="actions"></div><details><summary>Decision history</summary><ul class="history"></ul></details></article></template>
+</body>
+</html>
