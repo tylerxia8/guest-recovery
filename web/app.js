@@ -1,5 +1,6 @@
 let dataset = {issues: []};
 let selected = null;
+let loading = false;
 const notice = document.querySelector('#notice');
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -76,6 +77,8 @@ function render() {
   container.append(card);
 }
 async function load() {
+  if (loading) return;
+  loading = true;
   const refresh = document.querySelector('#refresh');
   refresh.disabled = true;
   notice.textContent = '';
@@ -92,14 +95,45 @@ async function load() {
       }
     }
     if (!response.ok) throw new Error('Could not load saved requests. Please try again.');
-    dataset = await response.json();
-    document.querySelector('#stats').textContent = `${dataset.property_count || 0} properties · ${dataset.reservation_count || 0} active reservations · ${dataset.guest_message_count || 0} guest messages`;
+    const next = await response.json();
+    const previousIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
+    const nextIssues = JSON.stringify(next.issues.map(({worksheet, ...issue}) => issue));
+    const changed = previousIssues !== nextIssues || !document.querySelector('#issues').firstChild;
+    dataset = next;
+    const connection = dataset.integration;
+    const connectionText = connection.status === 'syncing' ? 'Updating guest messages from Hospitable…' : connection.status === 'connected' ? `Hospitable connected · Updated ${date(connection.last_success)} · Checks every 5 minutes` : connection.status === 'error' ? connection.error : 'Starting Hospitable connection…';
+    document.querySelector('#connection').textContent = connectionText;
+    document.querySelector('#connection').classList.toggle('connection-error', connection.status === 'error');
+    document.querySelector('#stats').textContent = `${dataset.property_count || 0} properties · ${dataset.reservation_count || 0} saved conversations · ${dataset.guest_message_count || 0} guest messages`;
     document.querySelector('#scope').textContent = dataset.scope || 'Waiting for the first import.';
-    document.querySelector('#updated').textContent = dataset.synced_at ? `Last imported ${date(dataset.synced_at)}. ${dataset.nontext_message_count} messages without text were excluded.` : '';
-    render();
+    document.querySelector('#updated').textContent = dataset.synced_at ? `Last imported ${date(dataset.synced_at)}. ${dataset.nontext_message_count} messages without text were excluded in the latest update.` : '';
+    if (changed) render();
   } catch (error) { notice.textContent = error.message; }
-  finally { refresh.disabled = false; }
+  finally { loading = false; refresh.disabled = false; }
 }
 for (const id of ['search', 'category']) document.querySelector(`#${id}`).addEventListener('input', render);
-document.querySelector('#refresh').onclick = load;
+document.querySelector('#refresh').onclick = async () => {
+  const button = document.querySelector('#refresh');
+  button.disabled = true;
+  const key = crypto.randomUUID();
+  try {
+    let response;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await fetch('/api/integration/sync', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: '{}', signal: AbortSignal.timeout(15000)});
+        if ((response.status === 429 || response.status >= 500) && !attempt) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
+        break;
+      } catch (error) {
+        if (attempt) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    if (!response.ok) throw new Error('Could not request an update. Please try again.');
+    const result = await response.json();
+    await load();
+    notice.textContent = result.status === 'syncing' ? 'An update is already in progress.' : 'Update requested. Allow up to a minute before it starts.';
+  } catch (error) { notice.textContent = error.message; }
+  finally { button.disabled = false; }
+};
+setInterval(() => { if (!document.hidden) load(); }, 15000);
 load();

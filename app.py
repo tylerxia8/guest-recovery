@@ -18,6 +18,8 @@ DATABASE = os.environ.get('DATABASE_PATH', str(ROOT / 'recovery.sqlite3'))
 LIMIT = int(os.environ.get('INCIDENT_LIMIT_CENTS', '3500'))
 RATE = {}
 LOCK = threading.Lock()
+SYNC_WAKE = threading.Event()
+SYNC_STOP = threading.Event()
 CATALOG = {'hand_towels': ('hand towels', 'hand towel'), 'bath_towels': ('bath towels', 'bath towel'), 'toilet_paper': ('toilet paper', 'toilet roll'), 'soap': ('soap',), 'shampoo': ('shampoo',)}
 
 
@@ -46,6 +48,7 @@ def initialize():
             WHERE status IN ('pending', 'approved', 'ordered', 'ordered_review');
         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS integration_state (id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT NOT NULL, last_attempt TEXT, last_success TEXT, error TEXT);
         CREATE TABLE IF NOT EXISTS worksheets (issue_id TEXT PRIMARY KEY, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, incident_id TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, details TEXT NOT NULL);
@@ -69,6 +72,12 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path == '/api/integration/sync':
+        state = db.execute('SELECT status FROM integration_state WHERE id = 1').fetchone()
+        if state and state['status'] == 'syncing':
+            return {'status': 'syncing'}
+        SYNC_WAKE.set()
+        return {'status': 'queued'}
     if path == '/api/worksheets':
         from research import analyze
         from worksheet import build, validate
@@ -217,6 +226,8 @@ class Handler(BaseHTTPRequestHandler):
                 with connect() as db:
                     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
                     result = analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None}
+                    state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
+                    result['integration'] = dict(state) if state else {'status': 'starting', 'last_attempt': None, 'last_success': None, 'error': None}
                     for issue in result['issues']:
                         if issue['hand_towel']:
                             saved = db.execute('SELECT * FROM worksheets WHERE issue_id = ?', ('simulation:' + issue['id'],)).fetchone()
@@ -234,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets'):
+            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync'):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -273,6 +284,29 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = dispatch
 
 
+def poll_hospitable():
+    from hospitable import research
+    finished = None
+    while not SYNC_STOP.is_set():
+        if finished is not None and SYNC_STOP.wait(max(0, 60 - (time.monotonic() - finished))):
+            return
+        SYNC_WAKE.clear()
+        with connect() as db:
+            db.execute("INSERT INTO integration_state VALUES (1, 'syncing', ?, NULL, NULL) ON CONFLICT(id) DO UPDATE SET status = 'syncing', last_attempt = excluded.last_attempt, error = NULL", (now(),))
+        try:
+            research()
+        except Exception as error:
+            logging.error(json.dumps({'event': 'hospitable_sync_failed', 'error_type': type(error).__name__}))
+            with connect() as db:
+                db.execute("UPDATE integration_state SET status = 'error', error = ? WHERE id = 1", ('Could not update from Hospitable. Previous data is preserved. Check the token and API availability.',))
+        else:
+            with connect() as db:
+                db.execute("UPDATE integration_state SET status = 'connected', last_success = ?, error = NULL WHERE id = 1", (now(),))
+        finished = time.monotonic()
+        SYNC_WAKE.wait(300)
+
+
+
 if __name__ == '__main__':
     if LIMIT <= 0:
         raise SystemExit('INCIDENT_LIMIT_CENTS must be positive')
@@ -280,4 +314,13 @@ if __name__ == '__main__':
     os.umask(0o077)
     initialize()
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '3000'))), Handler)
-    server.serve_forever()
+    worker = threading.Thread(target=poll_hospitable, daemon=True)
+    worker.start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        SYNC_STOP.set()
+        SYNC_WAKE.set()
+        server.server_close()
