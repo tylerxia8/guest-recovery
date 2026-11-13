@@ -251,8 +251,10 @@ class Handler(BaseHTTPRequestHandler):
             if any(network.prefixlen == 0 for network in proxy_ranges):
                 raise ValueError('Trusted proxies cannot include all addresses')
             trusted_proxy = any(ipaddress.ip_address(self.client_address[0]) in network for network in proxy_ranges)
-            remote_request = bool(remote_host and host == remote_host and trusted_proxy and self.headers.get('X-Forwarded-Proto') == 'https')
-            if not local_request and not remote_request:
+            railway_ingress = bool(os.environ.get('RAILWAY_PROJECT_ID') and os.environ.get('RAILWAY_SERVICE_ID') and os.environ.get('RAILWAY_ENVIRONMENT_ID') and remote_host and self.headers.get('X-Forwarded-Host') == remote_host and self.headers.get('X-Railway-Request-Id'))
+            remote_request = bool(remote_host and host == remote_host and (trusted_proxy or railway_ingress) and self.headers.get('X-Forwarded-Proto') == 'https')
+            health_request = self.command == 'GET' and self.path == '/health'
+            if not local_request and not remote_request and not health_request:
                 self.respond(403, {'error': 'Use the configured HTTPS dashboard or local address'})
                 return
             origin = configured_origin if remote_request else 'http://' + host
@@ -260,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(403, {'error': 'Same-origin access required'})
                 return
             client_address = self.client_address[0]
-            if remote_request:
+            if railway_ingress and remote_request:
+                client_address = str(ipaddress.ip_address(self.headers.get('X-Real-IP', '')))
+            elif remote_request:
                 for value in reversed(self.headers.get('X-Forwarded-For', '').split(',')):
                     if value.strip():
                         address = ipaddress.ip_address(value.strip())
@@ -278,6 +282,9 @@ class Handler(BaseHTTPRequestHandler):
                 if bucket[1] > 120:
                     self.respond(429, {'error': 'Rate limit exceeded'})
                     return
+            if health_request:
+                self.respond(200, {'status': 'ok'})
+                return
             with connect() as db:
                 actor = session(db, self.headers, origin)
                 setup_allowed = local_request and not configured_origin and not db.execute('SELECT 1 FROM users LIMIT 1').fetchone()

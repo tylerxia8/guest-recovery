@@ -5,6 +5,5 @@ COPY --chown=app:app *.py /app/
 COPY --chown=app:app web /app/web
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 DATABASE_PATH=/data/recovery.sqlite3 ENV_FILE=/data/.env BIND_HOST=0.0.0.0 PORT=3000
 USER app
-VOLUME ["/data"]
 EXPOSE 3000
-CMD ["python3", "app.py"]
+CMD ["python3", "entrypoint.py"]
