@@ -16,6 +16,7 @@ function title(issue) {
 }
 const purchaseDrafts = new Map();
 let renderedIssues = '';
+let renderedPreferences = '';
 async function purchaseAction(path, data) {
   const key = crypto.randomUUID();
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -147,7 +148,7 @@ function render() {
   const solution = node('div', '', 'saved-plan');
   solution.append(node('span', 'Suggested fix', 'eyebrow'));
   if (issue.worksheet) {
-    solution.append(node('h3', 'Send hand towels. Add a small apology gift.'), node('p', 'Propose a pack of hand towels and optional chocolates up to $3, delivered together on the same day.'), node('p', '$25 or less: 10-minute manager veto window. Above $25: manager approval required.', 'budget'), node('p', 'Before acting: confirm the property address, actual price, and delivery availability. If same-day delivery is unavailable, ask housekeeping to bring towels.', 'help-text'));
+    solution.append(node('h3', 'Send hand towels. Add a small apology gift.'), node('p', 'Propose a pack of hand towels and optional chocolates up to $3, delivered together on the same day.'), node('p', '$25 or less: 10-minute manager veto window. Above $25: manager approval required.', 'budget'), node('p', 'Get the towels there as soon as possible. Compare Amazon arrival with housekeeping delivery; leave out the gift if it would slow down the towels.', 'help-text'));
   } else {
     const fixes = {
       Supplies: ['Replace the missing item.', 'Use the guest’s message to identify the item, then propose a suitable replacement. Check existing stock first.', '$25 or less uses the 10-minute veto policy; higher totals require manager approval.'],
@@ -162,10 +163,44 @@ function render() {
   if (issue.category === 'Supplies') {
     const shopping = node('section', '', 'shopping');
     shopping.append(node('h3', 'Find options on Amazon'));
-    const wording = issue.evidence.map(message => message.body).join(' ').toLowerCase();
-    const searches = issue.hand_towel ? [['Hand towels', 'white cotton hand towels pack']] : [
-      ['Bath towels', 'white cotton bath towels'], ['Toilet paper', 'toilet paper small pack'], ['Soap', 'hand soap'], ['Shampoo', 'shampoo'], ['Blanket', 'washable blanket'], ['Pillow', 'bed pillow'], ['Batteries', 'batteries'], ['Remote', 'replacement remote control'],
-    ].filter(([item]) => new RegExp(`\\b${item.toLowerCase().replace('bath towels', 'towels?')}s?\\b`).test(wording));
+    shopping.append(node('p', 'Delivery speed comes first', 'delivery-priority'), node('p', 'Choose the earliest verified arrival for the correct unit. Start with its preferred item, then use a compatible alternative if it can arrive sooner. Skip chocolates if they would delay the essential item.', 'help-text'));
+    const catalog = dataset.catalog;
+    const units = issue.property_ids || [];
+    const matching = units.length === 1 ? catalog.products.filter(product => product.property_id === units[0] && issue.item_types.includes(product.item_type)) : [];
+    if (units.length !== 1) shopping.append(node('p', 'This request is not mapped to exactly one rental unit. Confirm the unit before choosing a preferred product.', 'context-note'));
+    for (const product of matching) {
+      const preference = node('div', '', 'matched-product');
+      const label = catalog.item_types.find(item => item.id === product.item_type).label;
+      preference.append(node('strong', `Unit’s preferred ${label.toLowerCase()}${product.room ? ' · ' + product.room : ''}`), node('p', product.title));
+      if (product.item_type === 'tv_remote') preference.append(node('p', `TV: ${product.tv_brand} · ${product.tv_model}. Confirm this is the affected TV and check the remote’s compatibility.`, 'help-text'));
+      const link = node('a', 'Check preferred item on Amazon ↗', 'amazon-link');
+      link.href = 'https://www.amazon.com/dp/' + product.asin;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      const use = node('button', 'Use in purchase proposal', 'secondary');
+      use.type = 'button';
+      use.onclick = () => {
+        const previous = purchaseDrafts.get(issue.id);
+        const summary = `${product.title} · ASIN ${product.asin}${product.item_type === 'tv_remote' ? ` · ${product.room}: ${product.tv_brand} ${product.tv_model}` : ''}`;
+        purchaseDrafts.set(issue.id, {summary: previous?.summary ? previous.summary + '; ' + summary : summary, total: '', gift: previous?.gift || '0', all_in_confirmed: false});
+        render();
+        const form = document.querySelector('.purchase-form');
+        if (form) { form.closest('details').open = true; form.elements.summary.focus(); }
+      };
+      use.disabled = issue.purchases.some(request => request.decision !== 'vetoed');
+      preference.append(link, use);
+      shopping.append(preference);
+    }
+    if (!matching.length && units.length === 1) shopping.append(node('p', 'No matching preference saved yet. Add it under “Preferred Amazon items by unit” above.', 'help-text'));
+    const searches = issue.item_types.filter(kind => kind !== 'tv_remote').map(kind => {
+      const type = catalog.item_types.find(item => item.id === kind);
+      return [type.label, type.search_query];
+    });
+    if (issue.item_types.includes('tv_remote')) {
+      const remotes = matching.filter(product => product.item_type === 'tv_remote');
+      if (!remotes.length) shopping.append(node('p', 'Add this unit’s TV brand and exact model before choosing a remote. A generic remote may not work.', 'context-note'));
+      for (const remote of remotes) searches.push([`${remote.room} compatible remote`, `${remote.tv_brand} ${remote.tv_model} compatible replacement remote`]);
+    }
     if (!searches.length) shopping.append(node('p', 'Identify the missing item in the guest message before choosing a replacement.', 'help-text'));
     const links = node('div', '', 'shopping-links');
     for (const [label, query] of searches) {
@@ -206,6 +241,7 @@ function render() {
   }
   container.append(card);
   renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
+  renderedPreferences = JSON.stringify(dataset.catalog);
   updateCountdowns();
 }
 async function load() {
@@ -230,7 +266,7 @@ async function load() {
     const next = await response.json();
     const previousIssues = renderedIssues;
     const nextIssues = JSON.stringify(next.issues.map(({worksheet, ...issue}) => issue));
-    const changed = previousIssues !== nextIssues || !document.querySelector('#issues').firstChild;
+    const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || !document.querySelector('#issues').firstChild;
     dataset = next;
     const connection = dataset.integration;
     const connectionText = connection.status === 'syncing' ? 'Updating guest messages from Hospitable…' : connection.status === 'connected' ? `Hospitable connected · Updated ${date(connection.last_success)} · Checks every 5 minutes` : connection.status === 'error' ? connection.error : 'Starting Hospitable connection…';
@@ -240,6 +276,7 @@ async function load() {
     document.querySelector('#scope').textContent = dataset.scope || 'Waiting for the first import.';
     document.querySelector('#updated').textContent = dataset.synced_at ? `Last imported ${date(dataset.synced_at)}. ${dataset.nontext_message_count} messages without text were excluded in the latest update.` : '';
     if (changed && !document.querySelector('.purchase-form')?.contains(document.activeElement)) render();
+    renderCatalog();
   } catch (error) { notice.textContent = error.message; }
   finally { loading = false; refresh.disabled = false; }
 }

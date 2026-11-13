@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Guest Recovery</title>
 <link rel="stylesheet" href="/style.css">
+<script src="/catalog.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
@@ -13,6 +14,7 @@
 <div class="page-heading"><div><h1>Help guests get back to their stay.</h1><p>Pick a guest problem. See a straightforward fix.</p></div><button id="refresh" type="button" class="secondary">Check for new messages</button></div>
 <div class="mode-note"><span class="status-dot"></span>Practice with real guest messages. Every request is treated as open. Manager notice emails may be sent; guest replies and purchases stay disabled.</div>
 <div id="connection" class="connection" role="status">Connecting to Hospitable…</div><p id="notice" role="status"></p>
+<details id="catalog-panel" class="catalog-panel"><summary>Preferred Amazon items by unit</summary><p>Save the products you trust. Delivery speed comes first; preferences never guarantee availability or compatibility.</p><div id="catalog-editor"></div></details>
 <div class="workspace">
 <aside aria-label="Guest requests"><div class="inbox-heading"><h2>Guest requests</h2><span id="result-count"></span></div><label class="search-label"><span class="sr-only">Search requests</span><input id="search" type="search" placeholder="Search property or problem…"></label><div class="filters"><label><span class="sr-only">Category</span><select id="category"><option value="">Every type</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label></div><nav id="requests" aria-label="Choose a request"></nav></aside>
 <section id="issues" aria-label="Selected request"></section>

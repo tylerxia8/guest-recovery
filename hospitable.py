@@ -133,14 +133,21 @@ def research():
             if timestamp.tzinfo is None:
                 raise ValueError('Message timestamp requires timezone')
             messages.append({'id': str(message['id']), 'sender_type': message['sender_type'], 'body': body, 'created_at': timestamp.astimezone(dt.timezone.utc).isoformat()})
-        conversations.append({'reservation_id': identifier, 'property': ', '.join(item['name'] for item in reservation['properties']), 'check_in': reservation['check_in'], 'check_out': reservation['check_out'], 'messages': messages})
+        conversations.append({'reservation_id': identifier, 'property': ', '.join(item['name'] for item in reservation['properties']), 'property_ids': [str(uuid.UUID(item['id'])) for item in reservation['properties']], 'check_in': reservation['check_in'], 'check_out': reservation['check_out'], 'messages': messages})
         print(json.dumps({'event': 'research_progress', 'conversations': len(conversations), 'total': len(reservations)}), flush=True)
     with connect() as db:
         previous = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
     retained = {item['reservation_id']: item for item in json.loads(previous['body'])['conversations']} if previous else {}
     retained.update({item['reservation_id']: item for item in conversations})
+    for conversation in retained.values():
+        if 'property_ids' not in conversation:
+            matches = [item['id'] for item in properties if item['name'] == conversation['property']]
+            if len(matches) == 1:
+                conversation['property_ids'] = [str(uuid.UUID(matches[0]))]
     snapshot = {'synced_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': len(reservations), 'nontext_message_count': nontext, 'scope': 'Active accepted reservations are refreshed from Hospitable every five minutes after each completed import. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Suggested fixes use rules and require human review.'}
     with connect() as db:
+        for item in properties:
+            db.execute('INSERT INTO rental_units VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name', (str(uuid.UUID(item['id'])), item['name']))
         db.execute('INSERT INTO research_snapshot VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body', (json.dumps(snapshot),))
     print(json.dumps({'event': 'research_complete', 'conversations': len(conversations)}))
 
