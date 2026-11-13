@@ -1,7 +1,5 @@
 let dataset = {issues: []};
 let selected = null;
-const drafts = new Map();
-const steps = new Map();
 const notice = document.querySelector('#notice');
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -15,207 +13,10 @@ function date(value) {
 function title(issue) {
   return issue.worksheet ? 'Missing hand towels' : {Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
 }
-function worksheet(issue) {
-  const plan = issue.worksheet;
-  const draft = drafts.get(issue.id);
-  const inputs = {...(draft ? draft.inputs : plan.inputs)};
-  const base = draft || plan;
-  const section = node('section', '', 'worksheet');
-  const form = document.createElement('form');
-  const feedback = node('p', '', 'save-status');
-  feedback.setAttribute('role', 'status');
-  let saving = false;
-  function update(key, value) {
-    inputs[key] = value;
-    drafts.set(issue.id, {inputs: {...inputs}, version: base.version, source_fingerprint: base.source_fingerprint});
-    feedback.textContent = 'Changes haven’t been saved yet.';
-  }
-  function choice(name, options) {
-    const group = node('div', '', 'choice-group');
-    group.setAttribute('role', 'group');
-    for (const [value, text, hint] of options) {
-      const button = node('button', '', 'choice');
-      button.type = 'button';
-      button.setAttribute('aria-pressed', String(inputs[name] === value));
-      button.append(node('strong', text));
-      if (hint) button.append(node('span', hint));
-      button.onclick = () => { update(name, value); draw(); form.querySelector('[aria-pressed="true"]')?.focus({preventScroll: true}); };
-      group.append(button);
-    }
-    form.append(group);
-  }
-  function field(name, text, type = 'text', maximum = 500) {
-    const label = node('label', text);
-    const input = document.createElement('input');
-    input.name = name;
-    input.type = type;
-    input.maxLength = maximum;
-    const money = ['total_cents', 'gift_cents'].includes(name);
-    if (type === 'datetime-local') {
-      if (inputs[name]) {
-        const time = new Date(inputs[name]);
-        input.value = new Date(time.getTime() - time.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-      }
-    } else input.value = money ? (inputs[name] / 100).toFixed(2) : inputs[name];
-    const limits = {quantity: [1, 20], total_cents: [0, 35], gift_cents: [0, 3], minimum_stock: [1, 100]};
-    if (limits[name]) { input.min = limits[name][0]; input.max = limits[name][1]; input.step = money ? '0.01' : '1'; }
-    input.oninput = () => {
-      let value = input.value;
-      if (type === 'number') value = money ? Math.round(Number(value) * 100) : Number(value);
-      if (type === 'datetime-local') {
-        if (value && Number.isNaN(new Date(value).getTime())) return;
-        value = value ? new Date(value).toISOString().replace('Z', '+00:00') : '';
-      }
-      update(name, value);
-    };
-    label.append(input);
-    form.append(label);
-  }
-  function draw() {
-    form.replaceChildren();
-    const route = ['offering'];
-    if (inputs.provided === 'yes') route.push('stock');
-    if (route.includes('stock') && inputs.stock === 'unavailable') route.push('housekeeping');
-    if (route.includes('housekeeping') && inputs.housekeeping === 'unavailable') route.push('purchase');
-    route.push('review');
-    let index = Math.min(steps.get(issue.id) || 0, route.length - 1);
-    steps.set(issue.id, index);
-    const step = route[index];
-    const names = {offering: 'Check the property', stock: 'Look for spares', housekeeping: 'Check delivery help', purchase: 'Plan a replacement', review: 'Review your plan'};
-    const progress = node('div', '', 'progress');
-    progress.append(node('span', `Step ${index + 1} of ${route.length}`), node('span', names[step]));
-    form.append(progress);
-    if (step === 'offering') {
-      form.append(node('h3', 'Should this property have hand towels?'), node('p', 'Confirm what’s normally provided before arranging a replacement.'));
-      choice('provided', [['yes', 'Yes, hand towels are included'], ['no', 'No, this needs a manager’s decision'], ['unknown', 'I’m not sure yet']]);
-    }
-    if (step === 'stock') {
-      form.append(node('h3', 'Are there spare hand towels onsite?'), node('p', 'Using supplies already at the property is usually the simplest fix.'));
-      choice('stock', [['accessible', 'Yes, the guest can access them'], ['unavailable', 'No accessible spares'], ['unknown', 'I need to ask someone']]);
-      if (inputs.stock === 'accessible') field('stock_location', 'Where are they, and how can the guest get them?');
-    }
-    if (step === 'housekeeping') {
-      form.append(node('h3', 'Can housekeeping bring hand towels?'), node('p', 'Check their availability before proposing an Amazon order.'));
-      choice('housekeeping', [['available', 'Yes, they can deliver'], ['unavailable', 'No, we need another option'], ['unknown', 'I haven’t checked yet']]);
-      if (inputs.housekeeping === 'available') field('housekeeping_arrival', `When can they arrive? (${Intl.DateTimeFormat().resolvedOptions().timeZone})`, 'datetime-local');
-    }
-    if (step === 'purchase') {
-      form.append(node('h3', 'Prepare a replacement option'), node('p', 'Choose an approved product. Keep the complete order at $35 or less, including tax and delivery. This does not place an order.'));
-      field('product_title', 'Product name', 'text', 300);
-      field('asin', 'Amazon product code (ASIN)', 'text', 10);
-      field('quantity', 'Number of packs', 'number');
-      field('total_cents', 'Full order total ($)', 'number');
-      field('gift_cents', 'Optional chocolates included in that total ($, up to 3)', 'number');
-      field('delivery_date', 'Date all items can arrive', 'date');
-      field('property_timezone', 'Property timezone, e.g. America/New_York', 'text', 100);
-      form.append(node('h4', 'Check the delivery details'));
-      const delivery = node('div', '', 'delivery-checks');
-      for (const [name, text] of [['address_verified', 'I checked that the address is this property.'], ['delivery_verified', 'I checked that the towels and any chocolates can arrive on that date.']]) {
-        const label = node('label', '', 'checkbox-label');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = inputs[name] === 'yes';
-        checkbox.onchange = () => update(name, checkbox.checked ? 'yes' : 'unknown');
-        label.append(checkbox, node('span', text));
-        delivery.append(label);
-      }
-      form.append(delivery);
-    }
-    if (step === 'review') {
-      form.append(node('h3', 'Here’s what you’ve recorded'));
-      const outcomes = {unknown: 'Still needs checking', open: 'Guest still needs hand towels', resolved: 'Already taken care of', yes: 'Yes', no: 'No', accessible: 'Spares are accessible onsite', unavailable: 'Not available', available: 'Can deliver'};
-      const summary = node('dl', '', 'summary-list');
-      for (const [key, label] of [['guest_need', 'Guest need'], ['provided', 'Included at property'], ['stock', 'Onsite spares'], ['housekeeping', 'Housekeeping']]) {
-        if ((key === 'provided' && !route.includes('offering')) || (key === 'stock' && !route.includes('stock')) || (key === 'housekeeping' && !route.includes('housekeeping'))) continue;
-        summary.append(node('dt', label), node('dd', outcomes[inputs[key]]));
-      }
-      if (route.includes('stock') && inputs.stock === 'accessible') summary.append(node('dt', 'Where to find spares'), node('dd', inputs.stock_location || 'Location still needed'));
-      if (route.includes('housekeeping') && inputs.housekeeping === 'available') summary.append(node('dt', 'Housekeeping arrival'), node('dd', inputs.housekeeping_arrival ? date(inputs.housekeeping_arrival) : 'Arrival time still needed'));
-      if (route.includes('purchase')) summary.append(node('dt', 'Replacement option'), node('dd', inputs.product_title || 'Product still needed'), node('dt', 'Order total'), node('dd', `$${(inputs.total_cents / 100).toFixed(2)}`));
-      if (route.includes('purchase')) summary.append(node('dt', 'Delivery date'), node('dd', inputs.delivery_date || 'Date still needed'));
-      form.append(summary);
-      field('notes', 'Anything else the manager should know?', 'text', 2000);
-      const prevention = node('details', '', 'prevention-settings');
-      prevention.append(node('summary', 'Help prevent this next time'));
-      field('minimum_stock', 'Suggested minimum hand towels to keep onsite', 'number');
-      prevention.append(form.lastElementChild);
-      form.append(prevention, node('p', 'Save to see the recommended next step and anything still missing. You can save an incomplete plan and come back later.', 'help-text'));
-    }
-    const actions = node('div', '', 'wizard-actions');
-    if (index) {
-      const back = node('button', 'Back', 'secondary');
-      back.type = 'button';
-      back.onclick = () => { steps.set(issue.id, index - 1); draw(); form.querySelector('h3').focus(); };
-      actions.append(back);
-    }
-    if (step !== 'review') {
-      const next = node('button', 'Continue');
-      next.type = 'button';
-      next.onclick = () => { steps.set(issue.id, index + 1); draw(); form.querySelector('h3').focus(); };
-      actions.append(next);
-    } else actions.append(node('button', 'Save plan'));
-    form.append(actions, feedback);
-    form.querySelector('h3').tabIndex = -1;
-  }
-  const staleDraft = draft && (draft.version !== plan.version || draft.source_fingerprint !== plan.source_fingerprint);
-  if (plan.stale || staleDraft) section.append(node('p', 'This conversation or plan has changed. Review the latest information before saving.', 'warning'));
-  if (draft) {
-    const discard = node('button', 'Discard unsaved changes', 'text-button');
-    discard.type = 'button';
-    discard.onclick = () => { drafts.delete(issue.id); steps.delete(issue.id); render(); };
-    section.append(discard);
-  }
-  draw();
-  form.onsubmit = async event => {
-    event.preventDefault();
-    if (saving) return;
-    saving = true;
-    const submitted = {...inputs};
-    const body = JSON.stringify({issue_id: issue.id, version: base.version, source_fingerprint: base.source_fingerprint, inputs: submitted});
-    for (const control of form.elements) control.disabled = true;
-    const key = crypto.randomUUID();
-    try {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const response = await fetch('/api/worksheets', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body, signal: AbortSignal.timeout(15000)});
-          if ((response.status === 429 || response.status >= 500) && attempt === 0) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
-          const result = await response.json();
-          if (!response.ok) throw new Error(result.error);
-          if (!drafts.has(issue.id) || JSON.stringify(drafts.get(issue.id).inputs) === JSON.stringify(submitted)) drafts.delete(issue.id);
-          await load();
-          notice.textContent = 'Scenario plan saved. No message sent and nothing ordered.';
-          return;
-        } catch (error) {
-          if (attempt === 0 && ['TimeoutError', 'TypeError', 'AbortError'].includes(error.name)) { await new Promise(resolve => setTimeout(resolve, 1000)); continue; }
-          throw error;
-        }
-      }
-    } catch (error) { feedback.textContent = error.message; }
-    finally { saving = false; for (const control of form.elements) control.disabled = false; }
-  };
-  section.append(node('p', 'Assume the guest still needs hand towels. Plan for a stay ending in 48 hours.', 'context-note'), form);
-  if (plan.saved_at) {
-    const saved = node('div', '', 'saved-plan');
-    saved.append(node('span', 'Saved scenario recommendation', 'eyebrow'), node('h3', plan.route), node('p', plan.proposal));
-    if (plan.blockers.length) {
-      const details = document.createElement('details');
-      details.append(node('summary', `${plan.blockers.length} things still need checking`));
-      const list = document.createElement('ul');
-      for (const blocker of plan.blockers) list.append(node('li', blocker));
-      details.append(list);
-      saved.append(details);
-    }
-    saved.append(node('p', `Saved ${date(plan.saved_at)}`, 'help-text'));
-    section.append(saved);
-  }
-  return section;
-}
-window.addEventListener('beforeunload', event => { if (drafts.size) { event.preventDefault(); event.returnValue = ''; } });
 function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
-  const status = document.querySelector('#status').value;
-  const visible = dataset.issues.filter(issue => (!category || issue.category === category) && (!status || issue.status === status) && (!search || `${issue.property} ${issue.category} ${issue.evidence.map(message => message.body).join(' ')}`.toLowerCase().includes(search)));
+  const visible = dataset.issues.filter(issue => (!category || issue.category === category) && (!search || `${issue.property} ${issue.category} ${issue.evidence.map(message => message.body).join(' ')}`.toLowerCase().includes(search)));
   if (!visible.some(issue => issue.id === selected)) selected = (visible.find(issue => issue.worksheet) || visible[0])?.id;
   document.querySelector('#result-count').textContent = String(visible.length);
   const requests = document.querySelector('#requests');
@@ -239,15 +40,23 @@ function render() {
   quote.append(node('cite', `Guest · ${date(issue.latest_at)}`));
   card.append(quote);
   if (issue.resolution_hint) card.append(node('p', 'The original conversation contains a possible resolution. For this exercise, assume the request is still open.', 'context-note'));
+  const solution = node('div', '', 'saved-plan');
+  solution.append(node('span', 'Suggested fix', 'eyebrow'));
   if (issue.worksheet) {
-    card.append(node('p', `Scenario checkout: ${date(issue.worksheet.scenario_checkout)}`, 'help-text'));
-    card.append(worksheet(issue));
+    solution.append(node('h3', 'Send hand towels. Add a small apology gift.'), node('p', 'Propose a pack of hand towels and optional chocolates up to $3, delivered together on the same day.'), node('p', 'Suggested spending cap: $35 total, including tax and delivery.', 'budget'), node('p', 'Before acting: confirm the property address, actual price, and delivery availability. If same-day delivery is unavailable, ask housekeeping to bring towels.', 'help-text'));
+  } else {
+    const fixes = {
+      Supplies: ['Replace the missing item.', 'Use the guest’s message to identify the item, then propose a suitable replacement. Check existing stock first.', 'Keep the proposal within $35 total; confirm the actual price and arrival date.'],
+      Maintenance: ['Have maintenance fix it.', 'Send the reported fault and property details to the maintenance team for assessment.', 'Get a quote before approving parts or repairs.'],
+      Cleaning: ['Arrange a cleaning touch-up.', 'Ask housekeeping to address the reported area and check for related problems.', 'Confirm availability and any cleaning charge.'],
+      Instructions: ['Give the guest the right instructions.', 'Find the property-specific answer and prepare a short, clear explanation.', 'Usually no purchase needed.'],
+      Safety: ['Have the manager assess this immediately.', 'Check the reported hazard and arrange the appropriate emergency or licensed response.', 'Escalate before considering routine purchases.'],
+    };
+    const [heading, action, budget] = fixes[issue.category];
+    solution.append(node('h3', heading), node('p', action), node('p', budget, 'help-text'));
   }
-  else {
-    const remedy = node('div', '', 'saved-plan');
-    remedy.append(node('h3', 'Suggested next step'), node('p', issue.recommendation));
-    card.append(remedy);
-  }
+  solution.append(node('p', 'Proposal only. Nothing has been sent, booked, or purchased.', 'help-text'));
+  card.append(solution);
   const history = node('details', '', 'conversation-details');
   history.append(node('summary', `Read the full conversation (${issue.messages.length} messages)`));
   const conversation = node('div', '', 'conversation');
@@ -291,6 +100,6 @@ async function load() {
   } catch (error) { notice.textContent = error.message; }
   finally { refresh.disabled = false; }
 }
-for (const id of ['search', 'category', 'status']) document.querySelector(`#${id}`).addEventListener('input', render);
+for (const id of ['search', 'category']) document.querySelector(`#${id}`).addEventListener('input', render);
 document.querySelector('#refresh').onclick = load;
 load();
