@@ -3,22 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guest Recovery · Research</title>
+<title>Guest Recovery</title>
 <link rel="stylesheet" href="/style.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header><span class="brand">Lucena / Guest Recovery</span><span class="badge">Research mode · Proposals only</span></header>
+<header><a class="brand" href="/">Lucena <span>/ Guest Recovery</span></a><span class="badge">Planning only</span></header>
 <main>
-<section class="intro"><p class="eyebrow">Listen closely. Resolve thoughtfully.</p><h1>Real guest friction.<br>A clearer next step.</h1><p>Explore what guests report, see the conversation behind each issue, and plan a practical remedy.</p></section>
-<div class="mode-note">Save reviewer findings and prepare hypothetical remedies. Guest replies, approvals, and purchasing are disabled.</div>
+<div class="page-heading"><div><h1>Help guests get back to their stay.</h1><p>Choose a request. Understand what happened. Make a plan.</p></div><button id="refresh" type="button" class="secondary">Refresh saved data</button></div>
+<div class="mode-note"><span class="status-dot"></span>Nothing gets sent or purchased. You’re only preparing a plan.</div>
 <p id="notice" role="status"></p>
-<section id="stats" class="stats" aria-label="Research overview"></section>
-<section class="panel overview"><div class="toolbar"><h2>Where the friction is</h2><button id="refresh" type="button">Reload saved data</button></div><div id="categories" class="categories"></div><p id="scope"></p><p id="updated"></p></section>
-<section aria-labelledby="issues-heading"><div class="toolbar"><h2 id="issues-heading">Detected issue candidates</h2><span id="result-count"></span></div><p>Rules flag possible problems; they do not establish whether a complaint is valid or still unresolved. Review the full conversation before acting.</p>
-<div class="filters"><label>Search<input id="search" type="search" placeholder="Property, item, or guest wording"></label><label>Category<select id="category"><option value="">All categories</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label><label>Resolution context<select id="status"><option value="">All candidates</option><option>Needs review</option><option>Possible resolution</option></select></label></div>
-<div id="issues"></div></section>
+<div class="workspace">
+<aside aria-label="Guest requests"><div class="inbox-heading"><h2>Guest requests</h2><span id="result-count"></span></div><label class="search-label"><span class="sr-only">Search requests</span><input id="search" type="search" placeholder="Search property or problem…"></label><div class="filters"><label><span class="sr-only">Category</span><select id="category"><option value="">Every type</option><option>Supplies</option><option>Maintenance</option><option>Cleaning</option><option>Instructions</option><option>Safety</option></select></label><label><span class="sr-only">Resolution status</span><select id="status"><option value="">All requests</option><option value="Needs review">Needs review</option><option value="Possible resolution">May be resolved</option></select></label></div><nav id="requests" aria-label="Choose a request"></nav></aside>
+<section id="issues" aria-label="Selected request"></section>
+</div>
+<details class="data-details"><summary>About this data</summary><div id="stats"></div><p id="scope"></p><p id="updated"></p><p>These are possible issues found in guest messages. A person needs to check whether each issue is still open.</p></details>
 </main>
-<template id="issue"><article class="panel issue"><div class="toolbar"><div><p class="eyebrow property"></p><h2 class="category"></h2></div><span class="badge status"></span></div><p class="dates"></p><div class="evidence"></div><div class="remedy"><span class="eyebrow route"></span><h3>Suggested next step</h3><p class="recommendation"></p></div><div class="resolution"></div><div class="worksheet-slot"></div><details><summary class="conversation-title"></summary><div class="conversation"></div></details></article></template>
 </body>
 </html>
