@@ -1,7 +1,6 @@
 import datetime as dt
 from contextlib import contextmanager
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -15,7 +14,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent
-TOKEN = os.environ.get('MANAGER_TOKEN', '')
 DATABASE = os.environ.get('DATABASE_PATH', str(ROOT / 'recovery.sqlite3'))
 LIMIT = int(os.environ.get('INCIDENT_LIMIT_CENTS', '3500'))
 RATE = {}
@@ -168,6 +166,11 @@ class Handler(BaseHTTPRequestHandler):
         started = time.monotonic()
         trace = str(uuid.uuid4())
         try:
+            host = self.headers.get('Host', '')
+            allowed_hosts = {f'localhost:{self.server.server_port}', f'127.0.0.1:{self.server.server_port}'}
+            if host not in allowed_hosts or self.headers.get('Origin', 'http://' + host) != 'http://' + host:
+                self.respond(403, {'error': 'Local same-origin access required'})
+                return
             with LOCK:
                 current = time.monotonic()
                 for address in list(RATE):
@@ -183,9 +186,6 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
-                return
-            if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + TOKEN):
-                self.respond(401, {'error': 'Manager authentication required'})
                 return
             if self.command == 'GET' and self.path == '/api/incidents':
                 with connect() as db:
@@ -235,8 +235,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    if len(TOKEN) < 32:
-        raise SystemExit('Set MANAGER_TOKEN to at least 32 characters')
     if LIMIT <= 0:
         raise SystemExit('INCIDENT_LIMIT_CENTS must be positive')
     logging.basicConfig(level=logging.INFO, format='%(message)s')

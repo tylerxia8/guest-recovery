@@ -1,8 +1,7 @@
-let token = '';
 const versions = new Map();
 const notice = document.querySelector('#notice');
 async function request(path, data) {
-  const headers = {Authorization: `Bearer ${token}`};
+  const headers = {};
   if (data) {
     headers['Content-Type'] = 'application/json';
     headers['Idempotency-Key'] = crypto.randomUUID();
@@ -42,7 +41,6 @@ async function change(id, action, data = {}) {
 async function load() {
   const data = await request('/api/incidents');
   document.querySelector('#workspace').hidden = false;
-  document.querySelector('#login').hidden = true;
   document.querySelector('#policy').textContent = `Every purchase needs approval. Incident limit: $${(data.incident_limit_cents / 100).toFixed(2)}, including delivery, tax, and an optional gift up to $3. Purchasing and guest replies are manual.`;
   const container = document.querySelector('#incidents');
   container.replaceChildren();
@@ -129,12 +127,6 @@ async function load() {
     container.append(fragment);
   }
 }
-document.querySelector('#login').onsubmit = async event => {
-  event.preventDefault();
-  token = document.querySelector('#token').value;
-  document.querySelector('#token').value = '';
-  try { await load(); notice.textContent = ''; } catch (error) { notice.textContent = error.message; }
-};
 document.querySelector('#refresh').onclick = () => load().catch(error => { notice.textContent = error.message; });
 document.querySelector('#intake').onsubmit = async event => {
   event.preventDefault();
@@ -149,3 +141,5 @@ document.querySelector('#intake').onsubmit = async event => {
   } catch (error) { notice.textContent = error.message; }
   finally { submit.disabled = false; }
 };
+
+load().catch(error => { notice.textContent = error.message; });
