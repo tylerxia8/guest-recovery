@@ -70,6 +70,8 @@ def initialize():
         CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, incident_id TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, details TEXT NOT NULL);
         ''')
+        if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
+            db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
     os.chmod(DATABASE, 0o600)
 
 

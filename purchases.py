@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import uuid
+from zoneinfo import ZoneInfo
 
 from mailer import email_ready, resend, send_email
 
@@ -34,6 +35,9 @@ def describe(row):
     request['email_evidence'] = 'Gmail accepted the message; inbox delivery is not verified.' if (row['email_id'] or '').startswith('smtp:') and row['notified_at'] else 'Email delivery confirmed by provider.' if row['notice_status'] == 'delivered' else 'Notification is not confirmed.'
     request['approval_required'] = row['total_cents'] > AUTO_LIMIT_CENTS
     request['simulation'] = True
+    request['offer'] = json.loads(row['offer']) if row['offer'] else None
+    if request['offer']:
+        request['offer']['stale'] = request['offer']['arrival_date'] < current.astimezone(ZoneInfo(request['offer']['timezone'])).date().isoformat()
     request.pop('email_payload')
     request.pop('email_id')
     return request
@@ -52,6 +56,29 @@ def change(db, path, data, timestamp):
             raise ValueError('Invalid total or gift cost; the gift must be included in the total and cost no more than $3')
         if data.get('all_in_confirmed') is not True:
             raise ValueError('Confirm that the total includes all items, tax, shipping, and fees')
+        offer = data.get('offer')
+        if offer is not None:
+            if not isinstance(offer, dict):
+                raise ValueError('Invalid offer details')
+            location = offer.get('location', 'Charlotte, NC')
+            window = offer.get('delivery_window')
+            asins = offer.get('asins')
+            timezone = offer.get('timezone', 'America/New_York')
+            if timezone not in ('America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu'):
+                raise ValueError('Choose a supported property time zone')
+            if not isinstance(location, str) or not 1 <= len(location.strip()) <= 200 or not isinstance(window, str) or not 1 <= len(window.strip()) <= 200:
+                raise ValueError('Enter the delivery location and Amazon arrival window')
+            if not isinstance(asins, list) or not 1 <= len(asins) <= 10 or any(not isinstance(asin, str) or not re.fullmatch(r'[A-Z0-9]{10}', asin) for asin in asins):
+                raise ValueError('Enter up to 10 valid Amazon ASINs')
+            try:
+                arrival = dt.date.fromisoformat(offer.get('arrival_date', ''))
+            except (ValueError, TypeError):
+                raise ValueError('Enter a valid arrival date') from None
+            if arrival < dt.datetime.now(ZoneInfo(timezone)).date():
+                raise ValueError('Arrival date cannot be in the past')
+            if offer.get('address_confirmed') is not True:
+                raise ValueError('Confirm compatibility and the arrival estimate at the actual property address')
+            offer = {'location': location.strip(), 'timezone': timezone, 'asins': list(dict.fromkeys(asins)), 'arrival_date': arrival.isoformat(), 'delivery_window': window.strip(), 'address_confirmed': True, 'recorded_at': timestamp, 'source': 'Manager-entered Amazon estimate; not automatically verified'}
         snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
         if not snapshot:
             raise ValueError('Research snapshot is missing')
@@ -62,6 +89,8 @@ def change(db, path, data, timestamp):
             raise ValueError('A proposal already exists. Cancel it before changing the items or total.')
         identifier = str(uuid.uuid4())
         db.execute("INSERT INTO purchase_requests (id, issue_id, property, summary, total_cents, gift_cents, decision, notice_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'pending', ?, ?)", (identifier, issue_id, issue['property'], summary.strip(), total, gift, timestamp, timestamp))
+        if offer is not None:
+            db.execute('UPDATE purchase_requests SET offer = ? WHERE id = ?', (json.dumps(offer), identifier))
         action = 'purchase_proposed'
         details = {'total_cents': total, 'gift_cents': gift, 'simulation': True}
     else:
@@ -108,6 +137,9 @@ def deliver_notices(connect, stop):
                                 policy = 'Explicit approval is required before purchase.' if row['total_cents'] > AUTO_LIMIT_CENTS else 'A 10-minute veto window starts after a successful Gmail send or confirmed Resend delivery. Gmail acceptance does not guarantee inbox delivery.'
                                 from settings import manager_url
                                 text = '\n'.join(('[SIMULATION — no purchase will be made]', 'Proposal ID: ' + row['id'], 'Property: ' + row['property'], 'Proposed items: ' + row['summary'], 'All-in total: $' + format(row['total_cents'] / 100, '.2f'), 'Gift included: $' + format(row['gift_cents'] / 100, '.2f'), policy, 'Sign in to Guest Recovery to approve or veto this proposal:', manager_url() + '/?purchase=' + row['id'], 'Changes to items or price require cancelling this proposal and sending a new notice.'))
+                                if current['offer']:
+                                    offer = json.loads(current['offer'])
+                                    text += '\n' + '\n'.join(('Delivery location: ' + offer['location'], 'Amazon arrival estimate: ' + offer['arrival_date'] + ' ' + offer['delivery_window'] + ' (' + offer['timezone'] + ')', 'Estimate recorded: ' + offer['recorded_at'], offer['source'], *('https://www.amazon.com/dp/' + asin for asin in offer['asins']), 'Confirm price, compatibility, and delivery again before any future checkout.'))
                                 payload = {'from': settings['NOTIFICATION_FROM'], 'to': [settings['MANAGER_EMAIL']], 'subject': '[SIMULATION] Guest Recovery purchase proposal $' + format(row['total_cents'] / 100, '.2f'), 'text': text}
                                 db.execute('UPDATE purchase_requests SET email_payload = ? WHERE id = ?', (json.dumps(payload), row['id']))
                             if settings['EMAIL_PROVIDER'] == 'gmail':

@@ -42,6 +42,17 @@ function purchasePanel(issue) {
   for (const request of issue.purchases) {
     const card = node('div', '', 'purchase-request');
     card.append(node('strong', request.summary), node('p', `$${(request.total_cents / 100).toFixed(2)} total · $${(request.gift_cents / 100).toFixed(2)} gift included`, 'help-text'), node('p', request.status, 'purchase-status'), node('p', request.email_evidence, 'help-text'));
+    if (request.offer) {
+      card.append(node('p', `${request.offer.location} · Arrival estimate: ${request.offer.arrival_date}, ${request.offer.delivery_window} (${request.offer.timezone})`, 'help-text'), node('p', `${request.offer.source} · Recorded ${date(request.offer.recorded_at)}`, 'help-text'));
+      if (request.offer.stale) card.append(node('p', 'This arrival date has passed. Cancel and recreate the proposal with a current quote before proceeding.', 'warning'));
+      for (const asin of request.offer.asins) {
+        const link = node('a', `Amazon item ${asin} ↗`, 'amazon-link');
+        link.href = 'https://www.amazon.com/dp/' + asin;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        card.append(link);
+      }
+    } else card.append(node('p', 'No address-specific delivery estimate recorded.', 'help-text'));
     if (request.eligible_at && request.decision !== 'vetoed') {
       const countdown = node('p', '', 'countdown');
       countdown.dataset.deadline = request.eligible_at;
@@ -70,19 +81,35 @@ function purchasePanel(issue) {
   details.open = purchaseDrafts.has(issue.id);
   details.append(node('summary', 'Prepare a purchase notice'));
   const form = node('form', '', 'purchase-form');
-  const draft = purchaseDrafts.get(issue.id) || {summary: '', total: '', gift: '0', all_in_confirmed: false};
-  for (const [name, title, type] of [['summary', 'Proposed items (include any chocolates)', 'text'], ['total', 'Full order total ($)', 'number'], ['gift', 'Gift cost already included in total ($)', 'number']]) {
+  const picks = issue.item_types.filter(kind => kind !== 'tv_remote').map(kind => {
+    const unitProducts = (issue.property_ids || []).length === 1 ? dataset.catalog.products.filter(product => product.property_id === issue.property_ids[0] && product.item_type === kind) : [];
+    return unitProducts[0] || dataset.catalog.defaults.find(product => product.item_type === kind);
+  }).filter(product => product?.asin);
+  const draft = purchaseDrafts.get(issue.id) || {summary: picks.map(product => product.title).join('; '), asins: picks.map(product => product.asin).join(', '), location: 'Charlotte, NC', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false};
+  form.append(node('p', 'Charlotte, NC is the default. Change it when the property is elsewhere. Select the actual property address in Amazon, confirm compatibility, then copy its full price and arrival estimate below. This app does not fetch live offers.', 'help-text'));
+  for (const [name, title, type] of [['summary', 'Proposed items (include any chocolates)', 'text'], ['asins', 'Amazon ASINs (comma-separated, including any gift)', 'text'], ['location', 'Delivery city / location', 'text'], ['arrival_date', 'Estimated arrival date at the property', 'date'], ['delivery_window', 'Arrival window as shown by Amazon (property local time)', 'text'], ['total', 'Full order total ($)', 'number'], ['gift', 'Gift cost already included in total ($)', 'number']]) {
     const label = node('label', title);
     const input = document.createElement('input');
     input.name = name;
     input.type = type;
-    input.value = draft[name];
+    input.value = draft[name] || '';
     input.required = true;
     if (type === 'number') { input.min = name === 'total' ? '0.01' : '0'; input.max = name === 'gift' ? '3' : '10000'; input.step = '0.01'; }
-    else input.maxLength = 1000;
+    else input.maxLength = name === 'summary' ? 1000 : 200;
     label.append(input);
     form.append(label);
   }
+  const timezoneLabel = node('label', 'Property time zone');
+  const timezoneSelect = document.createElement('select');
+  timezoneSelect.name = 'timezone';
+  for (const [value, title] of [['America/New_York', 'Eastern · Charlotte'], ['America/Chicago', 'Central'], ['America/Denver', 'Mountain'], ['America/Phoenix', 'Arizona'], ['America/Los_Angeles', 'Pacific'], ['America/Anchorage', 'Alaska'], ['Pacific/Honolulu', 'Hawaii']]) {
+    const option = node('option', title);
+    option.value = value;
+    timezoneSelect.append(option);
+  }
+  timezoneSelect.value = draft.timezone || 'America/New_York';
+  timezoneLabel.append(timezoneSelect);
+  form.append(timezoneLabel);
   const label = node('label', '', 'checkbox-label');
   const check = document.createElement('input');
   check.type = 'checkbox';
@@ -90,14 +117,25 @@ function purchasePanel(issue) {
   check.checked = draft.all_in_confirmed;
   check.required = true;
   label.append(check, node('span', 'This total includes all items, tax, shipping, and fees.'));
+  const addressLabel = node('label', '', 'checkbox-label');
+  const addressCheck = document.createElement('input');
+  addressCheck.type = 'checkbox';
+  addressCheck.name = 'address_confirmed';
+  addressCheck.checked = draft.address_confirmed || false;
+  addressCheck.required = true;
+  addressLabel.append(addressCheck, node('span', 'I checked the items, quantities, compatibility, and arrival estimate for the actual property address on Amazon.'));
   const feedback = node('p', '', 'save-status');
   feedback.setAttribute('role', 'status');
   const submit = node('button', 'Save proposal & queue email notice');
-  form.append(label, submit, feedback);
-  form.oninput = () => purchaseDrafts.set(issue.id, {summary: form.elements.summary.value, total: form.elements.total.value, gift: form.elements.gift.value, all_in_confirmed: check.checked});
+  form.append(label, addressLabel, submit, feedback);
+  form.oninput = event => {
+    if (event.target !== check && event.target !== addressCheck) { check.checked = false; addressCheck.checked = false; }
+    purchaseDrafts.set(issue.id, {...Object.fromEntries(new FormData(form)), all_in_confirmed: check.checked, address_confirmed: addressCheck.checked});
+  };
   form.onsubmit = async event => {
     event.preventDefault();
     const data = {issue_id: issue.id, summary: form.elements.summary.value, total_cents: Math.round(Number(form.elements.total.value) * 100), gift_cents: Math.round(Number(form.elements.gift.value) * 100), all_in_confirmed: check.checked};
+    data.offer = {location: form.elements.location.value, timezone: timezoneSelect.value, asins: form.elements.asins.value.split(',').map(value => value.trim().toUpperCase()).filter(Boolean), arrival_date: form.elements.arrival_date.value, delivery_window: form.elements.delivery_window.value, address_confirmed: addressCheck.checked};
     for (const control of form.elements) control.disabled = true;
     try {
       await submitAction('/api/purchases', data);
@@ -189,7 +227,7 @@ function render() {
       use.onclick = () => {
         const previous = purchaseDrafts.get(issue.id);
         const summary = `${product.title} · ASIN ${product.asin}${product.item_type === 'tv_remote' ? ` · ${product.room}: ${product.tv_brand} ${product.tv_model}` : ''}`;
-        purchaseDrafts.set(issue.id, {summary: previous?.summary ? previous.summary + '; ' + summary : summary, total: '', gift: previous?.gift || '0', all_in_confirmed: false});
+        purchaseDrafts.set(issue.id, {...previous, summary: previous?.summary ? previous.summary + '; ' + summary : summary, asins: previous?.asins ? previous.asins + ', ' + product.asin : product.asin, location: previous?.location || 'Charlotte, NC', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: previous?.gift || '0', all_in_confirmed: false});
         render();
         const form = document.querySelector('.purchase-form');
         if (form) { form.closest('details').open = true; form.elements.summary.focus(); }
