@@ -80,13 +80,20 @@ function cleanerPanel(issue) {
   const types = issue.item_types.filter(kind => supplier.item_types.includes(kind));
   if (!types.length && !issue.local_requests.length) return null;
   const section = node('section', '', 'cleaner-option');
-  section.append(node('h3', 'Try the Hiddenbrook cleaner'), node('p', 'Ask about cleaning supplies or toiletries before relying on them. Availability changes by day. Keep Amazon open if it can arrive sooner.', 'help-text'));
+  section.append(node('h3', 'Try the Hiddenbrook cleaner'), node('p', 'Ask about cleaning supplies or toiletries before relying on them. Availability changes by day. Keep Amazon open if it can arrive sooner. Times below use your device’s local time zone.', 'help-text'));
   for (const request of issue.local_requests) {
     const card = node('div', '', 'purchase-request');
     card.append(node('strong', request.status), node('p', request.details.item_types.map(kind => dataset.catalog.item_types.find(item => item.id === kind).label).join(', '), 'help-text'), node('p', `Reply by ${date(request.details.reply_by)} · Needed by ${date(request.details.needed_by)}`, 'help-text'));
     if (request.details.arrival) card.append(node('p', `Cleaner-reported arrival: ${date(request.details.arrival)}. Confirm any fee before arranging delivery.`, 'help-text'));
     if (request.fallback) card.append(node('p', 'Continue with the Amazon options below. No purchase or cleaner dispatch happens automatically.', 'delivery-priority'));
-    if (['pending', 'available'].includes(request.state)) {
+    if (request.fallback) {
+      const amazon = node('button', 'View Amazon replacements', 'secondary');
+      amazon.type = 'button';
+      amazon.onclick = () => document.querySelector('.shopping')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+      card.append(amazon);
+    }
+    if (request.details.received_at) card.append(node('p', `Receipt recorded ${date(request.details.received_at)}. No payment or dispatch was made by this app.`, 'help-text'));
+    if (['pending', 'available'].includes(request.state) && !request.details.received_at) {
       const actions = node('div', '', 'purchase-actions');
       for (const [action, label] of [['cancel', 'Cancel this check'], ['unavailable', 'Record: cleaner cannot help']]) {
         const button = node('button', label, 'secondary');
@@ -100,6 +107,30 @@ function cleanerPanel(issue) {
         actions.append(button);
       }
       card.append(actions);
+      if (request.state === 'available') {
+        const receipt = document.createElement('form');
+        const label = node('label', '', 'checkbox-label');
+        const confirmed = document.createElement('input');
+        confirmed.type = 'checkbox';
+        confirmed.required = true;
+        label.append(confirmed, node('span', 'All requested items have actually been received at the property.'));
+        const save = node('button', 'Record items received');
+        const feedback = node('p', '', 'save-status');
+        feedback.setAttribute('role', 'status');
+        receipt.append(label, save, feedback);
+        receipt.onsubmit = async event => {
+          event.preventDefault();
+          save.disabled = true;
+          try {
+            await submitAction(`/api/local-requests/${request.id}/received`, {version: request.version, items_received: confirmed.checked});
+            document.activeElement?.blur();
+            await load();
+          }
+          catch (error) { feedback.textContent = error.message; }
+          finally { save.disabled = false; }
+        };
+        card.append(receipt);
+      }
       if (request.state === 'pending' && request.notice_status === 'sent' && !request.fallback) {
         const reply = document.createElement('details');
         reply.append(node('summary', 'Record a reply received by the manager'));

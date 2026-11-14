@@ -2,12 +2,14 @@ import datetime as dt
 import json
 import logging
 import re
+import sqlite3
 import uuid
+from zoneinfo import ZoneInfo
 
 from purchases import email_settings
 from mailer import email_ready, send_email
 
-SUPPORTED = ('laundry_pods', 'trash_bags', 'dish_pods', 'toilet_paper', 'soap', 'shampoo')
+SUPPORTED = ('laundry_pods', 'trash_bags', 'dish_pods', 'toilet_paper', 'paper_towels', 'dish_soap', 'sponges', 'rinse_aid', 'soap', 'shampoo', 'conditioner', 'body_wash', 'bath_soap')
 
 
 def profile(db):
@@ -23,7 +25,9 @@ def describe(row):
     current = dt.datetime.now(dt.timezone.utc)
     details = request['details']
     request['fallback'] = False
-    if row['state'] == 'cancelled':
+    if details.get('received_at'):
+        request['status'] = 'Manager confirmed all cleaner-supplied items received'
+    elif row['state'] == 'cancelled':
         request['status'] = 'Reply deadline passed without confirmation — use Amazon' if details.get('timed_out') else 'Cancelled — use Amazon'
         request['fallback'] = True
     elif row['state'] == 'unavailable':
@@ -97,7 +101,7 @@ def change(db, path, data, timestamp):
         db.execute("INSERT INTO local_requests VALUES (?, ?, ?, 'pending', 'pending', NULL, NULL, NULL, 1, ?, ?)", (identifier, issue['id'], json.dumps(body), timestamp, timestamp))
         action = 'cleaner_availability_requested'
     else:
-        match = re.fullmatch(r'/api/local-requests/([a-f0-9-]{36})/(available|unavailable|cancel)', path)
+        match = re.fullmatch(r'/api/local-requests/([a-f0-9-]{36})/(available|unavailable|cancel|received)', path)
         if not match:
             raise ValueError('Unknown cleaner request action')
         identifier, action = match.groups()
@@ -105,6 +109,12 @@ def change(db, path, data, timestamp):
         if not row or type(data.get('version')) is not int or row['version'] != data['version'] or row['state'] not in ('pending', 'available'):
             raise ValueError('Cleaner request changed; reload before updating')
         details = json.loads(row['body'])
+        if details.get('received_at'):
+            raise ValueError('Receipt was already confirmed')
+        if action == 'received':
+            if row['state'] != 'available' or data.get('items_received') is not True:
+                raise ValueError('Confirm all requested items were actually received after cleaner availability was recorded')
+            details['received_at'] = timestamp
         if action == 'available':
             if row['notice_status'] != 'sent' or dt.datetime.fromisoformat(timestamp) >= dt.datetime.fromisoformat(details['reply_by']):
                 raise ValueError('No current emailed request is awaiting a reply; use Amazon or create a new check')
@@ -117,7 +127,7 @@ def change(db, path, data, timestamp):
             if data.get('items_confirmed') is not True:
                 raise ValueError('Confirm that the cleaner has all requested items')
             details['arrival'] = arrival.astimezone(dt.timezone.utc).isoformat()
-        state = {'available': 'available', 'unavailable': 'unavailable', 'cancel': 'cancelled'}[action]
+        state = {'available': 'available', 'unavailable': 'unavailable', 'cancel': 'cancelled', 'received': 'received'}[action]
         db.execute('UPDATE local_requests SET state = ?, body = ?, version = version + 1, updated_at = ? WHERE id = ?', (state, json.dumps(details), timestamp, identifier))
     db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (identifier, action, timestamp, json.dumps({'simulation': True})))
     return {'id': identifier}
@@ -126,6 +136,21 @@ def change(db, path, data, timestamp):
 def deliver_requests(connect, stop):
     from catalog import ITEMS
     while not stop.is_set():
+        timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        try:
+            with connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                expired = db.execute("SELECT * FROM local_requests WHERE state = 'pending' AND json_extract(body, '$.reply_by') <= ? ORDER BY created_at LIMIT 100", (timestamp,)).fetchall()
+                for row in expired:
+                    details = json.loads(row['body'])
+                    details['timed_out'] = True
+                    db.execute("UPDATE local_requests SET state = 'cancelled', body = ?, version = version + 1, updated_at = ? WHERE id = ?", (json.dumps(details), timestamp, row['id']))
+                    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_check_timed_out', timestamp, '{}'))
+        except sqlite3.Error as error:
+            logging.error(json.dumps({'event': 'cleaner_deadline_update_failed', 'error_type': type(error).__name__}))
+            if stop.wait(15):
+                return
+            continue
         settings = email_settings()
         if email_ready(settings):
             with connect() as db:
@@ -135,22 +160,16 @@ def deliver_requests(connect, stop):
                     return
                 try:
                     details = json.loads(row['body'])
-                    if dt.datetime.now(dt.timezone.utc) >= dt.datetime.fromisoformat(details['reply_by']):
-                        details['timed_out'] = True
-                        timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
-                        with connect() as db:
-                            cursor = db.execute("UPDATE local_requests SET state = 'cancelled', body = ?, version = version + 1, updated_at = ? WHERE id = ? AND state = 'pending' AND notice_status = 'pending'", (json.dumps(details), timestamp, row['id']))
-                            if cursor.rowcount:
-                                db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_check_timed_out', timestamp, '{}'))
-                        continue
                     with connect() as db:
                         db.execute('BEGIN IMMEDIATE')
                         current = db.execute('SELECT * FROM local_requests WHERE id = ?', (row['id'],)).fetchone()
-                        if current['state'] != 'pending' or current['notice_status'] != 'pending':
+                        if current['state'] != 'pending' or current['notice_status'] != 'pending' or dt.datetime.now(dt.timezone.utc) >= dt.datetime.fromisoformat(details['reply_by']):
                             continue
                         payload = json.loads(current['payload']) if current['payload'] else None
                         if payload is None:
-                            text = '\n'.join(('[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]', 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + ', '.join(ITEMS[item][0] for item in details['item_types']), 'Needed by: ' + details['needed_by'], 'Please reply by: ' + details['reply_by'], 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
+                            needed = dt.datetime.fromisoformat(details['needed_by']).astimezone(ZoneInfo('America/New_York')).strftime('%b %d, %Y at %I:%M %p %Z')
+                            reply = dt.datetime.fromisoformat(details['reply_by']).astimezone(ZoneInfo('America/New_York')).strftime('%b %d, %Y at %I:%M %p %Z')
+                            text = '\n'.join(('[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]', 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + ', '.join(ITEMS[item][0] for item in details['item_types']), 'Needed by: ' + needed, 'Please reply by: ' + reply, 'Times use Charlotte, NC (Eastern time).', 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
                             payload = {'from': settings['NOTIFICATION_FROM'], 'to': [details['email']], 'reply_to': settings['MANAGER_EMAIL'], 'subject': '[SIMULATION] Hiddenbrook supply availability request', 'text': text}
                             db.execute('UPDATE local_requests SET payload = ? WHERE id = ?', (json.dumps(payload), row['id']))
                         if settings['EMAIL_PROVIDER'] == 'gmail':

@@ -58,7 +58,7 @@ def initialize():
         CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS local_supplier (id INTEGER PRIMARY KEY CHECK(id = 1), body TEXT NOT NULL, version INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS local_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','available','unavailable','cancelled')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending','sent','failed')), email_id TEXT, payload TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS local_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','available','unavailable','cancelled','received')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending','sent','failed')), email_id TEXT, payload TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS active_local_request ON local_requests(issue_id) WHERE state IN ('pending','available');
         CREATE TABLE IF NOT EXISTS rental_units (id TEXT PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS preferred_products (id TEXT PRIMARY KEY, property_id TEXT NOT NULL REFERENCES rental_units(id), item_type TEXT NOT NULL, room TEXT NOT NULL, tv_brand TEXT NOT NULL, tv_model TEXT NOT NULL, title TEXT NOT NULL, asin TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -70,6 +70,16 @@ def initialize():
         CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, incident_id TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, details TEXT NOT NULL);
         ''')
+        if "'received'" not in db.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_requests'").fetchone()['sql']:
+            db.executescript('''
+            BEGIN IMMEDIATE;
+            ALTER TABLE local_requests RENAME TO local_requests_previous;
+            CREATE TABLE local_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','available','unavailable','cancelled','received')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending','sent','failed')), email_id TEXT, payload TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            INSERT INTO local_requests SELECT * FROM local_requests_previous;
+            DROP TABLE local_requests_previous;
+            CREATE UNIQUE INDEX active_local_request ON local_requests(issue_id) WHERE state IN ('pending','available');
+            COMMIT;
+            ''')
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
             db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
     os.chmod(DATABASE, 0o600)
@@ -353,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel))', self.path):
+            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
