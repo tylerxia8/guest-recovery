@@ -11,6 +11,19 @@ function renderCatalog() {
   if (signature === catalogSignature && container.firstChild) return;
   catalogSignature = signature;
   container.replaceChildren();
+  const defaults = node('details');
+  defaults.append(node('summary', 'Shared preferred items · Charlotte'));
+  defaults.append(node('p', 'Choose suitable quality and earliest confirmed arrival, then compare full cost. Unit-specific products take priority. Sizes, prices, and delivery still require confirmation on Amazon.', 'help-text'));
+  for (const product of catalog.defaults || []) {
+    const row = node('div', '', 'preferred-row');
+    const link = node('a', product.title + ' ↗', 'amazon-link');
+    link.href = 'https://www.amazon.com/s?' + new URLSearchParams({k: product.title});
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    row.append(link, node('p', product.check, 'help-text'));
+    defaults.append(row);
+  }
+  container.append(defaults);
   if (!catalog.properties.length) { container.append(node('p', 'Units will appear after the next successful Hospitable import.')); return; }
   if (!catalog.properties.some(unit => unit.id === selectedUnit)) selectedUnit = catalog.properties[0].id;
   const unitLabel = node('label', 'Rental unit');

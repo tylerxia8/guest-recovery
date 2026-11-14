@@ -201,7 +201,9 @@ function render() {
     if (!matching.length && units.length === 1) shopping.append(node('p', 'No matching preference saved yet. Add it under “Preferred Amazon items by unit” above.', 'help-text'));
     const searches = issue.item_types.filter(kind => kind !== 'tv_remote').map(kind => {
       const type = catalog.item_types.find(item => item.id === kind);
-      return [type.label, type.search_query];
+      const preferred = (catalog.defaults || []).find(product => product.item_type === kind);
+      if (preferred && !matching.some(product => product.item_type === kind)) shopping.append(node('strong', 'Shared preference: ' + preferred.title), node('p', preferred.check, 'help-text'));
+      return [preferred ? preferred.title : type.label, preferred ? preferred.title : type.search_query];
     });
     if (issue.item_types.includes('tv_remote')) {
       const remotes = matching.filter(product => product.item_type === 'tv_remote');

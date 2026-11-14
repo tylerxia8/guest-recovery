@@ -5,17 +5,31 @@ from urllib.parse import urlsplit
 
 ITEMS = {
     'hand_towels': ('Hand towels', r'\bhand towels?\b', 'white cotton hand towels pack'),
-    'bath_towels': ('Bath towels', r'(?<!hand )\btowels?\b', 'white cotton bath towels'),
+    'bath_towels': ('Bath towels', r'(?<!hand )(?<!paper )\btowels?\b', 'white cotton bath towels'),
     'tv_remote': ('TV remote', r'\b(?:tv |television )?remotes?\b', ''),
     'laundry_pods': ('Laundry pods', r'\b(?:laundry|washing|detergent) (?:pods?|detergent)|\blaundry soap\b', 'laundry detergent pods'),
     'trash_bags': ('Trash bags', r'\b(?:trash|garbage|bin) (?:bags?|liners?)\b', 'trash bags'),
     'dish_pods': ('Dishwasher pods', r'\b(?:dish|dishwasher) (?:pods?|tablets?|detergent)\b', 'dishwasher detergent pods'),
     'toilet_paper': ('Toilet paper', r'\btoilet (?:paper|rolls?)\b', 'toilet paper small pack'),
-    'soap': ('Hand soap', r'(?<!laundry )(?<!dish )\bsoap\b', 'hand soap'),
+    'soap': ('Hand soap', r'(?<!laundry )(?<!dish )(?<!dishwashing )(?<!bath )(?<!body )(?<!bar )\bsoap\b', 'hand soap'),
     'shampoo': ('Shampoo', r'\bshampoo\b', 'shampoo'),
     'blankets': ('Blankets', r'\bblankets?\b', 'washable blanket'),
     'pillows': ('Pillows', r'\bpillows?\b', 'bed pillow'),
     'batteries': ('Batteries', r'\bbatter(?:y|ies)\b', 'batteries'),
+    'dish_soap': ('Dish soap', r'\b(?:dish|dishwashing) (?:soap|liquid)\b', 'Dawn Free Clear dishwashing liquid'),
+    'paper_towels': ('Paper towels', r'\bpaper towels?\b', 'Bounty Select A Size paper towels small pack'),
+    'bath_soap': ('Bath soap', r'\b(?:bath|body|bar) soap\b', 'Dove Sensitive Skin Beauty Bar'),
+}
+
+DEFAULTS = {
+    'trash_bags': ('Glad ForceFlex fragrance-free 13-gallon drawstring trash bags', 'Confirm bin size; custom-fit bins may require specific liners.'),
+    'laundry_pods': ('Tide PODS Free & Gentle', 'Confirm the washer permits pods; choose a practical pack for the stay.'),
+    'dish_pods': ('Cascade Free & Clear ActionPacs', 'Dishwasher detergent only; keep separate from laundry pods.'),
+    'dish_soap': ('Dawn Free & Clear dishwashing liquid', 'For handwashing dishes; Free & Clear does not necessarily mean fragrance-free.'),
+    'toilet_paper': ('Charmin Ultra Strong 6 Mega Rolls', 'Confirm larger rolls fit the holder.'),
+    'paper_towels': ('Bounty Select-A-Size paper towels small multipack', 'Choose enough for the stay without unnecessary bulk.'),
+    'bath_soap': ('Dove Sensitive Skin Beauty Bar', 'Choose individually wrapped bars for guest use.'),
+    'batteries': ('Duracell Coppertop alkaline batteries', 'Confirm AA or AAA before choosing a pack.'),
 }
 
 
