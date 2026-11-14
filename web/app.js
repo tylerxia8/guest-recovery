@@ -199,22 +199,22 @@ function render() {
       shopping.append(preference);
     }
     if (!matching.length && units.length === 1) shopping.append(node('p', 'No matching preference saved yet. Add it under “Preferred Amazon items by unit” above.', 'help-text'));
-    const searches = issue.item_types.filter(kind => kind !== 'tv_remote').map(kind => {
+    const searches = issue.item_types.filter(kind => kind !== 'tv_remote' && !matching.some(product => product.item_type === kind)).map(kind => {
       const type = catalog.item_types.find(item => item.id === kind);
       const preferred = (catalog.defaults || []).find(product => product.item_type === kind);
-      if (preferred && !matching.some(product => product.item_type === kind)) shopping.append(node('strong', 'Shared preference: ' + preferred.title), node('p', preferred.check, 'help-text'));
-      return [preferred ? preferred.title : type.label, preferred ? preferred.title : type.search_query];
+      if (preferred) shopping.append(node('strong', 'Shared preference: ' + preferred.title), node('p', preferred.check, 'help-text'));
+      return [preferred ? preferred.title : type.label, preferred ? preferred.title : type.search_query, preferred?.asin];
     });
     if (issue.item_types.includes('tv_remote')) {
       const remotes = matching.filter(product => product.item_type === 'tv_remote');
       if (!remotes.length) shopping.append(node('p', 'Add this unit’s TV brand and exact model before choosing a remote. A generic remote may not work.', 'context-note'));
       for (const remote of remotes) searches.push([`${remote.room} compatible remote`, `${remote.tv_brand} ${remote.tv_model} compatible replacement remote`]);
     }
-    if (!searches.length) shopping.append(node('p', 'Identify the missing item in the guest message before choosing a replacement.', 'help-text'));
+    if (!searches.length && !matching.length) shopping.append(node('p', 'Identify the missing item in the guest message before choosing a replacement.', 'help-text'));
     const links = node('div', '', 'shopping-links');
-    for (const [label, query] of searches) {
-      const link = node('a', `Find ${label.toLowerCase()} ↗`, 'amazon-link');
-      link.href = 'https://www.amazon.com/s?' + new URLSearchParams({k: query});
+    for (const [label, query, asin] of searches) {
+      const link = node('a', `${asin ? 'View selected' : 'Find'} ${label} ↗`, 'amazon-link');
+      link.href = asin ? 'https://www.amazon.com/dp/' + asin : 'https://www.amazon.com/s?' + new URLSearchParams({k: query});
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       links.append(link);
@@ -226,7 +226,7 @@ function render() {
       gift.rel = 'noopener noreferrer';
       links.append(gift);
     }
-    shopping.append(links, node('p', 'Delivery not connected', 'delivery-status'), node('p', 'These are Amazon searches, not selected products or verified offers. In Amazon, select the property address and check the price and arrival date for both items. Do not place an order yet.', 'help-text'));
+    shopping.append(links, node('p', 'Price and Charlotte delivery unverified', 'delivery-status'), node('p', 'Selected listings identify the preferred product and variant. Search links are fallbacks. In Amazon, confirm the unit compatibility, seller, full price, and arrival date at the property address. Do not place an order yet.', 'help-text'));
     solution.append(shopping);
   }
   solution.append(node('p', 'No guest messages, bookings, or purchases. Manager notice emails can be sent when configured.', 'help-text'));

@@ -17,10 +17,18 @@ function renderCatalog() {
   for (const product of catalog.defaults || []) {
     const row = node('div', '', 'preferred-row');
     const link = node('a', product.title + ' ↗', 'amazon-link');
-    link.href = 'https://www.amazon.com/s?' + new URLSearchParams({k: product.title});
+    link.href = product.asin ? 'https://www.amazon.com/dp/' + product.asin : 'https://www.amazon.com/s?' + new URLSearchParams({k: product.title});
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     row.append(link, node('p', product.check, 'help-text'));
+    if (product.asin) row.append(node('p', 'Selected listing: ' + product.asin + ' · Price and Charlotte delivery unverified', 'help-text'));
+    if (product.source_url) {
+      const source = node('a', 'Product identification source ↗', 'help-text');
+      source.href = product.source_url;
+      source.target = '_blank';
+      source.rel = 'noopener noreferrer';
+      row.append(source);
+    }
     defaults.append(row);
   }
   container.append(defaults);

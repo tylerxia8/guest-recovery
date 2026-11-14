@@ -325,7 +325,7 @@ class Handler(BaseHTTPRequestHandler):
                         issue['local_requests'] = [describe_local(row) for row in db.execute('SELECT * FROM local_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     from catalog import ITEMS, DEFAULTS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
-                    result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1]} for key, value in DEFAULTS.items()]
+                    result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1], 'asin': value[2], 'source_url': value[3]} for key, value in DEFAULTS.items()]
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
                     from purchases import AUTO_LIMIT_CENTS, VETO_SECONDS, describe, email_settings
                     from mailer import email_ready
