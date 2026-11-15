@@ -2,6 +2,7 @@ let dataset = {issues: []};
 let selected = null;
 let loading = false;
 let purchaseLinkSelected = false;
+const selectedIssueByText = new Map();
 const notice = document.querySelector('#notice');
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -174,45 +175,87 @@ function updateCountdowns() {
     element.textContent = seconds ? `Manager veto time remaining: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : 'Veto window complete. Purchase remains blocked because checkout is not connected.';
   }
 }
+function showSettings() {
+  document.querySelector('#settings-workspace').hidden = false;
+  document.querySelector('#inbox-workspace').hidden = true;
+  document.querySelector('#settings-toggle').textContent = 'Back to inbox';
+  document.querySelector('#page-title').textContent = 'Settings';
+  document.querySelector('#page-subtitle').textContent = 'Properties, cleaner, and email.';
+}
+document.querySelector('#settings-toggle').onclick = () => {
+  if (document.querySelector('#settings-workspace').hidden) { showSettings(); return; }
+  document.querySelector('#settings-workspace').hidden = true;
+  document.querySelector('#inbox-workspace').hidden = false;
+  document.querySelector('#settings-toggle').textContent = 'Settings';
+  document.querySelector('#page-title').textContent = 'Guest inbox';
+  document.querySelector('#page-subtitle').textContent = 'Select a text. Review the next step.';
+};
 function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
   const view = document.querySelector('#request-view');
+  const entries = new Map();
+  const priority = ['Safety', 'Maintenance', 'Cleaning', 'Supplies', 'Instructions'];
+  for (const issue of dataset.issues) {
+    for (const message of issue.evidence) {
+      const key = issue.reservation_id + ':' + message.id;
+      if (!entries.has(key)) entries.set(key, {key, message, issues: []});
+      entries.get(key).issues.push(issue);
+    }
+  }
+  const texts = [...entries.values()].sort((a, b) => b.message.created_at.localeCompare(a.message.created_at));
+  for (const text of texts) text.issues.sort((a, b) => priority.indexOf(a.category) - priority.indexOf(b.category));
   if (!purchaseLinkSelected && dataset.purchase_policy) {
     purchaseLinkSelected = true;
     const requestedPurchase = new URLSearchParams(window.location.search).get('purchase');
-    const requestedIssue = dataset.issues.find(issue => issue.purchases.some(request => request.id === requestedPurchase));
-    if (requestedIssue) { selected = requestedIssue.id; view.value = requestedIssue.lane || 'practice'; }
+    const target = texts.find(text => text.issues.some(issue => issue.purchases.some(request => request.id === requestedPurchase)));
+    if (target) {
+      selected = target.key;
+      const targetIssue = target.issues.find(issue => issue.purchases.some(request => request.id === requestedPurchase));
+      selectedIssueByText.set(target.key, targetIssue.id);
+      view.value = target.issues[0].lane || 'practice';
+    }
   }
-  for (const [lane, label] of [['needs_attention', 'Needs attention'], ['likely_resolved', 'Likely resolved'], ['practice', 'Practice']]) view.querySelector(`option[value="${lane}"]`).textContent = `${label} (${dataset.issues.filter(issue => (issue.lane || 'practice') === lane).length})`;
-  const visible = dataset.issues.filter(issue => (issue.lane || 'practice') === view.value && (!category || issue.category === category) && (!search || `${issue.property} ${issue.category} ${issue.evidence.map(message => message.body).join(' ')}`.toLowerCase().includes(search)));
-  if (!visible.some(issue => issue.id === selected)) selected = (visible.find(issue => issue.worksheet) || visible[0])?.id;
+  for (const [lane, label] of [['needs_attention', 'Needs attention'], ['likely_resolved', 'Likely resolved'], ['practice', 'Practice']]) view.querySelector(`option[value="${lane}"]`).textContent = `${label} (${texts.filter(text => (text.issues[0].lane || 'practice') === lane).length})`;
+  const visible = texts.filter(text => (text.issues[0].lane || 'practice') === view.value && (!category || text.issues.some(issue => issue.category === category)) && (!search || `${text.issues[0].property} ${text.message.body}`.toLowerCase().includes(search)));
+  if (!visible.some(text => text.key === selected)) selected = visible[0]?.key;
   document.querySelector('#result-count').textContent = String(visible.length);
   const requests = document.querySelector('#requests');
   requests.replaceChildren();
-  for (const issue of visible) {
+  for (const text of visible) {
+    const issue = text.issues[0];
     const button = node('button', '', 'request');
     button.type = 'button';
-    button.setAttribute('aria-pressed', String(issue.id === selected));
-    button.append(node('span', issue.property, 'request-property'), node('strong', title(issue)), node('span', issue.evidence[issue.evidence.length - 1].body, 'request-preview'));
-    if (issue.priority === 'Urgent') button.append(node('span', 'Urgent review', 'urgent'));
-    if (issue.resolution_hint) button.append(node('span', issue.lane === 'practice' ? 'Practice · resolution reported' : 'Likely resolved · review confirmation', 'help-text'));
-    button.onclick = () => { selected = issue.id; render(); };
+    button.setAttribute('aria-pressed', String(text.key === selected));
+    button.append(node('span', issue.property, 'request-property'), node('span', text.message.body, 'request-preview'), node('span', date(text.message.created_at), 'request-time'));
+    if (issue.priority === 'Urgent') button.append(node('span', 'Urgent', 'urgent'));
+    button.onclick = () => { selected = text.key; render(); if (window.matchMedia('(max-width:760px)').matches) document.querySelector('#issues').scrollIntoView({behavior: 'smooth', block: 'start'}); };
     requests.append(button);
   }
   const container = document.querySelector('#issues');
   container.replaceChildren();
-  const issue = visible.find(item => item.id === selected);
-  if (!issue) { container.append(node('p', 'No requests match your filters.', 'empty')); return; }
+  const text = visible.find(item => item.key === selected);
+  if (!text) { container.append(node('p', 'No texts here. Try another view.', 'empty')); return; }
+  const issue = (category ? text.issues.find(item => item.category === category) : text.issues.find(item => item.id === selectedIssueByText.get(text.key))) || text.issues[0];
   const card = node('article', '', 'detail-card');
-  card.append(node('p', issue.property, 'eyebrow'), node('h2', title(issue)), node('p', issue.lane === 'practice' ? `Original checkout: ${date(issue.check_out)} · Historical or unverified practice case` : `Current stay · Checkout: ${date(issue.check_out)} · ${issue.lane === 'likely_resolved' ? 'Review guest confirmation' : 'Needs manager review'}`, 'help-text'));
-  const quote = node('blockquote', issue.evidence[issue.evidence.length - 1].body);
-  quote.append(node('cite', `Guest · ${date(issue.latest_at)}`));
+  const back = node('button', '← Texts', 'mobile-back secondary');
+  back.type = 'button';
+  back.onclick = () => document.querySelector('aside').scrollIntoView({behavior: 'smooth', block: 'start'});
+  card.append(back);
+  card.append(node('p', issue.property, 'eyebrow'), node('p', issue.lane === 'practice' ? 'Practice · historical or unverified stay' : 'Current stay', 'help-text'));
+  const quote = node('blockquote', text.message.body, 'guest-text');
+  quote.append(node('cite', date(text.message.created_at)));
   card.append(quote);
+  const nextStep = node('section', '', 'next-step');
+  card.append(nextStep);
+  const propertyDetails = node('details', '', 'property-details');
+  propertyDetails.append(node('summary', 'Property details'));
+  card.append(propertyDetails);
+  let profileButton = null;
   const destination = issue.fulfillment;
   if (destination) {
     const delivery = node('section');
-    delivery.append(node('h3', 'Delivery destination'), node('p', destination.verified ? 'Matched through this reservation’s Hospitable property ID · Manager-confirmed profile' : 'Unit matched through this reservation · Delivery profile needs manager confirmation', 'help-text'));
+    delivery.append(node('h3', 'Delivery destination'), node('p', destination.verified ? 'Confirmed delivery address' : 'Delivery address needs confirmation', 'help-text'));
     if (destination.verified) {
       delivery.append(node('p', [destination.address.line1, destination.address.line2, `${destination.address.city}, ${destination.address.region} ${destination.address.postal_code}`, destination.address.country].filter(Boolean).join(' · ')));
       if (destination.instructions) delivery.append(node('p', destination.instructions));
@@ -221,6 +264,7 @@ function render() {
     const edit = node('button', destination.verified ? 'Edit unit delivery profile' : 'Confirm unit delivery profile', 'secondary');
     edit.type = 'button';
     edit.onclick = () => {
+      showSettings();
       selectedUnit = destination.property_id;
       catalogSignature = '';
       renderCatalog();
@@ -229,36 +273,25 @@ function render() {
       const profile = panel.querySelector('.fulfillment-form');
       if (profile) { profile.closest('details').open = true; profile.scrollIntoView({behavior: 'smooth', block: 'start'}); }
     };
+    profileButton = edit;
     delivery.append(edit);
-    card.append(delivery);
-  } else card.append(node('p', 'This reservation does not map to exactly one unit. Confirm the property before choosing a delivery destination.', 'context-note'));
+    propertyDetails.append(delivery);
+  } else propertyDetails.append(node('p', 'This reservation does not map to exactly one unit. Confirm the property before choosing a delivery destination.', 'context-note'));
   if (issue.resolution_hint) {
-    card.append(node('p', issue.lane === 'practice' ? 'The guest reported a fix. This remains an open practice scenario.' : 'Likely resolved: review the guest confirmation below. No action was taken automatically.', 'context-note'));
+    const confirmation = node('details', '', 'resolution-details');
+    confirmation.append(node('summary', 'Guest reported a fix'));
     const resolution = node('blockquote', issue.resolution_hint.body);
     resolution.append(node('cite', `Guest confirmation · ${date(issue.resolution_hint.created_at)}`));
-    card.append(resolution);
+    confirmation.append(resolution);
+    card.append(confirmation);
   }
   const solution = node('div', '', 'saved-plan');
-  solution.append(node('span', 'Suggested fix', 'eyebrow'));
-  if (issue.worksheet) {
-    solution.append(node('h3', 'Send hand towels. Add a small apology gift.'), node('p', 'Propose a pack of hand towels and optional chocolates up to $3, delivered together on the same day.'), node('p', '$25 or less: 10-minute manager veto window. Above $25: manager approval required.', 'budget'), node('p', 'Get the towels there as soon as possible. Compare Amazon arrival with housekeeping delivery; leave out the gift if it would slow down the towels.', 'help-text'));
-  } else {
-    const fixes = {
-      Supplies: ['Replace the missing item.', 'Use the guest’s message to identify the item, then propose a suitable replacement. Check existing stock first.', '$25 or less uses the 10-minute veto policy; higher totals require manager approval.'],
-      Maintenance: ['Have maintenance fix it.', 'Send the reported fault and property details to the maintenance team for assessment.', 'Get a quote before approving parts or repairs.'],
-      Cleaning: ['Arrange a cleaning touch-up.', 'Ask housekeeping to address the reported area and check for related problems.', 'Confirm availability and any cleaning charge.'],
-      Instructions: ['Give the guest the right instructions.', 'Find the property-specific answer and prepare a short, clear explanation.', 'Usually no purchase needed.'],
-      Safety: ['Have the manager assess this immediately.', 'Check the reported hazard and arrange the appropriate emergency or licensed response.', 'Escalate before considering routine purchases.'],
-    };
-    const [heading, action, budget] = fixes[issue.category];
-    solution.append(node('h3', heading), node('p', action), node('p', budget, 'help-text'));
-  }
   if (issue.category === 'Supplies') {
     const cleaner = cleanerPanel(issue);
     if (cleaner) solution.append(cleaner);
     const shopping = node('section', '', 'shopping');
-    shopping.append(node('h3', 'Find options on Amazon'));
-    shopping.append(node('p', 'Delivery speed comes first', 'delivery-priority'), node('p', 'Choose the earliest verified arrival for the correct unit. Start with its preferred item, then use a compatible alternative if it can arrive sooner. Skip chocolates if they would delay the essential item.', 'help-text'));
+    shopping.append(node('h3', 'Preferred replacements'));
+    shopping.append(node('p', 'Check the earliest arrival. Skip the gift if it delays the essentials.', 'help-text'));
     const catalog = dataset.catalog;
     const units = issue.property_ids || [];
     const matching = units.length === 1 ? catalog.products.filter(product => product.property_id === units[0] && issue.item_types.includes(product.item_type)) : [];
@@ -280,7 +313,7 @@ function render() {
         purchaseDrafts.set(issue.id, {...previous, summary: previous?.summary ? previous.summary + '; ' + summary : summary, asins: previous?.asins ? previous.asins + ', ' + product.asin : product.asin, location: previous?.location || (issue.fulfillment?.verified ? `${issue.fulfillment.address.city}, ${issue.fulfillment.address.region}` : 'Charlotte, NC'), timezone: previous?.timezone || (issue.fulfillment?.verified ? issue.fulfillment.address.timezone : 'America/New_York'), fulfillment_version: previous ? previous.fulfillment_version : (issue.fulfillment?.verified ? issue.fulfillment.version : null), arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: previous?.gift || '0', all_in_confirmed: false});
         render();
         const form = document.querySelector('.purchase-form');
-        if (form) { form.closest('details').open = true; form.elements.summary.focus(); }
+        if (form) { form.closest('.action-details').open = true; form.closest('details').open = true; form.elements.summary.focus(); }
       };
       use.disabled = issue.purchases.some(request => request.decision !== 'vetoed');
       preference.append(link, use);
@@ -319,9 +352,11 @@ function render() {
     shopping.append(links, node('p', 'Price and Charlotte delivery unverified', 'delivery-status'), node('p', 'Selected listings identify the preferred product and variant. Search links are fallbacks. In Amazon, confirm the unit compatibility, seller, full price, and arrival date at the property address. Do not place an order yet.', 'help-text'));
     solution.append(shopping);
   }
-  solution.append(node('p', 'No guest messages, bookings, or purchases. Manager notice emails can be sent when configured.', 'help-text'));
-  card.append(solution);
-  if (issue.category === 'Supplies' && dataset.purchase_policy) card.append(purchasePanel(issue));
+
+  const controls = node('details', '', 'action-details');
+  controls.append(node('summary', 'Action details'), solution);
+  if (issue.category === 'Supplies' && dataset.purchase_policy) controls.append(purchasePanel(issue));
+  card.append(controls);
   const history = node('details', '', 'conversation-details');
   history.append(node('summary', `Read the full conversation (${issue.messages.length} messages)`));
   const conversation = node('div', '', 'conversation');
@@ -332,12 +367,69 @@ function render() {
   }
   history.append(conversation);
   card.append(history);
-  if (issue.evidence.length > 1) {
-    const evidence = document.createElement('details');
-    evidence.append(node('summary', `Other messages about this issue (${issue.evidence.length - 1})`));
-    for (const message of issue.evidence.slice(0, -1)) evidence.append(node('blockquote', message.body));
-    card.append(evidence);
+  let heading = 'Review this request';
+  let detail = 'Check the conversation before responding.';
+  let actionLabel = 'View conversation';
+  let target = history;
+  const pendingPurchase = issue.purchases.find(request => request.decision !== 'vetoed');
+  const activeCleaner = issue.local_requests.find(request => ['pending', 'available'].includes(request.state));
+  if (pendingPurchase) {
+    heading = 'Purchase notice'; detail = pendingPurchase.status; actionLabel = 'Review purchase notice'; target = controls.querySelector('.purchase-panel');
+  } else if (activeCleaner) {
+    heading = 'Cleaner request'; detail = activeCleaner.status; actionLabel = 'View cleaner request'; target = controls.querySelector('.cleaner-option');
+  } else if (issue.resolution_hint) {
+    heading = 'Guest reported a fix'; detail = 'Review their confirmation before taking another action.'; actionLabel = 'Read confirmation'; target = card.querySelector('.resolution-details');
+  } else if (issue.category === 'Supplies' && profileButton && !destination.verified) {
+    heading = 'Confirm this unit once'; detail = 'Check the delivery address to unlock the next step.'; actionLabel = 'Confirm delivery details'; target = null;
+  } else if (issue.category === 'Supplies' && issue.cleaner_live?.eligible) {
+    heading = 'Ask the cleaner'; detail = 'Review and send an availability email for these items.'; actionLabel = 'Review cleaner email'; target = controls.querySelector('.cleaner-option');
+  } else if (issue.category === 'Supplies') {
+    heading = 'Replace the missing item'; detail = 'Preferred items are ready. Amazon checkout is not connected.'; actionLabel = 'Review replacement'; target = controls.querySelector('.shopping');
+  } else if (issue.category === 'Maintenance') {
+    heading = /remote/i.test(text.message.body) ? 'Check the remote' : 'Review a repair'; detail = /remote/i.test(text.message.body) ? 'Start with the batteries. Repair dispatch needs a manager.' : 'Repair dispatch needs a manager.';
+  } else if (issue.category === 'Cleaning') {
+    heading = 'Arrange a cleaning touch-up'; detail = 'Cleaning dispatch needs a manager.';
+  } else if (issue.category === 'Instructions') {
+    heading = 'Find the right instructions'; detail = 'Review the conversation. Guest replies are currently off.';
+  } else if (issue.category === 'Safety') {
+    heading = 'Urgent manager review'; detail = 'Check the reported hazard now.';
   }
+  nextStep.append(node('span', 'Next step', 'eyebrow'), node('h2', heading), node('p', detail));
+  const action = node('button', actionLabel);
+  action.type = 'button';
+  action.onclick = () => {
+    if (!target) { profileButton?.click(); return; }
+    if (controls.contains(target)) controls.open = true;
+    if (target.tagName === 'DETAILS') target.open = true;
+    if (target.classList.contains('cleaner-option')) {
+      const form = target.querySelector('.local-request-form');
+      if (form) {
+        form.closest('details').open = true;
+        const mode = form.querySelector('select');
+        if (issue.cleaner_live?.eligible && mode) { mode.value = 'live'; mode.dispatchEvent(new Event('change')); }
+      }
+    }
+    target.scrollIntoView({behavior: 'smooth', block: 'start'});
+  };
+  const next = node('button', 'Next text →', 'secondary');
+  next.type = 'button';
+  next.disabled = visible.length < 2;
+  next.onclick = () => { selected = visible[(visible.findIndex(item => item.key === selected) + 1) % visible.length].key; render(); };
+  const actions = node('div', '', 'primary-actions');
+  actions.append(action, next);
+  nextStep.append(actions);
+  if (text.issues.length > 1) {
+    const alternatives = node('details');
+    alternatives.append(node('summary', 'Other possible fixes'));
+    for (const related of text.issues.filter(item => item.id !== issue.id)) {
+      const button = node('button', title(related), 'secondary');
+      button.type = 'button';
+      button.onclick = () => { selectedIssueByText.set(text.key, related.id); document.querySelector('#category').value = ''; render(); };
+      alternatives.append(button);
+    }
+    card.append(alternatives);
+  }
+  card.append(node('p', 'Purchases and guest replies are off.', 'automation-note'));
   container.append(card);
   renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
   renderedPreferences = JSON.stringify(dataset.catalog);
@@ -359,7 +451,7 @@ async function load() {
     const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || renderedSupplier !== JSON.stringify(next.local_supplier) || !document.querySelector('#issues').firstChild;
     dataset = next;
     const connection = dataset.integration;
-    const connectionText = connection.status === 'syncing' ? 'Updating guest messages from Hospitable…' : connection.status === 'connected' ? `Hospitable connected · Updated ${date(connection.last_success)} · Checks every 5 minutes` : connection.status === 'error' ? connection.error : 'Starting Hospitable connection…';
+    const connectionText = connection.status === 'syncing' ? 'Syncing Hospitable…' : connection.status === 'connected' ? `Hospitable · Updated ${date(connection.last_success)}` : connection.status === 'error' ? connection.error : 'Connecting to Hospitable…';
     document.querySelector('#connection').textContent = connectionText;
     document.querySelector('#connection').classList.toggle('connection-error', connection.status === 'error');
     document.querySelector('#stats').textContent = `${dataset.property_count || 0} properties · ${dataset.reservation_count || 0} saved conversations · ${dataset.guest_message_count || 0} guest messages`;
