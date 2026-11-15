@@ -396,7 +396,7 @@ function render() {
   } else if (issue.category === 'Cleaning') {
     heading = 'Arrange a cleaning touch-up'; detail = 'Cleaning dispatch needs a manager.';
   } else if (issue.category === 'Instructions') {
-    heading = 'Find the right instructions'; detail = 'Review the conversation. Guest replies are currently off.';
+    heading = 'Find the right instructions'; detail = 'Review the conversation and prepare a reply for approval.';
   } else if (issue.category === 'Safety') {
     heading = 'Urgent manager review'; detail = 'Check the reported hazard now.';
   }
@@ -438,7 +438,7 @@ function render() {
     }
     card.append(alternatives);
   }
-  card.append(node('p', 'Purchases and guest replies are off.', 'automation-note'));
+  card.append(node('p', 'Purchases are off. Guest replies require manager approval.', 'automation-note'));
   container.append(card);
   renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
   renderedPreferences = JSON.stringify(dataset.catalog);

@@ -2,6 +2,7 @@ import argparse
 from contextlib import closing
 import datetime as dt
 import json
+import hashlib
 import os
 import sqlite3
 import time
@@ -133,7 +134,7 @@ def research():
             if timestamp.tzinfo is None:
                 raise ValueError('Message timestamp requires timezone')
             messages.append({'id': str(message['id']), 'sender_type': message['sender_type'], 'body': body, 'created_at': timestamp.astimezone(dt.timezone.utc).isoformat()})
-        conversations.append({'reservation_id': identifier, 'property': ', '.join(item['name'] for item in reservation['properties']), 'property_ids': [str(uuid.UUID(item['id'])) for item in reservation['properties']], 'check_in': reservation['check_in'], 'check_out': reservation['check_out'], 'messages': messages})
+        conversations.append({'reservation_id': identifier, 'property': ', '.join(item['name'] for item in reservation['properties']), 'property_ids': [str(uuid.UUID(item['id'])) for item in reservation['properties']], 'check_in': reservation['check_in'], 'check_out': reservation['check_out'], 'messages': messages, 'conversation_id': reservation['conversation_id'], 'source_messages_fingerprint': hashlib.sha256(json.dumps(sorted(rows, key=lambda row: str(row['id'])), sort_keys=True).encode()).hexdigest()})
         print(json.dumps({'event': 'research_progress', 'conversations': len(conversations), 'total': len(reservations)}), flush=True)
     with connect() as db:
         previous = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()

@@ -90,6 +90,8 @@ def analyze(snapshot):
                             issue['resolution_hint'] = later
             issue.update({'property': conversation['property'], 'reservation_id': conversation['reservation_id'], 'check_in': conversation['check_in'], 'check_out': conversation['check_out'], 'messages': messages, 'latest_at': issue['evidence'][-1]['created_at']})
             issue['property_ids'] = conversation.get('property_ids', [])
+            issue['conversation_id'] = conversation.get('conversation_id')
+            issue['source_messages_fingerprint'] = conversation.get('source_messages_fingerprint')
             if issue['hand_towel'] and 'hand_towels' not in issue['item_types']:
                 issue['item_types'].append('hand_towels')
             issue['recorded_status'] = 'Likely resolved' if issue['resolution_hint'] else 'Needs review'
