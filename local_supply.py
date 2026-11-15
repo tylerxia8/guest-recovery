@@ -1,4 +1,5 @@
 import datetime as dt
+import hashlib
 import json
 import logging
 import re
@@ -10,6 +11,50 @@ from purchases import email_settings
 from mailer import email_ready, send_email
 
 SUPPORTED = ('laundry_pods', 'trash_bags', 'dish_pods', 'toilet_paper', 'paper_towels', 'dish_soap', 'sponges', 'rinse_aid', 'soap', 'shampoo', 'conditioner', 'body_wash', 'bath_soap')
+
+
+class LiveRequestUnavailable(ValueError):
+    pass
+
+
+def live_context(db, issue, snapshot, timestamp):
+    from fulfillment import profile as fulfillment_profile
+    current = dt.datetime.fromisoformat(timestamp)
+    age = current - dt.datetime.fromisoformat(snapshot['synced_at'])
+    if not dt.timedelta(0) <= age <= dt.timedelta(minutes=10):
+        raise LiveRequestUnavailable('Refresh Hospitable before sending a real inquiry; the import must be less than 10 minutes old.')
+    if not issue or issue['category'] != 'Supplies' or issue['lane'] != 'needs_attention' or issue['resolution_hint'] or len(issue['property_ids']) != 1:
+        raise LiveRequestUnavailable('Real inquiries require a current, unresolved supply request mapped to one unit.')
+    unit = db.execute('SELECT name FROM rental_units WHERE id = ?', (issue['property_ids'][0],)).fetchone()
+    if not unit or not unit['name'].startswith('HB'):
+        raise LiveRequestUnavailable('Real cleaner inquiries are limited to HB units.')
+    destination = fulfillment_profile(db, issue['property_ids'][0])
+    supplier = profile(db)
+    if not destination['verified']:
+        raise LiveRequestUnavailable('Confirm this unit’s delivery profile first.')
+    if destination['property_id'] not in supplier['property_ids'] or not supplier['email'] or not any(item in supplier['item_types'] for item in issue['item_types']):
+        raise LiveRequestUnavailable('Confirm cleaner coverage, email, and supported items first.')
+    if not email_ready(email_settings()):
+        raise LiveRequestUnavailable('Configure email sending before using real inquiries.')
+    if not current < dt.datetime.fromisoformat(issue['check_out'].replace('Z', '+00:00')):
+        raise LiveRequestUnavailable('This stay has ended.')
+    return destination, supplier
+
+
+def recheck_live(db, details, issue_id, timestamp):
+    from research import analyze
+    row = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+    if not row:
+        raise LiveRequestUnavailable('Hospitable import is missing.')
+    snapshot = json.loads(row['body'])
+    issue = next((item for item in analyze(snapshot)['issues'] if item['id'] == issue_id), None)
+    destination, supplier = live_context(db, issue, snapshot, timestamp)
+    fingerprint = hashlib.sha256(json.dumps(issue['evidence'], sort_keys=True).encode()).hexdigest()
+    items = [item for item in issue['item_types'] if item in supplier['item_types']]
+    if destination['property_id'] != details['property_id'] or issue['property'] != details['property'] or destination['version'] != details['profile_version'] or supplier['version'] != details['supplier_version'] or supplier['email'] != details['email'] or items != details['item_types'] or fingerprint != details['evidence_fingerprint']:
+        raise LiveRequestUnavailable('The unit profile, cleaner settings, or complaint changed. Review and create a new inquiry.')
+    if dt.datetime.fromisoformat(details['needed_by']) > dt.datetime.fromisoformat(issue['check_out'].replace('Z', '+00:00')):
+        raise LiveRequestUnavailable('The needed-by time is after checkout.')
 
 
 def profile(db):
@@ -53,6 +98,7 @@ def describe(row):
 
 
 def change(db, path, data, timestamp):
+    simulation = True
     if path == '/api/local-supplier':
         email = data.get('email')
         properties = data.get('property_ids')
@@ -78,7 +124,8 @@ def change(db, path, data, timestamp):
         snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
         if not snapshot:
             raise ValueError('Research snapshot is missing')
-        issue = next((item for item in analyze(json.loads(snapshot['body']))['issues'] if item['id'] == data.get('issue_id') and item['category'] == 'Supplies'), None)
+        snapshot = json.loads(snapshot['body'])
+        issue = next((item for item in analyze(snapshot)['issues'] if item['id'] == data.get('issue_id') and item['category'] == 'Supplies'), None)
         if not issue or len(issue['property_ids']) != 1:
             raise ValueError('Confirm exactly one rental unit before contacting the cleaner')
         supplier = profile(db)
@@ -94,10 +141,26 @@ def change(db, path, data, timestamp):
         current = dt.datetime.fromisoformat(timestamp)
         if needed.tzinfo is None or not current < needed <= current + dt.timedelta(days=2):
             raise ValueError('Needed-by time must be in the next 48 hours and include a timezone')
+        mode = data.get('mode', 'simulation')
+        if mode not in ('simulation', 'live'):
+            raise ValueError('Choose simulation or live inquiry')
+        if mode == 'live':
+            destination, supplier = live_context(db, issue, snapshot, timestamp)
+            fingerprint = hashlib.sha256(json.dumps(issue['evidence'], sort_keys=True).encode()).hexdigest()
+            if type(data.get('profile_version')) is not int or type(data.get('supplier_version')) is not int or data['profile_version'] != destination['version'] or data['supplier_version'] != supplier['version'] or data.get('evidence_fingerprint') != fingerprint:
+                raise ValueError('The displayed request or settings changed. Refresh and confirm the listed items again.')
+            if data.get('needed_confirmed') is not True:
+                raise ValueError('Confirm these listed items are still needed and authorize the real availability email.')
+            if needed > dt.datetime.fromisoformat(issue['check_out'].replace('Z', '+00:00')):
+                raise ValueError('Needed-by time must be before checkout')
         if db.execute("SELECT id FROM local_requests WHERE issue_id = ? AND state IN ('pending', 'available')", (issue['id'],)).fetchone():
             raise ValueError('Cancel the existing cleaner check before requesting another')
         identifier = str(uuid.uuid4())
         body = {'property_id': property_id, 'property': issue['property'], 'email': supplier['email'], 'item_types': items, 'needed_by': needed.astimezone(dt.timezone.utc).isoformat(), 'reply_by': min(current + dt.timedelta(minutes=minutes), needed).astimezone(dt.timezone.utc).isoformat()}
+        body['mode'] = mode
+        simulation = mode != 'live'
+        if mode == 'live':
+            body.update({'profile_version': destination['version'], 'supplier_version': supplier['version'], 'evidence_fingerprint': fingerprint, 'timezone': destination['address']['timezone']})
         db.execute("INSERT INTO local_requests VALUES (?, ?, ?, 'pending', 'pending', NULL, NULL, NULL, 1, ?, ?)", (identifier, issue['id'], json.dumps(body), timestamp, timestamp))
         action = 'cleaner_availability_requested'
     else:
@@ -109,6 +172,7 @@ def change(db, path, data, timestamp):
         if not row or type(data.get('version')) is not int or row['version'] != data['version'] or row['state'] not in ('pending', 'available'):
             raise ValueError('Cleaner request changed; reload before updating')
         details = json.loads(row['body'])
+        simulation = details.get('mode') != 'live'
         if details.get('received_at'):
             raise ValueError('Receipt was already confirmed')
         if action == 'received':
@@ -116,6 +180,8 @@ def change(db, path, data, timestamp):
                 raise ValueError('Confirm all requested items were actually received after cleaner availability was recorded')
             details['received_at'] = timestamp
         if action == 'available':
+            if details.get('mode') == 'live':
+                recheck_live(db, details, row['issue_id'], timestamp)
             if row['notice_status'] != 'sent' or dt.datetime.fromisoformat(timestamp) >= dt.datetime.fromisoformat(details['reply_by']):
                 raise ValueError('No current emailed request is awaiting a reply; use Amazon or create a new check')
             arrival = data.get('arrival')
@@ -129,7 +195,7 @@ def change(db, path, data, timestamp):
             details['arrival'] = arrival.astimezone(dt.timezone.utc).isoformat()
         state = {'available': 'available', 'unavailable': 'unavailable', 'cancel': 'cancelled', 'received': 'received'}[action]
         db.execute('UPDATE local_requests SET state = ?, body = ?, version = version + 1, updated_at = ? WHERE id = ?', (state, json.dumps(details), timestamp, identifier))
-    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (identifier, action, timestamp, json.dumps({'simulation': True})))
+    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (identifier, action, timestamp, json.dumps({'simulation': simulation})))
     return {'id': identifier}
 
 
@@ -165,12 +231,17 @@ def deliver_requests(connect, stop):
                         current = db.execute('SELECT * FROM local_requests WHERE id = ?', (row['id'],)).fetchone()
                         if current['state'] != 'pending' or current['notice_status'] != 'pending' or dt.datetime.now(dt.timezone.utc) >= dt.datetime.fromisoformat(details['reply_by']):
                             continue
+                        if details.get('mode') == 'live':
+                            recheck_live(db, details, row['issue_id'], dt.datetime.now(dt.timezone.utc).isoformat())
                         payload = json.loads(current['payload']) if current['payload'] else None
                         if payload is None:
-                            needed = dt.datetime.fromisoformat(details['needed_by']).astimezone(ZoneInfo('America/New_York')).strftime('%b %d, %Y at %I:%M %p %Z')
-                            reply = dt.datetime.fromisoformat(details['reply_by']).astimezone(ZoneInfo('America/New_York')).strftime('%b %d, %Y at %I:%M %p %Z')
-                            text = '\n'.join(('[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]', 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + ', '.join(ITEMS[item][0] for item in details['item_types']), 'Needed by: ' + needed, 'Please reply by: ' + reply, 'Times use Charlotte, NC (Eastern time).', 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
-                            payload = {'from': settings['NOTIFICATION_FROM'], 'to': [details['email']], 'reply_to': settings['MANAGER_EMAIL'], 'subject': '[SIMULATION] Hiddenbrook supply availability request', 'text': text}
+                            timezone = details.get('timezone', 'America/New_York')
+                            needed = dt.datetime.fromisoformat(details['needed_by']).astimezone(ZoneInfo(timezone)).strftime('%b %d, %Y at %I:%M %p %Z')
+                            reply = dt.datetime.fromisoformat(details['reply_by']).astimezone(ZoneInfo(timezone)).strftime('%b %d, %Y at %I:%M %p %Z')
+                            heading = 'Availability inquiry only. Do not dispatch or purchase anything.' if details.get('mode') == 'live' else '[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]'
+                            text = '\n'.join((heading, 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + ', '.join(ITEMS[item][0] for item in details['item_types']), 'Needed by: ' + needed, 'Please reply by: ' + reply, 'Time zone: ' + timezone, 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
+                            subject = 'Hiddenbrook supply availability request' if details.get('mode') == 'live' else '[SIMULATION] Hiddenbrook supply availability request'
+                            payload = {'from': settings['NOTIFICATION_FROM'], 'to': [details['email']], 'reply_to': settings['MANAGER_EMAIL'], 'subject': subject, 'text': text}
                             db.execute('UPDATE local_requests SET payload = ? WHERE id = ?', (json.dumps(payload), row['id']))
                         if settings['EMAIL_PROVIDER'] == 'gmail':
                             db.execute("UPDATE local_requests SET notice_status = 'failed', error = 'Gmail send is in progress or unconfirmed; do not resend automatically' WHERE id = ?", (row['id'],))
@@ -181,6 +252,10 @@ def deliver_requests(connect, stop):
                     with connect() as db:
                         db.execute("UPDATE local_requests SET notice_status = 'sent', email_id = ?, error = NULL WHERE id = ?", (email_id, row['id']))
                         db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_email_sent', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
+                except LiveRequestUnavailable as error:
+                    with connect() as db:
+                        db.execute("UPDATE local_requests SET state = 'cancelled', error = ?, version = version + 1, updated_at = ? WHERE id = ? AND state = 'pending'", (str(error), dt.datetime.now(dt.timezone.utc).isoformat(), row['id']))
+                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'live_cleaner_inquiry_blocked', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
                 except Exception as error:
                     logging.error(json.dumps({'event': 'cleaner_email_failed', 'request_id': row['id'], 'error_type': type(error).__name__}))
                     message = 'Gmail send outcome is unconfirmed. The email may have arrived; check before resending. Use Amazon if the cleaner cannot confirm in time.' if settings['EMAIL_PROVIDER'] == 'gmail' else 'Email failed; use Amazon or cancel and retry the availability check'

@@ -333,7 +333,8 @@ class Handler(BaseHTTPRequestHandler):
                 from worksheet import build
                 with connect() as db:
                     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
-                    result = analyze(json.loads(snapshot['body'])) if snapshot else {'issues': [], 'synced_at': None}
+                    source_snapshot = json.loads(snapshot['body']) if snapshot else None
+                    result = analyze(source_snapshot) if source_snapshot else {'issues': [], 'synced_at': None}
                     from local_supply import SUPPORTED, profile, describe as describe_local
                     result['local_supplier'] = profile(db)
                     result['local_supply_types'] = list(SUPPORTED)
@@ -346,6 +347,13 @@ class Handler(BaseHTTPRequestHandler):
                     result['catalog']['fulfillment'] = [fulfillment_profile(db, unit['id']) for unit in result['catalog']['properties']]
                     for issue in result['issues']:
                         issue['fulfillment'] = next((item for item in result['catalog']['fulfillment'] if len(issue['property_ids']) == 1 and item['property_id'] == issue['property_ids'][0]), None)
+                        from local_supply import live_context, LiveRequestUnavailable
+                        try:
+                            destination, supplier = live_context(db, issue, source_snapshot, now())
+                        except LiveRequestUnavailable as error:
+                            issue['cleaner_live'] = {'eligible': False, 'reason': str(error)}
+                        else:
+                            issue['cleaner_live'] = {'eligible': True, 'reason': None, 'profile_version': destination['version'], 'supplier_version': supplier['version'], 'evidence_fingerprint': hashlib.sha256(json.dumps(issue['evidence'], sort_keys=True).encode()).hexdigest()}
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
                     from purchases import AUTO_LIMIT_CENTS, VETO_SECONDS, describe, email_settings
                     from mailer import email_ready

@@ -34,12 +34,28 @@ function renderCatalog() {
   }
   container.append(defaults);
   if (!catalog.properties.length) { container.append(node('p', 'Units will appear after the next successful Hospitable import.')); return; }
-  if (!catalog.properties.some(unit => unit.id === selectedUnit)) selectedUnit = catalog.properties[0].id;
+  const pendingHB = catalog.properties.filter(unit => unit.name.startsWith('HB') && !(catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified);
+  container.append(node('p', `${pendingHB.length} HB delivery profiles need confirmation before real cleaner inquiries can be used. Review each address and unit number; no profiles are approved automatically.`, 'help-text'));
+  if (pendingHB.length) {
+    const next = node('button', 'Review next unconfirmed HB unit', 'secondary');
+    next.type = 'button';
+    next.onclick = () => {
+      selectedUnit = pendingHB[(pendingHB.findIndex(unit => unit.id === selectedUnit) + 1) % pendingHB.length].id;
+      selectedProduct = null;
+      catalogSignature = '';
+      renderCatalog();
+      const profile = container.querySelector('.fulfillment-form');
+      if (profile) { profile.closest('details').open = true; profile.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+    };
+    container.append(next);
+  }
+  if (!catalog.properties.some(unit => unit.id === selectedUnit)) selectedUnit = (pendingHB[0] || catalog.properties[0]).id;
   const unitLabel = node('label', 'Rental unit');
   const unitSelect = document.createElement('select');
   for (const unit of catalog.properties) {
     const duplicateName = catalog.properties.some(other => other.id !== unit.id && other.name === unit.name);
-    const option = node('option', duplicateName ? `${unit.name} · ${unit.id.slice(0, 8)}` : unit.name);
+    const status = (catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified ? 'Confirmed' : 'Needs confirmation';
+    const option = node('option', (duplicateName ? `${unit.name} · ${unit.id.slice(0, 8)}` : unit.name) + ' · ' + status);
     option.value = unit.id;
     unitSelect.append(option);
   }

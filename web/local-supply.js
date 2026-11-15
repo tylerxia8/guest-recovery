@@ -84,6 +84,8 @@ function cleanerPanel(issue) {
   for (const request of issue.local_requests) {
     const card = node('div', '', 'purchase-request');
     card.append(node('strong', request.status), node('p', request.details.item_types.map(kind => dataset.catalog.item_types.find(item => item.id === kind).label).join(', '), 'help-text'), node('p', `Reply by ${date(request.details.reply_by)} · Needed by ${date(request.details.needed_by)}`, 'help-text'));
+    card.append(node('p', request.details.mode === 'live' ? 'Real availability inquiry · No dispatch or purchase authorized' : 'Simulation inquiry', 'help-text'));
+    if (request.error) card.append(node('p', request.error, 'warning'));
     if (request.details.arrival) card.append(node('p', `Cleaner-reported arrival: ${date(request.details.arrival)}. Confirm any fee before arranging delivery.`, 'help-text'));
     if (request.fallback) card.append(node('p', 'Continue with the Amazon options below. No purchase or cleaner dispatch happens automatically.', 'delivery-priority'));
     if (request.fallback) {
@@ -173,6 +175,17 @@ function cleanerPanel(issue) {
   details.append(node('summary', 'Ask whether the cleaner can help'));
   const form = node('form', '', 'local-request-form');
   const draft = localDrafts.get(issue.id) || {needed: '', minutes: '10'};
+  const modeLabel = node('label', 'Inquiry type');
+  const mode = document.createElement('select');
+  const simulated = node('option', 'Simulation availability email');
+  simulated.value = 'simulation';
+  const live = node('option', 'Real availability email');
+  live.value = 'live';
+  live.disabled = !issue.cleaner_live?.eligible;
+  mode.append(simulated, live);
+  mode.value = draft.mode === 'live' && issue.cleaner_live?.eligible ? 'live' : 'simulation';
+  modeLabel.append(mode);
+  if (!issue.cleaner_live?.eligible) section.append(node('p', issue.cleaner_live?.reason || 'Real inquiry eligibility is awaiting a refresh.', 'context-note'));
   const neededLabel = node('label', `Need these items by (${Intl.DateTimeFormat().resolvedOptions().timeZone})`);
   const needed = document.createElement('input');
   needed.type = 'datetime-local';
@@ -185,19 +198,33 @@ function cleanerPanel(issue) {
   minutes.value = draft.minutes;
   waitLabel.append(minutes);
   const send = node('button', 'Queue an availability email');
+  const authorization = node('label', '', 'checkbox-label');
+  const confirmed = document.createElement('input');
+  confirmed.type = 'checkbox';
+  authorization.append(confirmed, node('span', `These listed items are still needed at ${issue.property}. Send a real availability-only email to ${supplier.email}; do not dispatch or purchase anything.`));
+  const updateMode = () => {
+    authorization.hidden = mode.value !== 'live';
+    confirmed.required = mode.value === 'live';
+    send.textContent = mode.value === 'live' ? 'Send real availability inquiry' : 'Queue simulation inquiry';
+  };
+  mode.onchange = () => { confirmed.checked = false; updateMode(); };
+  updateMode();
   const feedback = node('p', '', 'save-status');
   feedback.setAttribute('role', 'status');
-  form.append(node('p', `Ask about: ${types.map(kind => dataset.catalog.item_types.find(item => item.id === kind).label).join(', ')}. This is an availability inquiry, not a delivery instruction. Replies must be recorded by the manager.`, 'help-text'), neededLabel, waitLabel, send, feedback);
-  form.oninput = () => localDrafts.set(issue.id, {needed: needed.value, minutes: minutes.value});
+  form.append(node('p', `Ask about: ${types.map(kind => dataset.catalog.item_types.find(item => item.id === kind).label).join(', ')}. This is an availability inquiry, not a delivery instruction. Replies must be recorded by the manager.`, 'help-text'), modeLabel, neededLabel, waitLabel, authorization, send, feedback);
+  form.oninput = event => {
+    if (event.target !== confirmed) confirmed.checked = false;
+    localDrafts.set(issue.id, {needed: needed.value, minutes: minutes.value, mode: mode.value});
+  };
   form.onsubmit = async event => {
     event.preventDefault();
     send.disabled = true;
     try {
-      await submitAction('/api/local-requests', {issue_id: issue.id, needed_by: new Date(needed.value).toISOString().replace('Z', '+00:00'), reply_minutes: Number(minutes.value)});
+      await submitAction('/api/local-requests', {issue_id: issue.id, needed_by: new Date(needed.value).toISOString().replace('Z', '+00:00'), reply_minutes: Number(minutes.value), mode: mode.value, needed_confirmed: confirmed.checked, ...(mode.value === 'live' ? {profile_version: issue.cleaner_live.profile_version, supplier_version: issue.cleaner_live.supplier_version, evidence_fingerprint: issue.cleaner_live.evidence_fingerprint} : {})});
       localDrafts.delete(issue.id);
       document.activeElement?.blur();
       await load();
-      notice.textContent = 'Cleaner availability check queued. Amazon remains available; nothing has been dispatched or purchased.';
+      notice.textContent = 'Availability inquiry queued. Check its send status below. Nothing has been dispatched or purchased.';
     } catch (error) { feedback.textContent = error.message; }
     finally { send.disabled = false; }
   };
