@@ -145,6 +145,7 @@ def research():
             if len(matches) == 1:
                 conversation['property_ids'] = [str(uuid.UUID(matches[0]))]
     snapshot = {'synced_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': len(reservations), 'nontext_message_count': nontext, 'scope': 'Active accepted reservations are refreshed from Hospitable every five minutes after each completed import. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Suggested fixes use rules and require human review.'}
+    snapshot['active_reservation_ids'] = [str(uuid.UUID(reservation['id'])) for reservation in reservations]
     with connect() as db:
         for item in properties:
             db.execute('INSERT INTO rental_units VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name', (str(uuid.UUID(item['id'])), item['name']))

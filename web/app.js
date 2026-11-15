@@ -1,6 +1,7 @@
 let dataset = {issues: []};
 let selected = null;
 let loading = false;
+let purchaseLinkSelected = false;
 const notice = document.querySelector('#notice');
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -160,11 +161,15 @@ function updateCountdowns() {
 function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
-  const visible = dataset.issues.filter(issue => (!category || issue.category === category) && (!search || `${issue.property} ${issue.category} ${issue.evidence.map(message => message.body).join(' ')}`.toLowerCase().includes(search)));
-  if (!selected) {
+  const view = document.querySelector('#request-view');
+  if (!purchaseLinkSelected && dataset.purchase_policy) {
+    purchaseLinkSelected = true;
     const requestedPurchase = new URLSearchParams(window.location.search).get('purchase');
-    selected = visible.find(issue => issue.purchases.some(request => request.id === requestedPurchase))?.id || null;
+    const requestedIssue = dataset.issues.find(issue => issue.purchases.some(request => request.id === requestedPurchase));
+    if (requestedIssue) { selected = requestedIssue.id; view.value = requestedIssue.lane || 'practice'; }
   }
+  for (const [lane, label] of [['needs_attention', 'Needs attention'], ['likely_resolved', 'Likely resolved'], ['practice', 'Practice']]) view.querySelector(`option[value="${lane}"]`).textContent = `${label} (${dataset.issues.filter(issue => (issue.lane || 'practice') === lane).length})`;
+  const visible = dataset.issues.filter(issue => (issue.lane || 'practice') === view.value && (!category || issue.category === category) && (!search || `${issue.property} ${issue.category} ${issue.evidence.map(message => message.body).join(' ')}`.toLowerCase().includes(search)));
   if (!visible.some(issue => issue.id === selected)) selected = (visible.find(issue => issue.worksheet) || visible[0])?.id;
   document.querySelector('#result-count').textContent = String(visible.length);
   const requests = document.querySelector('#requests');
@@ -175,7 +180,7 @@ function render() {
     button.setAttribute('aria-pressed', String(issue.id === selected));
     button.append(node('span', issue.property, 'request-property'), node('strong', title(issue)), node('span', issue.evidence[issue.evidence.length - 1].body, 'request-preview'));
     if (issue.priority === 'Urgent') button.append(node('span', 'Urgent review', 'urgent'));
-    if (issue.resolution_hint) button.append(node('span', 'Likely resolved · practice scenario', 'help-text'));
+    if (issue.resolution_hint) button.append(node('span', issue.lane === 'practice' ? 'Practice · resolution reported' : 'Likely resolved · review confirmation', 'help-text'));
     button.onclick = () => { selected = issue.id; render(); };
     requests.append(button);
   }
@@ -184,12 +189,12 @@ function render() {
   const issue = visible.find(item => item.id === selected);
   if (!issue) { container.append(node('p', 'No requests match your filters.', 'empty')); return; }
   const card = node('article', '', 'detail-card');
-  card.append(node('p', issue.property, 'eyebrow'), node('h2', title(issue)), node('p', `Original checkout: ${date(issue.check_out)} · Used as a live scenario`, 'help-text'));
+  card.append(node('p', issue.property, 'eyebrow'), node('h2', title(issue)), node('p', issue.lane === 'practice' ? `Original checkout: ${date(issue.check_out)} · Historical or unverified practice case` : `Current stay · Checkout: ${date(issue.check_out)} · ${issue.lane === 'likely_resolved' ? 'Review guest confirmation' : 'Needs manager review'}`, 'help-text'));
   const quote = node('blockquote', issue.evidence[issue.evidence.length - 1].body);
   quote.append(node('cite', `Guest · ${date(issue.latest_at)}`));
   card.append(quote);
   if (issue.resolution_hint) {
-    card.append(node('p', 'Likely resolved: the guest reported a fix. This remains an open practice scenario; no action was taken automatically.', 'context-note'));
+    card.append(node('p', issue.lane === 'practice' ? 'The guest reported a fix. This remains an open practice scenario.' : 'Likely resolved: review the guest confirmation below. No action was taken automatically.', 'context-note'));
     const resolution = node('blockquote', issue.resolution_hint.body);
     resolution.append(node('cite', `Guest confirmation · ${date(issue.resolution_hint.created_at)}`));
     card.append(resolution);
@@ -325,7 +330,7 @@ async function load() {
   } catch (error) { notice.textContent = error.message; }
   finally { loading = false; refresh.disabled = false; }
 }
-for (const id of ['search', 'category']) document.querySelector(`#${id}`).addEventListener('input', render);
+for (const id of ['search', 'category', 'request-view']) document.querySelector(`#${id}`).addEventListener('input', render);
 document.querySelector('#refresh').onclick = async () => {
   const button = document.querySelector('#refresh');
   button.disabled = true;

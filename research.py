@@ -1,4 +1,5 @@
 import re
+import datetime as dt
 
 from catalog import ITEMS
 
@@ -26,6 +27,8 @@ NEGATED_RESOLUTION = re.compile(r'\b(?:not|never|still|cannot|can.t|couldn.t|isn
 
 def analyze(snapshot):
     issues = []
+    current = dt.datetime.now(dt.timezone.utc)
+    active = set(snapshot.get('active_reservation_ids', []))
     for conversation in snapshot['conversations']:
         messages = sorted(conversation['messages'], key=lambda message: message['created_at'])
         grouped = {}
@@ -86,6 +89,11 @@ def analyze(snapshot):
                 issue['item_types'].append('hand_towels')
             issue['recorded_status'] = 'Likely resolved' if issue['resolution_hint'] else 'Needs review'
             issue['status'] = 'Needs review'
+            check_in = dt.datetime.fromisoformat(conversation['check_in'].replace('Z', '+00:00'))
+            check_out = dt.datetime.fromisoformat(conversation['check_out'].replace('Z', '+00:00'))
+            issue['lane'] = 'likely_resolved' if issue['resolution_hint'] else 'needs_attention'
+            if conversation['reservation_id'] not in active or not check_in <= current < check_out:
+                issue['lane'] = 'practice'
             issues.append(issue)
     issues.sort(key=lambda issue: issue['latest_at'], reverse=True)
     return {'issues': issues, 'synced_at': snapshot['synced_at'], 'property_count': snapshot['property_count'], 'reservation_count': len(snapshot['conversations']), 'guest_message_count': sum(message['sender_type'] == 'guest' for conversation in snapshot['conversations'] for message in conversation['messages']), 'nontext_message_count': snapshot['nontext_message_count'], 'scope': snapshot['scope']}
