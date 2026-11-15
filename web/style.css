@@ -94,7 +94,7 @@ details>p{font-size:13px}
 .catalog-panel{background:#fff;border:1px solid #e4e9ec;border-radius:12px;padding:20px 24px;margin:18px 0}
 .catalog-panel>summary{font-size:15px;color:#315c4c}
 .catalog-panel>p{margin-top:16px}
-#catalog-editor{max-width:700px}
+#catalog-editor,#property-editor{max-width:700px}
 .preferred-list{display:grid;gap:10px;margin:20px 0}
 .preferred-row{padding:14px;background:#f6f9f7;border:1px solid #e6ece8;border-radius:8px}
 .preferred-row p{margin:8px 0}

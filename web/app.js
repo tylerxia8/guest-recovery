@@ -274,7 +274,7 @@ function render() {
       selectedUnit = destination.property_id;
       catalogSignature = '';
       renderCatalog();
-      const panel = document.querySelector('#catalog-panel');
+      const panel = document.querySelector('#property-panel');
       panel.open = true;
       const profile = panel.querySelector('.fulfillment-form');
       if (profile) { profile.closest('details').open = true; profile.scrollIntoView({behavior: 'smooth', block: 'start'}); }
@@ -324,7 +324,7 @@ function render() {
       preference.append(link, use);
       shopping.append(preference);
     }
-    if (!matching.length && units.length === 1) shopping.append(node('p', 'No unit-specific product saved yet. Shared preferences apply; override them under “Property delivery & preferred items” above.', 'help-text'));
+    if (!matching.length && units.length === 1) shopping.append(node('p', 'No unit-specific product saved yet. Shared preferences apply; override them under “Delivery items” above.', 'help-text'));
     const searches = issue.item_types.filter(kind => kind !== 'tv_remote' && !matching.some(product => product.item_type === kind)).map(kind => {
       const type = catalog.item_types.find(item => item.id === kind);
       const preferred = (catalog.defaults || []).find(product => product.item_type === kind);

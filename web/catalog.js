@@ -6,12 +6,14 @@ const fulfillmentDrafts = new Map();
 function renderCatalog() {
   if (!dataset.catalog) return;
   const container = document.querySelector('#catalog-editor');
+  const propertyContainer = document.querySelector('#property-editor');
   const catalog = dataset.catalog;
   const signature = JSON.stringify(catalog);
-  if (container.querySelector('form:focus-within')) return;
+  if (container.querySelector('form:focus-within') || propertyContainer.querySelector('form:focus-within')) return;
   if (signature === catalogSignature && container.firstChild) return;
   catalogSignature = signature;
   container.replaceChildren();
+  propertyContainer.replaceChildren();
   const defaults = node('details');
   defaults.append(node('summary', 'Shared preferred items · Charlotte'));
   defaults.append(node('p', 'Choose suitable quality and earliest confirmed arrival, then compare full cost. Unit-specific products take priority. Sizes, prices, and delivery still require confirmation on Amazon.', 'help-text'));
@@ -33,9 +35,13 @@ function renderCatalog() {
     defaults.append(row);
   }
   container.append(defaults);
-  if (!catalog.properties.length) { container.append(node('p', 'Units will appear after the next successful Hospitable import.')); return; }
+  if (!catalog.properties.length) {
+    container.append(node('p', 'Units will appear after the next Hospitable import.'));
+    propertyContainer.append(node('p', 'Properties will appear after the next Hospitable import.'));
+    return;
+  }
   const pendingHB = catalog.properties.filter(unit => unit.name.startsWith('HB') && !(catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified);
-  container.append(node('p', `${pendingHB.length} HB units have incomplete delivery details. Complete missing fields; other units use Hospitable automatically.`, 'help-text'));
+  propertyContainer.append(node('p', `${pendingHB.length} HB units have incomplete delivery details. Complete missing fields; other units use Hospitable automatically.`, 'help-text'));
   if (pendingHB.length) {
     const next = node('button', 'Review next incomplete HB unit', 'secondary');
     next.type = 'button';
@@ -44,25 +50,27 @@ function renderCatalog() {
       selectedProduct = null;
       catalogSignature = '';
       renderCatalog();
-      const profile = container.querySelector('.fulfillment-form');
+      const profile = propertyContainer.querySelector('.fulfillment-form');
       if (profile) { profile.closest('details').open = true; profile.scrollIntoView({behavior: 'smooth', block: 'start'}); }
     };
-    container.append(next);
+    propertyContainer.append(next);
   }
   if (!catalog.properties.some(unit => unit.id === selectedUnit)) selectedUnit = (pendingHB[0] || catalog.properties[0]).id;
-  const unitLabel = node('label', 'Rental unit');
-  const unitSelect = document.createElement('select');
-  for (const unit of catalog.properties) {
-    const duplicateName = catalog.properties.some(other => other.id !== unit.id && other.name === unit.name);
-    const status = (catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified ? 'Ready' : 'Incomplete';
-    const option = node('option', (duplicateName ? `${unit.name} · ${unit.id.slice(0, 8)}` : unit.name) + ' · ' + status);
-    option.value = unit.id;
-    unitSelect.append(option);
+  for (const target of [propertyContainer, container]) {
+    const unitLabel = node('label', 'Rental unit');
+    const unitSelect = document.createElement('select');
+    for (const unit of catalog.properties) {
+      const duplicateName = catalog.properties.some(other => other.id !== unit.id && other.name === unit.name);
+      const status = (catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified ? 'Ready' : 'Incomplete';
+      const option = node('option', (duplicateName ? `${unit.name} · ${unit.id.slice(0, 8)}` : unit.name) + ' · ' + status);
+      option.value = unit.id;
+      unitSelect.append(option);
+    }
+    unitSelect.value = selectedUnit;
+    unitSelect.onchange = () => { selectedUnit = unitSelect.value; selectedProduct = null; catalogSignature = ''; renderCatalog(); };
+    unitLabel.append(unitSelect);
+    target.append(unitLabel);
   }
-  unitSelect.value = selectedUnit;
-  unitSelect.onchange = () => { selectedUnit = unitSelect.value; selectedProduct = null; catalogSignature = ''; renderCatalog(); };
-  unitLabel.append(unitSelect);
-  container.append(unitLabel);
   const fulfillment = (catalog.fulfillment || []).find(item => item.property_id === selectedUnit);
   if (fulfillment) {
     const profileUnit = selectedUnit;
@@ -133,7 +141,7 @@ function renderCatalog() {
       finally { for (const input of form.elements) input.disabled = false; }
     };
     details.append(form);
-    container.append(details);
+    propertyContainer.append(details);
   }
   const products = catalog.products.filter(product => product.property_id === selectedUnit);
   const list = node('div', '', 'preferred-list');
