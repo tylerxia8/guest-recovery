@@ -2,12 +2,13 @@ let selectedUnit = null;
 let selectedProduct = null;
 let catalogSignature = '';
 const preferenceDrafts = new Map();
+const fulfillmentDrafts = new Map();
 function renderCatalog() {
   if (!dataset.catalog) return;
   const container = document.querySelector('#catalog-editor');
   const catalog = dataset.catalog;
   const signature = JSON.stringify(catalog);
-  if (container.querySelector('form')?.contains(document.activeElement)) return;
+  if (container.querySelector('form:focus-within')) return;
   if (signature === catalogSignature && container.firstChild) return;
   catalogSignature = signature;
   container.replaceChildren();
@@ -46,6 +47,78 @@ function renderCatalog() {
   unitSelect.onchange = () => { selectedUnit = unitSelect.value; selectedProduct = null; catalogSignature = ''; renderCatalog(); };
   unitLabel.append(unitSelect);
   container.append(unitLabel);
+  const fulfillment = (catalog.fulfillment || []).find(item => item.property_id === selectedUnit);
+  if (fulfillment) {
+    const profileUnit = selectedUnit;
+    const details = node('details');
+    details.open = fulfillmentDrafts.has(profileUnit);
+    details.append(node('summary', fulfillment.verified ? 'Delivery profile · confirmed' : 'Delivery profile · needs confirmation'));
+    details.append(node('p', 'Matched by Hospitable property ID, never by guest name. Imported addresses need confirmation, including apartment/unit number. Instructions stay in this authenticated workspace and are not emailed automatically.', 'help-text'));
+    if (fulfillment.previous_address) details.append(node('p', 'Hospitable address details changed. Review the new imported address and confirm again.', 'warning'));
+    const draft = fulfillmentDrafts.get(profileUnit) || {...fulfillment, address: {line1: '', line2: '', ...fulfillment.address, city: fulfillment.address.city || 'Charlotte', region: fulfillment.address.region || 'NC', postal_code: fulfillment.address.postal_code || '', country: fulfillment.address.country || 'US', timezone: fulfillment.address.timezone || 'America/New_York'}, confirmed: false};
+    const form = node('form', '', 'fulfillment-form');
+    if (draft.version !== fulfillment.version) form.append(node('p', 'This draft is outdated. Discard it and review the latest imported details.', 'warning'));
+    for (const [key, title, maximum] of [['line1', 'Street address', 300], ['line2', 'Apartment / unit / delivery suite', 100], ['city', 'City', 100], ['region', 'State / region', 100], ['postal_code', 'Postal code', 32], ['country', 'Country code (US)', 2], ['timezone', 'Property time zone', 100]]) {
+      const label = node('label', title);
+      const input = document.createElement('input');
+      input.name = key;
+      input.value = draft.address[key];
+      input.maxLength = maximum;
+      input.required = key !== 'line2';
+      label.append(input);
+      form.append(label);
+    }
+    const instructionsLabel = node('label', 'Delivery instructions (leave blank if none)');
+    const instructions = document.createElement('textarea');
+    instructions.name = 'instructions';
+    instructions.value = draft.instructions;
+    instructions.maxLength = 2000;
+    instructionsLabel.append(instructions);
+    const quantityLabel = node('label', 'Default hand towels needed (individual towels, not packs)');
+    const quantity = document.createElement('input');
+    quantity.name = 'hand_towel_quantity';
+    quantity.type = 'number';
+    quantity.min = '1';
+    quantity.max = '20';
+    quantity.step = '1';
+    quantity.required = true;
+    quantity.value = draft.hand_towel_quantity;
+    quantityLabel.append(quantity);
+    const confirmation = node('label', '', 'checkbox-label');
+    const confirmed = document.createElement('input');
+    confirmed.type = 'checkbox';
+    confirmed.required = true;
+    confirmed.checked = draft.confirmed;
+    confirmation.append(confirmed, node('span', 'I confirm the complete delivery address, unit number, instructions, and default towel quantity.'));
+    const collect = () => ({property_id: profileUnit, version: draft.version, address: Object.fromEntries([...form.querySelectorAll('input[name]')].filter(input => input.name !== 'hand_towel_quantity').map(input => [input.name, input.value])), instructions: instructions.value, hand_towel_quantity: Number(quantity.value), confirmed: confirmed.checked});
+    form.oninput = event => {
+      if (event.target !== confirmed) confirmed.checked = false;
+      fulfillmentDrafts.set(profileUnit, collect());
+    };
+    const save = node('button', 'Confirm delivery profile');
+    const discard = node('button', 'Discard profile changes', 'secondary');
+    discard.type = 'button';
+    discard.onclick = () => { fulfillmentDrafts.delete(profileUnit); document.activeElement?.blur(); catalogSignature = ''; renderCatalog(); };
+    const feedback = node('p', '', 'save-status');
+    feedback.setAttribute('role', 'status');
+    form.append(instructionsLabel, quantityLabel, confirmation, save, discard, feedback);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const data = collect();
+      for (const input of form.elements) input.disabled = true;
+      try {
+        await submitAction('/api/fulfillment', data);
+        fulfillmentDrafts.delete(profileUnit);
+        document.activeElement?.blur();
+        catalogSignature = '';
+        await load();
+        notice.textContent = 'Delivery profile confirmed for this unit. Imported address changes will require confirmation again.';
+      } catch (error) { feedback.textContent = error.message; }
+      finally { for (const input of form.elements) input.disabled = false; }
+    };
+    details.append(form);
+    container.append(details);
+  }
   const products = catalog.products.filter(product => product.property_id === selectedUnit);
   const list = node('div', '', 'preferred-list');
   for (const product of products) {
@@ -138,4 +211,4 @@ function renderCatalog() {
   };
   container.append(form);
 }
-window.addEventListener('beforeunload', event => { if (preferenceDrafts.size) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (preferenceDrafts.size || fulfillmentDrafts.size) { event.preventDefault(); event.returnValue = ''; } });

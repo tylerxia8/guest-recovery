@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import uuid
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mailer import email_ready, resend, send_email
 
@@ -64,8 +64,12 @@ def change(db, path, data, timestamp):
             window = offer.get('delivery_window')
             asins = offer.get('asins')
             timezone = offer.get('timezone', 'America/New_York')
-            if timezone not in ('America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu'):
-                raise ValueError('Choose a supported property time zone')
+            if not isinstance(timezone, str) or len(timezone) > 100:
+                raise ValueError('Choose a valid property time zone')
+            try:
+                ZoneInfo(timezone)
+            except (ValueError, ZoneInfoNotFoundError):
+                raise ValueError('Choose a valid property time zone') from None
             if not isinstance(location, str) or not 1 <= len(location.strip()) <= 200 or not isinstance(window, str) or not 1 <= len(window.strip()) <= 200:
                 raise ValueError('Enter the delivery location and Amazon arrival window')
             if not isinstance(asins, list) or not 1 <= len(asins) <= 10 or any(not isinstance(asin, str) or not re.fullmatch(r'[A-Z0-9]{10}', asin) for asin in asins):
@@ -85,6 +89,20 @@ def change(db, path, data, timestamp):
         issue = next((item for item in analyze(json.loads(snapshot['body']))['issues'] if item['id'] == issue_id and item['category'] == 'Supplies'), None)
         if not issue:
             raise ValueError('Supply request no longer exists; refresh the page')
+        if 'fulfillment_version' in data:
+            from fulfillment import profile
+            if len(issue['property_ids']) != 1 or offer is None:
+                raise ValueError('A delivery profile requires a uniquely mapped unit and an offer')
+            destination = profile(db, issue['property_ids'][0])
+            if not destination['verified'] or type(data['fulfillment_version']) is not int or data['fulfillment_version'] != destination['version']:
+                raise ValueError('Delivery profile changed or needs confirmation; reload before proposing')
+            if offer['location'] != destination['address']['city'] + ', ' + destination['address']['region'] or offer['timezone'] != destination['address']['timezone']:
+                raise ValueError('Quote location must match the confirmed unit profile. Update the profile and recheck the offer before proposing.')
+            offer['fulfillment'] = {key: destination[key] for key in ('property_id', 'address', 'instructions', 'hand_towel_quantity', 'version', 'verified_at')}
+            if dt.date.fromisoformat(offer['arrival_date']) < dt.datetime.now(ZoneInfo(offer['timezone'])).date():
+                raise ValueError('Arrival date has passed in the property time zone')
+            if issue['hand_towel']:
+                offer['hand_towels_needed'] = issue.get('requested_hand_towels', destination['hand_towel_quantity'])
         if db.execute("SELECT id FROM purchase_requests WHERE issue_id = ? AND decision != 'vetoed'", (issue_id,)).fetchone():
             raise ValueError('A proposal already exists. Cancel it before changing the items or total.')
         identifier = str(uuid.uuid4())

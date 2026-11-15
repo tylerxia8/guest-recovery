@@ -45,6 +45,11 @@ function purchasePanel(issue) {
     card.append(node('strong', request.summary), node('p', `$${(request.total_cents / 100).toFixed(2)} total · $${(request.gift_cents / 100).toFixed(2)} gift included`, 'help-text'), node('p', request.status, 'purchase-status'), node('p', request.email_evidence, 'help-text'));
     if (request.offer) {
       card.append(node('p', `${request.offer.location} · Arrival estimate: ${request.offer.arrival_date}, ${request.offer.delivery_window} (${request.offer.timezone})`, 'help-text'), node('p', `${request.offer.source} · Recorded ${date(request.offer.recorded_at)}`, 'help-text'));
+      if (request.offer.fulfillment) {
+        const address = request.offer.fulfillment.address;
+        card.append(node('p', `Saved proposal destination: ${[address.line1, address.line2, `${address.city}, ${address.region} ${address.postal_code}`, address.country].filter(Boolean).join(' · ')}`, 'help-text'));
+        if (request.offer.hand_towels_needed) card.append(node('p', `${request.offer.hand_towels_needed} individual towels needed · Confirm pack quantity before checkout`, 'help-text'));
+      } else card.append(node('p', 'No confirmed unit delivery profile is attached to this proposal. Simulation only.', 'help-text'));
       if (request.offer.stale) card.append(node('p', 'This arrival date has passed. Cancel and recreate the proposal with a current quote before proceeding.', 'warning'));
       for (const asin of request.offer.asins) {
         const link = node('a', `Amazon item ${asin} ↗`, 'amazon-link');
@@ -86,7 +91,10 @@ function purchasePanel(issue) {
     const unitProducts = (issue.property_ids || []).length === 1 ? dataset.catalog.products.filter(product => product.property_id === issue.property_ids[0] && product.item_type === kind) : [];
     return unitProducts[0] || dataset.catalog.defaults.find(product => product.item_type === kind);
   }).filter(product => product?.asin);
-  const draft = purchaseDrafts.get(issue.id) || {summary: picks.map(product => product.title).join('; '), asins: picks.map(product => product.asin).join(', '), location: 'Charlotte, NC', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false};
+  const destination = issue.fulfillment;
+  const towels = issue.requested_hand_towels || (destination?.verified ? destination.hand_towel_quantity : null);
+  const draft = purchaseDrafts.get(issue.id) || {summary: picks.map(product => product.title + (product.item_type === 'hand_towels' && towels ? ` · Need ${towels} individual towels; check pack size` : '')).join('; '), asins: picks.map(product => product.asin).join(', '), location: destination?.verified ? `${destination.address.city}, ${destination.address.region}` : 'Charlotte, NC', timezone: destination?.verified ? destination.address.timezone : 'America/New_York', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false, fulfillment_version: destination?.verified ? destination.version : null};
+  const bound = draft.fulfillment_version !== null && draft.fulfillment_version !== undefined;
   form.append(node('p', 'Charlotte, NC is the default. Change it when the property is elsewhere. Select the actual property address in Amazon, confirm compatibility, then copy its full price and arrival estimate below. This app does not fetch live offers.', 'help-text'));
   for (const [name, title, type] of [['summary', 'Proposed items (include any chocolates)', 'text'], ['asins', 'Amazon ASINs (comma-separated, including any gift)', 'text'], ['location', 'Delivery city / location', 'text'], ['arrival_date', 'Estimated arrival date at the property', 'date'], ['delivery_window', 'Arrival window as shown by Amazon (property local time)', 'text'], ['total', 'Full order total ($)', 'number'], ['gift', 'Gift cost already included in total ($)', 'number']]) {
     const label = node('label', title);
@@ -95,6 +103,7 @@ function purchasePanel(issue) {
     input.type = type;
     input.value = draft[name] || '';
     input.required = true;
+    if (name === 'location' && bound) input.readOnly = true;
     if (type === 'number') { input.min = name === 'total' ? '0.01' : '0'; input.max = name === 'gift' ? '3' : '10000'; input.step = '0.01'; }
     else input.maxLength = name === 'summary' ? 1000 : 200;
     label.append(input);
@@ -108,7 +117,13 @@ function purchasePanel(issue) {
     option.value = value;
     timezoneSelect.append(option);
   }
+  if (draft.timezone && ![...timezoneSelect.options].some(option => option.value === draft.timezone)) {
+    const option = node('option', draft.timezone);
+    option.value = draft.timezone;
+    timezoneSelect.append(option);
+  }
   timezoneSelect.value = draft.timezone || 'America/New_York';
+  timezoneSelect.disabled = bound;
   timezoneLabel.append(timezoneSelect);
   form.append(timezoneLabel);
   const label = node('label', '', 'checkbox-label');
@@ -131,12 +146,13 @@ function purchasePanel(issue) {
   form.append(label, addressLabel, submit, feedback);
   form.oninput = event => {
     if (event.target !== check && event.target !== addressCheck) { check.checked = false; addressCheck.checked = false; }
-    purchaseDrafts.set(issue.id, {...Object.fromEntries(new FormData(form)), all_in_confirmed: check.checked, address_confirmed: addressCheck.checked});
+    purchaseDrafts.set(issue.id, {...Object.fromEntries(new FormData(form)), timezone: timezoneSelect.value, fulfillment_version: draft.fulfillment_version, all_in_confirmed: check.checked, address_confirmed: addressCheck.checked});
   };
   form.onsubmit = async event => {
     event.preventDefault();
     const data = {issue_id: issue.id, summary: form.elements.summary.value, total_cents: Math.round(Number(form.elements.total.value) * 100), gift_cents: Math.round(Number(form.elements.gift.value) * 100), all_in_confirmed: check.checked};
     data.offer = {location: form.elements.location.value, timezone: timezoneSelect.value, asins: form.elements.asins.value.split(',').map(value => value.trim().toUpperCase()).filter(Boolean), arrival_date: form.elements.arrival_date.value, delivery_window: form.elements.delivery_window.value, address_confirmed: addressCheck.checked};
+    if (draft.fulfillment_version !== null && draft.fulfillment_version !== undefined) data.fulfillment_version = draft.fulfillment_version;
     for (const control of form.elements) control.disabled = true;
     try {
       await submitAction('/api/purchases', data);
@@ -146,7 +162,7 @@ function purchasePanel(issue) {
       await load();
       notice.textContent = 'Proposal saved. The clock starts after a successful Gmail send or confirmed Resend delivery; uncertain sends stay blocked. No purchase will be made in simulation mode.';
     } catch (error) { feedback.textContent = error.message; }
-    finally { for (const control of form.elements) control.disabled = false; }
+    finally { for (const control of form.elements) control.disabled = false; timezoneSelect.disabled = bound; }
   };
   details.append(form);
   section.append(details);
@@ -193,6 +209,29 @@ function render() {
   const quote = node('blockquote', issue.evidence[issue.evidence.length - 1].body);
   quote.append(node('cite', `Guest · ${date(issue.latest_at)}`));
   card.append(quote);
+  const destination = issue.fulfillment;
+  if (destination) {
+    const delivery = node('section');
+    delivery.append(node('h3', 'Delivery destination'), node('p', destination.verified ? 'Matched through this reservation’s Hospitable property ID · Manager-confirmed profile' : 'Unit matched through this reservation · Delivery profile needs manager confirmation', 'help-text'));
+    if (destination.verified) {
+      delivery.append(node('p', [destination.address.line1, destination.address.line2, `${destination.address.city}, ${destination.address.region} ${destination.address.postal_code}`, destination.address.country].filter(Boolean).join(' · ')));
+      if (destination.instructions) delivery.append(node('p', destination.instructions));
+    }
+    if (issue.hand_towel) delivery.append(node('p', issue.requested_hand_towels ? `Guest explicitly requested ${issue.requested_hand_towels} individual hand towels. Check the selected pack size.` : `Unit default: ${destination.hand_towel_quantity} individual hand towels${destination.verified ? '' : ' · provisional until confirmed'}. Check the selected pack size.`, 'help-text'));
+    const edit = node('button', destination.verified ? 'Edit unit delivery profile' : 'Confirm unit delivery profile', 'secondary');
+    edit.type = 'button';
+    edit.onclick = () => {
+      selectedUnit = destination.property_id;
+      catalogSignature = '';
+      renderCatalog();
+      const panel = document.querySelector('#catalog-panel');
+      panel.open = true;
+      const profile = panel.querySelector('.fulfillment-form');
+      if (profile) { profile.closest('details').open = true; profile.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+    };
+    delivery.append(edit);
+    card.append(delivery);
+  } else card.append(node('p', 'This reservation does not map to exactly one unit. Confirm the property before choosing a delivery destination.', 'context-note'));
   if (issue.resolution_hint) {
     card.append(node('p', issue.lane === 'practice' ? 'The guest reported a fix. This remains an open practice scenario.' : 'Likely resolved: review the guest confirmation below. No action was taken automatically.', 'context-note'));
     const resolution = node('blockquote', issue.resolution_hint.body);
@@ -238,7 +277,7 @@ function render() {
       use.onclick = () => {
         const previous = purchaseDrafts.get(issue.id);
         const summary = `${product.title} · ASIN ${product.asin}${product.item_type === 'tv_remote' ? ` · ${product.room}: ${product.tv_brand} ${product.tv_model}` : ''}`;
-        purchaseDrafts.set(issue.id, {...previous, summary: previous?.summary ? previous.summary + '; ' + summary : summary, asins: previous?.asins ? previous.asins + ', ' + product.asin : product.asin, location: previous?.location || 'Charlotte, NC', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: previous?.gift || '0', all_in_confirmed: false});
+        purchaseDrafts.set(issue.id, {...previous, summary: previous?.summary ? previous.summary + '; ' + summary : summary, asins: previous?.asins ? previous.asins + ', ' + product.asin : product.asin, location: previous?.location || (issue.fulfillment?.verified ? `${issue.fulfillment.address.city}, ${issue.fulfillment.address.region}` : 'Charlotte, NC'), timezone: previous?.timezone || (issue.fulfillment?.verified ? issue.fulfillment.address.timezone : 'America/New_York'), fulfillment_version: previous ? previous.fulfillment_version : (issue.fulfillment?.verified ? issue.fulfillment.version : null), arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: previous?.gift || '0', all_in_confirmed: false});
         render();
         const form = document.querySelector('.purchase-form');
         if (form) { form.closest('details').open = true; form.elements.summary.focus(); }
@@ -247,7 +286,7 @@ function render() {
       preference.append(link, use);
       shopping.append(preference);
     }
-    if (!matching.length && units.length === 1) shopping.append(node('p', 'No matching preference saved yet. Add it under “Preferred Amazon items by unit” above.', 'help-text'));
+    if (!matching.length && units.length === 1) shopping.append(node('p', 'No unit-specific product saved yet. Shared preferences apply; override them under “Property delivery & preferred items” above.', 'help-text'));
     const searches = issue.item_types.filter(kind => kind !== 'tv_remote' && !matching.some(product => product.item_type === kind)).map(kind => {
       const type = catalog.item_types.find(item => item.id === kind);
       const preferred = (catalog.defaults || []).find(product => product.item_type === kind);

@@ -149,6 +149,24 @@ def research():
     with connect() as db:
         for item in properties:
             db.execute('INSERT INTO rental_units VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name', (str(uuid.UUID(item['id'])), item['name']))
+            raw_address = item.get('address') or {}
+            if not isinstance(raw_address, dict):
+                raise ValueError('Unexpected property address format')
+            fields = {}
+            for field in ('number', 'street', 'city', 'state', 'postcode', 'country'):
+                value = raw_address.get(field)
+                if value is None:
+                    value = ''
+                if field == 'number' and type(value) is int:
+                    value = str(value)
+                if not isinstance(value, str) or len(value) > 1000:
+                    raise ValueError('Unexpected property address field')
+                fields[field] = value.strip()
+            timezone = item.get('timezone') or ''
+            if not isinstance(timezone, str) or len(timezone) > 100:
+                raise ValueError('Unexpected property timezone')
+            imported_address = {'line1': ' '.join(value for value in (fields['number'], fields['street']) if value), 'line2': '', 'city': fields['city'], 'region': fields['state'], 'postal_code': fields['postcode'], 'country': fields['country'].upper(), 'timezone': timezone}
+            db.execute('INSERT INTO fulfillment_profiles VALUES (?, ?, NULL, 0) ON CONFLICT(property_id) DO UPDATE SET imported_address = excluded.imported_address, version = fulfillment_profiles.version + 1 WHERE fulfillment_profiles.imported_address != excluded.imported_address', (str(uuid.UUID(item['id'])), json.dumps(imported_address, sort_keys=True)))
         db.execute('INSERT INTO research_snapshot VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body', (json.dumps(snapshot),))
     print(json.dumps({'event': 'research_complete', 'conversations': len(conversations)}))
 

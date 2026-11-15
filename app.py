@@ -61,6 +61,7 @@ def initialize():
         CREATE TABLE IF NOT EXISTS local_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','available','unavailable','cancelled','received')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending','sent','failed')), email_id TEXT, payload TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS active_local_request ON local_requests(issue_id) WHERE state IN ('pending','available');
         CREATE TABLE IF NOT EXISTS rental_units (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS fulfillment_profiles (property_id TEXT PRIMARY KEY REFERENCES rental_units(id), imported_address TEXT NOT NULL, body TEXT, version INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS preferred_products (id TEXT PRIMARY KEY, property_id TEXT NOT NULL REFERENCES rental_units(id), item_type TEXT NOT NULL, room TEXT NOT NULL, tv_brand TEXT NOT NULL, tv_model TEXT NOT NULL, title TEXT NOT NULL, asin TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS preferred_product_per_unit ON preferred_products(property_id, item_type, lower(room)) WHERE active = 1;
         CREATE TABLE IF NOT EXISTS purchase_requests (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, property TEXT NOT NULL, summary TEXT NOT NULL, total_cents INTEGER NOT NULL CHECK(total_cents > 0), gift_cents INTEGER NOT NULL CHECK(gift_cents >= 0 AND gift_cents <= 300 AND gift_cents <= total_cents), decision TEXT NOT NULL CHECK(decision IN ('pending', 'approved', 'vetoed')), notice_status TEXT NOT NULL CHECK(notice_status IN ('pending', 'sent', 'delivered', 'failed')), email_payload TEXT, email_id TEXT, notified_at TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -101,6 +102,9 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path == '/api/fulfillment':
+        from fulfillment import save
+        return save(db, data, now())
     if path in ('/api/local-supplier', '/api/local-requests') or path.startswith('/api/local-requests/'):
         from local_supply import change
         return change(db, path, data, now())
@@ -338,6 +342,10 @@ class Handler(BaseHTTPRequestHandler):
                     from catalog import ITEMS, DEFAULTS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
                     result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1], 'asin': value[2], 'source_url': value[3]} for key, value in DEFAULTS.items()]
+                    from fulfillment import profile as fulfillment_profile
+                    result['catalog']['fulfillment'] = [fulfillment_profile(db, unit['id']) for unit in result['catalog']['properties']]
+                    for issue in result['issues']:
+                        issue['fulfillment'] = next((item for item in result['catalog']['fulfillment'] if len(issue['property_ids']) == 1 and item['property_id'] == issue['property_ids'][0]), None)
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
                     from purchases import AUTO_LIMIT_CENTS, VETO_SECONDS, describe, email_settings
                     from mailer import email_ready
@@ -363,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
+            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':

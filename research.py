@@ -54,6 +54,11 @@ def analyze(snapshot):
                             issue['item_types'].append(key)
                 if category == 'Supplies' and any(re.search(r'\bhand towels?\b', clause, re.I) for clause in candidates):
                     issue['hand_towel'] = True
+                    for clause in candidates:
+                        quantity = re.search(r'\b(?:need|bring|send|provide|request|can we have|could we have|can we get|could we get)\s+(?:us\s+)?([1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:(?:extra|additional|more)\s+)?hand towels?\b', clause, re.I)
+                        if quantity:
+                            number = quantity[1].lower()
+                            issue['requested_hand_towels'] = int(number) if number.isdigit() else ('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten').index(number) + 1
         for issue in grouped.values():
             topics = set(issue['topics'])
             if 'wifi' in topics:
