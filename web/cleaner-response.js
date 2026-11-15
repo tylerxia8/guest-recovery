@@ -9,12 +9,14 @@ async function send(path, data, key) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await fetch('/api/cleaner-response/' + path, {method: 'POST', credentials: 'omit', headers: {'Content-Type': 'application/json', ...(key ? {'Idempotency-Key': key} : {})}, body: JSON.stringify({token: replyToken, ...data}), signal: AbortSignal.timeout(15000)});
-      const result = await response.json();
+      if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+        continue;
+      }
+      let result;
+      try { result = await response.json(); }
+      catch { throw new Error('The service is temporarily unavailable. Please retry your reply.'); }
       if (!response.ok) {
-        if ((response.status === 429 || response.status >= 500) && attempt < 2) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
-          continue;
-        }
         const error = new Error(result.error || 'Unable to save your reply.');
         error.status = response.status;
         throw error;
