@@ -146,13 +146,14 @@ function purchasePanel(issue) {
   form.append(label, addressLabel, submit, feedback);
   form.oninput = event => {
     if (event.target !== check && event.target !== addressCheck) { check.checked = false; addressCheck.checked = false; }
-    purchaseDrafts.set(issue.id, {...Object.fromEntries(new FormData(form)), timezone: timezoneSelect.value, fulfillment_version: draft.fulfillment_version, all_in_confirmed: check.checked, address_confirmed: addressCheck.checked});
+    purchaseDrafts.set(issue.id, {...Object.fromEntries(new FormData(form)), timezone: timezoneSelect.value, fulfillment_version: draft.fulfillment_version, purchase_plan: draft.purchase_plan, all_in_confirmed: check.checked, address_confirmed: addressCheck.checked});
   };
   form.onsubmit = async event => {
     event.preventDefault();
     const data = {issue_id: issue.id, summary: form.elements.summary.value, total_cents: Math.round(Number(form.elements.total.value) * 100), gift_cents: Math.round(Number(form.elements.gift.value) * 100), all_in_confirmed: check.checked};
     data.offer = {location: form.elements.location.value, timezone: timezoneSelect.value, asins: form.elements.asins.value.split(',').map(value => value.trim().toUpperCase()).filter(Boolean), arrival_date: form.elements.arrival_date.value, delivery_window: form.elements.delivery_window.value, address_confirmed: addressCheck.checked};
     if (draft.fulfillment_version !== null && draft.fulfillment_version !== undefined) data.fulfillment_version = draft.fulfillment_version;
+    if (draft.purchase_plan) data.purchase_plan = draft.purchase_plan;
     for (const control of form.elements) control.disabled = true;
     try {
       await submitAction('/api/purchases', data);
@@ -292,8 +293,9 @@ function render() {
   }
   const solution = node('div', '', 'saved-plan');
   if (issue.category === 'Supplies') {
-    const shopping = node('section', '', 'shopping');
-    shopping.append(node('h3', 'Amazon replacements'));
+    solution.append(purchasePlanPanel(issue, text.message));
+    const shopping = node('details', '', 'shopping');
+    shopping.append(node('summary', 'More Amazon options'));
     shopping.append(node('p', 'Check the earliest arrival. Skip the gift if it delays the essentials.', 'help-text'));
     const catalog = dataset.catalog;
     const units = issue.property_ids || [];
@@ -387,10 +389,10 @@ function render() {
   } else if (issue.category === 'Supplies' && profileButton && !destination.verified) {
     heading = 'Complete the delivery address'; detail = 'Hospitable is missing delivery details for this unit.'; actionLabel = 'Add delivery details'; target = null;
   } else if (issue.category === 'Supplies' && issue.local_requests[0]?.fallback) {
-    heading = 'Use Amazon instead'; detail = issue.local_requests[0].status; actionLabel = 'Review replacement'; target = controls.querySelector('.shopping');
+    heading = 'Use Amazon instead'; detail = issue.local_requests[0].status; actionLabel = 'Review replacement'; target = controls.querySelector('.purchase-plan');
 
   } else if (issue.category === 'Supplies') {
-    heading = 'Order a replacement from Amazon'; detail = 'Choose quality and earliest delivery, then cost. Checkout is not connected yet.'; actionLabel = 'Review Amazon items'; target = controls.querySelector('.shopping');
+    heading = 'Order a replacement from Amazon'; detail = 'Choose quality and earliest delivery, then cost. Checkout is not connected yet.'; actionLabel = 'Review purchase plan'; target = controls.querySelector('.purchase-plan');
   } else if (issue.category === 'Maintenance') {
     heading = /remote/i.test(text.message.body) ? 'Check the remote' : 'Review a repair'; detail = /remote/i.test(text.message.body) ? 'Start with the batteries. Repair dispatch needs a manager.' : 'Repair dispatch needs a manager.';
   } else if (issue.category === 'Cleaning') {

@@ -82,6 +82,7 @@ def initialize():
             COMMIT;
             ''')
         db.execute("CREATE TABLE IF NOT EXISTS guest_reply_sends (id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL, message_id TEXT NOT NULL, issue_id TEXT NOT NULL, body TEXT NOT NULL, context TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('queued','attempting','accepted','blocked','failed','unknown')), reference TEXT, error TEXT, approved_at TEXT NOT NULL, attempted_at TEXT, updated_at TEXT NOT NULL, UNIQUE(reservation_id, message_id))")
+        db.execute('CREATE TABLE IF NOT EXISTS purchase_plans (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS guest_reply_drafts (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
@@ -105,6 +106,9 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path == '/api/purchase-plans':
+        from purchase_plans import save
+        return save(db, data, now())
     if path == '/api/guest-replies/send':
         from guest_replies import approve
         return approve(db, data, now())
@@ -316,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and self.path == '/api/auth/session':
                 self.respond(200, {'authenticated': bool(actor), 'setup_allowed': setup_allowed, 'username': actor['username'] if actor else None, 'role': actor['role'] if actor else None, 'csrf': actor['csrf'] if actor else None})
                 return
-            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/purchase-plans.js': ('purchase-plans.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if self.command == 'GET' and self.path == '/':
                 if not actor:
                     target = requested if re.fullmatch(r'/\?purchase=[a-f0-9-]{36}', requested) else '/'
@@ -394,6 +398,8 @@ class Handler(BaseHTTPRequestHandler):
                     for issue in result['issues']:
                         issue['fulfillment'] = next((item for item in result['catalog']['fulfillment'] if len(issue['property_ids']) == 1 and item['property_id'] == issue['property_ids'][0]), None)
                         issue['supply_quantities'] = quantities(issue, issue['fulfillment'])
+                        from purchase_plans import build as purchase_plan
+                        issue['purchase_plans'] = [purchase_plan(db, issue, message) for message in issue['evidence']] if issue['category'] == 'Supplies' else []
                         from local_supply import live_context, LiveRequestUnavailable
                         try:
                             destination, supplier = live_context(db, issue, source_snapshot, now())
@@ -426,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
+            if self.path not in ('/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':

@@ -89,6 +89,25 @@ def change(db, path, data, timestamp):
         issue = next((item for item in analyze(json.loads(snapshot['body']))['issues'] if item['id'] == issue_id and item['category'] == 'Supplies'), None)
         if not issue:
             raise ValueError('Supply request no longer exists; refresh the page')
+        plan = None
+        if 'purchase_plan' in data:
+            from purchase_plans import build
+            binding = data['purchase_plan']
+            if not isinstance(binding, dict) or type(binding.get('version')) is not int:
+                raise ValueError('Invalid purchase plan binding')
+            message = next((item for item in issue['evidence'] if item['id'] == binding.get('message_id') and item['sender_type'] == 'guest'), None)
+            if not message:
+                raise ValueError('The selected guest text is no longer part of this request')
+            plan = build(db, issue, message)
+            if not plan['saved_at'] or plan['stale'] or plan['blockers'] or plan['version'] != binding['version'] or plan['source_fingerprint'] != binding.get('source_fingerprint'):
+                raise ValueError('The purchase plan changed. Review and save it again before recording the quote.')
+            if offer is None or data.get('fulfillment_version') != plan['destination']['version']:
+                raise ValueError('The quote must be bound to the plan’s delivery details')
+            essentials = {item['asin'] for item in plan['lines']}
+            extras = set(offer['asins']) - essentials
+            if not essentials.issubset(offer['asins']) or (extras and (not plan['gift']['requested'] or gift == 0 or len(extras) != 1)) or (gift > 0 and not extras):
+                raise ValueError('Quote ASINs must match the saved essentials, plus one optional gift when its cost is included. Update the plan before changing products.')
+            offer['purchase_plan'] = {'message_id': message['id'], 'version': plan['version'], 'lines': plan['lines'], 'gift_requested': plan['gift']['requested']}
         if 'fulfillment_version' in data:
             from fulfillment import profile, quantities
             if len(issue['property_ids']) != 1 or offer is None:
@@ -101,9 +120,10 @@ def change(db, path, data, timestamp):
             offer['fulfillment'] = {key: destination[key] for key in ('property_id', 'address', 'instructions', 'hand_towel_quantity', 'version', 'verified_at')}
             if dt.date.fromisoformat(offer['arrival_date']) < dt.datetime.now(ZoneInfo(offer['timezone'])).date():
                 raise ValueError('Arrival date has passed in the property time zone')
-            offer['supply_quantities'] = quantities(issue, destination)
-            if issue['hand_towel']:
-                offer['hand_towels_needed'] = next(item['quantity'] for item in offer['supply_quantities'] if item['item_type'] == 'hand_towels')
+            offer['supply_quantities'] = [{key: item[key] for key in ('item_type', 'quantity', 'unit', 'basis')} for item in plan['lines']] if plan else quantities(issue, destination)
+            towels = next((item for item in offer['supply_quantities'] if item['item_type'] == 'hand_towels'), None)
+            if towels:
+                offer['hand_towels_needed'] = towels['quantity']
         if db.execute("SELECT id FROM purchase_requests WHERE issue_id = ? AND decision != 'vetoed'", (issue_id,)).fetchone():
             raise ValueError('A proposal already exists. Cancel it before changing the items or total.')
         identifier = str(uuid.uuid4())
