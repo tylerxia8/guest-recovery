@@ -166,6 +166,17 @@ def research():
             if not isinstance(timezone, str) or len(timezone) > 100:
                 raise ValueError('Unexpected property timezone')
             imported_address = {'line1': ' '.join(value for value in (fields['number'], fields['street']) if value), 'line2': '', 'city': fields['city'], 'region': fields['state'], 'postal_code': fields['postcode'], 'country': fields['country'].upper(), 'timezone': timezone}
+            capacity = item.get('capacity') or {}
+            if not isinstance(capacity, dict):
+                raise ValueError('Unexpected property capacity format')
+            home = {}
+            for field, source in (('bedrooms', 'bedrooms'), ('bathrooms', 'bathrooms'), ('guests', 'max')):
+                value = capacity.get(source)
+                if value is not None:
+                    if type(value) not in (int, float) or not 0 <= value <= 100:
+                        raise ValueError('Unexpected property capacity field')
+                    home[field] = value
+            imported_address['home'] = home
             db.execute('INSERT INTO fulfillment_profiles VALUES (?, ?, NULL, 0) ON CONFLICT(property_id) DO UPDATE SET imported_address = excluded.imported_address, version = fulfillment_profiles.version + 1 WHERE fulfillment_profiles.imported_address != excluded.imported_address', (str(uuid.UUID(item['id'])), json.dumps(imported_address, sort_keys=True)))
         db.execute('INSERT INTO research_snapshot VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body', (json.dumps(snapshot),))
     print(json.dumps({'event': 'research_complete', 'conversations': len(conversations)}))

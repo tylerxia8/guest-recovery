@@ -35,9 +35,9 @@ function renderCatalog() {
   container.append(defaults);
   if (!catalog.properties.length) { container.append(node('p', 'Units will appear after the next successful Hospitable import.')); return; }
   const pendingHB = catalog.properties.filter(unit => unit.name.startsWith('HB') && !(catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified);
-  container.append(node('p', `${pendingHB.length} HB delivery profiles need confirmation before real cleaner inquiries can be used. Review each address and unit number; no profiles are approved automatically.`, 'help-text'));
+  container.append(node('p', `${pendingHB.length} HB units have incomplete delivery details. Complete missing fields; other units use Hospitable automatically.`, 'help-text'));
   if (pendingHB.length) {
-    const next = node('button', 'Review next unconfirmed HB unit', 'secondary');
+    const next = node('button', 'Review next incomplete HB unit', 'secondary');
     next.type = 'button';
     next.onclick = () => {
       selectedUnit = pendingHB[(pendingHB.findIndex(unit => unit.id === selectedUnit) + 1) % pendingHB.length].id;
@@ -54,7 +54,7 @@ function renderCatalog() {
   const unitSelect = document.createElement('select');
   for (const unit of catalog.properties) {
     const duplicateName = catalog.properties.some(other => other.id !== unit.id && other.name === unit.name);
-    const status = (catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified ? 'Confirmed' : 'Needs confirmation';
+    const status = (catalog.fulfillment || []).find(item => item.property_id === unit.id)?.verified ? 'Ready' : 'Incomplete';
     const option = node('option', (duplicateName ? `${unit.name} · ${unit.id.slice(0, 8)}` : unit.name) + ' · ' + status);
     option.value = unit.id;
     unitSelect.append(option);
@@ -68,9 +68,9 @@ function renderCatalog() {
     const profileUnit = selectedUnit;
     const details = node('details');
     details.open = fulfillmentDrafts.has(profileUnit);
-    details.append(node('summary', fulfillment.verified ? 'Delivery profile · confirmed' : 'Delivery profile · needs confirmation'));
-    details.append(node('p', 'Matched by Hospitable property ID, never by guest name. Imported addresses need confirmation, including apartment/unit number. Instructions stay in this authenticated workspace and are not emailed automatically.', 'help-text'));
-    if (fulfillment.previous_address) details.append(node('p', 'Hospitable address details changed. Review the new imported address and confirm again.', 'warning'));
+    details.append(node('summary', fulfillment.verified ? 'Delivery details · ready' : 'Delivery details · incomplete'));
+    details.append(node('p', 'Hospitable addresses and home-size defaults are used automatically. Save an override only when needed. Instructions stay in this authenticated workspace.', 'help-text'));
+    if (fulfillment.previous_address) details.append(node('p', 'Hospitable details changed. The latest source details are being used instead of the previous override.', 'warning'));
     const draft = fulfillmentDrafts.get(profileUnit) || {...fulfillment, address: {line1: '', line2: '', ...fulfillment.address, city: fulfillment.address.city || 'Charlotte', region: fulfillment.address.region || 'NC', postal_code: fulfillment.address.postal_code || '', country: fulfillment.address.country || 'US', timezone: fulfillment.address.timezone || 'America/New_York'}, confirmed: false};
     const form = node('form', '', 'fulfillment-form');
     if (draft.version !== fulfillment.version) form.append(node('p', 'This draft is outdated. Discard it and review the latest imported details.', 'warning'));
@@ -128,7 +128,7 @@ function renderCatalog() {
         document.activeElement?.blur();
         catalogSignature = '';
         await load();
-        notice.textContent = 'Delivery profile confirmed for this unit. Imported address changes will require confirmation again.';
+        notice.textContent = 'Delivery override saved. If Hospitable details change, the latest source details will be used.';
       } catch (error) { feedback.textContent = error.message; }
       finally { for (const input of form.elements) input.disabled = false; }
     };

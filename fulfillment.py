@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -8,9 +9,46 @@ def profile(db, property_id):
     row = db.execute('SELECT * FROM fulfillment_profiles WHERE property_id = ?', (property_id,)).fetchone()
     imported = json.loads(row['imported_address']) if row else {}
     saved = json.loads(row['body']) if row and row['body'] else None
-    verified = bool(saved and saved['source_address'] == imported)
-    address = saved['address'] if verified else imported
-    return {'property_id': property_id, 'imported_address': imported, 'address': address, 'previous_address': saved['address'] if saved and not verified else None, 'instructions': saved['instructions'] if saved else '', 'hand_towel_quantity': saved['hand_towel_quantity'] if saved else 4, 'version': row['version'] if row else 0, 'verified': verified, 'verified_at': saved['verified_at'] if verified else None}
+    overridden = bool(saved and all(saved['source_address'].get(key, '') == imported.get(key, '') for key in ('line1', 'line2', 'city', 'region', 'postal_code', 'country', 'timezone')))
+    address = saved['address'] if overridden else {key: imported.get(key, '') for key in ('line1', 'line2', 'city', 'region', 'postal_code', 'country', 'timezone')}
+    verified = all(isinstance(address.get(key), str) and address[key].strip() for key in ('line1', 'city', 'region', 'postal_code', 'country', 'timezone'))
+    if verified:
+        try:
+            ZoneInfo(address['timezone'])
+        except (ValueError, ZoneInfoNotFoundError):
+            verified = False
+        verified = verified and bool(re.fullmatch(r'[A-Z]{2}', address['country']))
+        if address['country'] == 'US':
+            verified = verified and bool(re.fullmatch(r'[0-9]{5}(?:-[0-9]{4})?', address['postal_code']))
+    home = imported.get('home', {})
+    bathrooms = max(1, math.ceil(home.get('bathrooms') or 1))
+    quantity = saved['hand_towel_quantity'] if overridden else min(20, 2 * bathrooms)
+    return {'property_id': property_id, 'imported_address': imported, 'address': address, 'previous_address': saved['address'] if saved and not overridden else None, 'instructions': saved['instructions'] if overridden else imported.get('instructions', ''), 'hand_towel_quantity': quantity, 'home': home, 'source': 'manager' if overridden else 'hospitable', 'version': row['version'] if row else 0, 'verified': bool(verified), 'verified_at': saved['verified_at'] if overridden else None}
+
+
+def quantities(issue, destination):
+    from catalog import ITEMS
+    home = destination.get('home', {}) if destination else {}
+    bathrooms = max(1, math.ceil(home.get('bathrooms') or 1))
+    bedrooms = max(1, math.ceil(home.get('bedrooms') or 1))
+    guests = max(1, math.ceil(home.get('guests') or bedrooms * 2))
+    if any(re.search(r'\b(?:in (?:the |our )?(?:bathroom|kitchen)|(?:master|main|upstairs|downstairs|guest) bathroom)\b', message['body'], re.I) for message in issue['evidence']):
+        bathrooms = 1
+    defaults = {'hand_towels': (destination['hand_towel_quantity'] if destination and (destination['source'] == 'manager' or bathrooms != 1) else 2, 'towels'), 'bath_towels': (min(20, guests), 'towels'), 'trash_bags': (10, 'bags'), 'toilet_paper': (min(20, 2 * bathrooms), 'rolls'), 'paper_towels': (2, 'rolls'), 'laundry_pods': (5, 'pods'), 'dish_pods': (5, 'pods'), 'soap': (bathrooms, 'bottles'), 'shampoo': (bathrooms, 'bottles'), 'conditioner': (bathrooms, 'bottles'), 'body_wash': (bathrooms, 'bottles'), 'bath_soap': (bathrooms, 'bars'), 'blankets': (1, 'blanket'), 'pillows': (1, 'pillow'), 'batteries': (4, 'batteries'), 'sponges': (2, 'sponges')}
+    result = []
+    for kind in issue['item_types']:
+        count, unit = defaults.get(kind, (1, 'item'))
+        source = 'Home-size default' if kind in ('hand_towels', 'bath_towels', 'toilet_paper', 'soap', 'shampoo', 'conditioner', 'body_wash', 'bath_soap') else 'Starter replenishment'
+        for message in issue['evidence']:
+            pattern = r'\b(?:need|bring|send|provide|request|can we have|could we have|can we get|could we get)\s+(?:us\s+)?([1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:(?:extra|additional|more)\s+)?(?:' + ITEMS[kind][1] + ')'
+            match = re.search(pattern, message['body'].replace('\u2019', "'"), re.I)
+            if match:
+                number = match[1].lower()
+                count = int(number) if number.isdigit() else ('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten').index(number) + 1
+                source = 'Guest request'
+        result.append({'item_type': kind, 'quantity': count, 'unit': unit, 'basis': source})
+    return result
+
 
 
 def save(db, data, timestamp):

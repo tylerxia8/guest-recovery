@@ -31,7 +31,7 @@ def live_context(db, issue, snapshot, timestamp):
     destination = fulfillment_profile(db, issue['property_ids'][0])
     supplier = profile(db)
     if not destination['verified']:
-        raise LiveRequestUnavailable('Confirm this unit’s delivery profile first.')
+        raise LiveRequestUnavailable('This unit is missing a usable delivery address in Hospitable.')
     if destination['property_id'] not in supplier['property_ids'] or not supplier['email'] or not any(item in supplier['item_types'] for item in issue['item_types']):
         raise LiveRequestUnavailable('Confirm cleaner coverage, email, and supported items first.')
     if not email_ready(email_settings()):
@@ -160,6 +160,8 @@ def change(db, path, data, timestamp):
         body['mode'] = mode
         simulation = mode != 'live'
         if mode == 'live':
+            from fulfillment import quantities
+            body['supply_quantities'] = [item for item in quantities(issue, destination) if item['item_type'] in items]
             body.update({'profile_version': destination['version'], 'supplier_version': supplier['version'], 'evidence_fingerprint': fingerprint, 'timezone': destination['address']['timezone']})
         db.execute("INSERT INTO local_requests VALUES (?, ?, ?, 'pending', 'pending', NULL, NULL, NULL, 1, ?, ?)", (identifier, issue['id'], json.dumps(body), timestamp, timestamp))
         action = 'cleaner_availability_requested'
@@ -239,7 +241,7 @@ def deliver_requests(connect, stop):
                             needed = dt.datetime.fromisoformat(details['needed_by']).astimezone(ZoneInfo(timezone)).strftime('%b %d, %Y at %I:%M %p %Z')
                             reply = dt.datetime.fromisoformat(details['reply_by']).astimezone(ZoneInfo(timezone)).strftime('%b %d, %Y at %I:%M %p %Z')
                             heading = 'Availability inquiry only. Do not dispatch or purchase anything.' if details.get('mode') == 'live' else '[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]'
-                            text = '\n'.join((heading, 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + ', '.join(ITEMS[item][0] for item in details['item_types']), 'Needed by: ' + needed, 'Please reply by: ' + reply, 'Time zone: ' + timezone, 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
+                            text = '\n'.join((heading, 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + (', '.join(ITEMS[item['item_type']][0] + ': ' + str(item['quantity']) + ' ' + item['unit'] for item in details['supply_quantities']) if details.get('supply_quantities') else ', '.join(ITEMS[item][0] for item in details['item_types'])), 'Needed by: ' + needed, 'Please reply by: ' + reply, 'Time zone: ' + timezone, 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
                             subject = 'Hiddenbrook supply availability request' if details.get('mode') == 'live' else '[SIMULATION] Hiddenbrook supply availability request'
                             payload = {'from': settings['NOTIFICATION_FROM'], 'to': [details['email']], 'reply_to': settings['MANAGER_EMAIL'], 'subject': subject, 'text': text}
                             db.execute('UPDATE local_requests SET payload = ? WHERE id = ?', (json.dumps(payload), row['id']))

@@ -343,10 +343,11 @@ class Handler(BaseHTTPRequestHandler):
                     from catalog import ITEMS, DEFAULTS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
                     result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1], 'asin': value[2], 'source_url': value[3]} for key, value in DEFAULTS.items()]
-                    from fulfillment import profile as fulfillment_profile
+                    from fulfillment import profile as fulfillment_profile, quantities
                     result['catalog']['fulfillment'] = [fulfillment_profile(db, unit['id']) for unit in result['catalog']['properties']]
                     for issue in result['issues']:
                         issue['fulfillment'] = next((item for item in result['catalog']['fulfillment'] if len(issue['property_ids']) == 1 and item['property_id'] == issue['property_ids'][0]), None)
+                        issue['supply_quantities'] = quantities(issue, issue['fulfillment'])
                         from local_supply import live_context, LiveRequestUnavailable
                         try:
                             destination, supplier = live_context(db, issue, source_snapshot, now())

@@ -90,7 +90,7 @@ def change(db, path, data, timestamp):
         if not issue:
             raise ValueError('Supply request no longer exists; refresh the page')
         if 'fulfillment_version' in data:
-            from fulfillment import profile
+            from fulfillment import profile, quantities
             if len(issue['property_ids']) != 1 or offer is None:
                 raise ValueError('A delivery profile requires a uniquely mapped unit and an offer')
             destination = profile(db, issue['property_ids'][0])
@@ -101,8 +101,9 @@ def change(db, path, data, timestamp):
             offer['fulfillment'] = {key: destination[key] for key in ('property_id', 'address', 'instructions', 'hand_towel_quantity', 'version', 'verified_at')}
             if dt.date.fromisoformat(offer['arrival_date']) < dt.datetime.now(ZoneInfo(offer['timezone'])).date():
                 raise ValueError('Arrival date has passed in the property time zone')
+            offer['supply_quantities'] = quantities(issue, destination)
             if issue['hand_towel']:
-                offer['hand_towels_needed'] = issue.get('requested_hand_towels', destination['hand_towel_quantity'])
+                offer['hand_towels_needed'] = next(item['quantity'] for item in offer['supply_quantities'] if item['item_type'] == 'hand_towels')
         if db.execute("SELECT id FROM purchase_requests WHERE issue_id = ? AND decision != 'vetoed'", (issue_id,)).fetchone():
             raise ValueError('A proposal already exists. Cancel it before changing the items or total.')
         identifier = str(uuid.uuid4())

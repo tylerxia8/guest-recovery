@@ -93,8 +93,7 @@ function purchasePanel(issue) {
     return unitProducts[0] || dataset.catalog.defaults.find(product => product.item_type === kind);
   }).filter(product => product?.asin);
   const destination = issue.fulfillment;
-  const towels = issue.requested_hand_towels || (destination?.verified ? destination.hand_towel_quantity : null);
-  const draft = purchaseDrafts.get(issue.id) || {summary: picks.map(product => product.title + (product.item_type === 'hand_towels' && towels ? ` · Need ${towels} individual towels; check pack size` : '')).join('; '), asins: picks.map(product => product.asin).join(', '), location: destination?.verified ? `${destination.address.city}, ${destination.address.region}` : 'Charlotte, NC', timezone: destination?.verified ? destination.address.timezone : 'America/New_York', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false, fulfillment_version: destination?.verified ? destination.version : null};
+  const draft = purchaseDrafts.get(issue.id) || {summary: picks.map(product => { const amount = issue.supply_quantities?.find(item => item.item_type === product.item_type); return product.title + (amount ? ` · Need ${amount.quantity} ${amount.unit}; check pack size` : ''); }).join('; '), asins: picks.map(product => product.asin).join(', '), location: destination?.verified ? `${destination.address.city}, ${destination.address.region}` : 'Charlotte, NC', timezone: destination?.verified ? destination.address.timezone : 'America/New_York', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false, fulfillment_version: destination?.verified ? destination.version : null};
   const bound = draft.fulfillment_version !== null && draft.fulfillment_version !== undefined;
   form.append(node('p', 'Charlotte, NC is the default. Change it when the property is elsewhere. Select the actual property address in Amazon, confirm compatibility, then copy its full price and arrival estimate below. This app does not fetch live offers.', 'help-text'));
   for (const [name, title, type] of [['summary', 'Proposed items (include any chocolates)', 'text'], ['asins', 'Amazon ASINs (comma-separated, including any gift)', 'text'], ['location', 'Delivery city / location', 'text'], ['arrival_date', 'Estimated arrival date at the property', 'date'], ['delivery_window', 'Arrival window as shown by Amazon (property local time)', 'text'], ['total', 'Full order total ($)', 'number'], ['gift', 'Gift cost already included in total ($)', 'number']]) {
@@ -251,17 +250,21 @@ function render() {
   const propertyDetails = node('details', '', 'property-details');
   propertyDetails.append(node('summary', 'Property details'));
   card.append(propertyDetails);
+  if (issue.supply_quantities?.length) {
+    const amounts = issue.supply_quantities.map(item => `${dataset.catalog.item_types.find(kind => kind.id === item.item_type)?.label || item.item_type}: ${item.quantity} ${item.unit} · ${item.basis}`);
+    propertyDetails.append(node('p', amounts.join(' / '), 'help-text'), node('p', 'Quantities are individual items, not Amazon packs.', 'help-text'));
+  }
   let profileButton = null;
   const destination = issue.fulfillment;
   if (destination) {
     const delivery = node('section');
-    delivery.append(node('h3', 'Delivery destination'), node('p', destination.verified ? 'Confirmed delivery address' : 'Delivery address needs confirmation', 'help-text'));
+    delivery.append(node('h3', 'Delivery destination'), node('p', destination.verified ? (destination.source === 'hospitable' ? 'From Hospitable' : 'Manager override') : 'Delivery address incomplete', 'help-text'));
     if (destination.verified) {
       delivery.append(node('p', [destination.address.line1, destination.address.line2, `${destination.address.city}, ${destination.address.region} ${destination.address.postal_code}`, destination.address.country].filter(Boolean).join(' · ')));
       if (destination.instructions) delivery.append(node('p', destination.instructions));
     }
-    if (issue.hand_towel) delivery.append(node('p', issue.requested_hand_towels ? `Guest explicitly requested ${issue.requested_hand_towels} individual hand towels. Check the selected pack size.` : `Unit default: ${destination.hand_towel_quantity} individual hand towels${destination.verified ? '' : ' · provisional until confirmed'}. Check the selected pack size.`, 'help-text'));
-    const edit = node('button', destination.verified ? 'Edit unit delivery profile' : 'Confirm unit delivery profile', 'secondary');
+
+    const edit = node('button', destination.verified ? 'Edit delivery details' : 'Add missing delivery details', 'secondary');
     edit.type = 'button';
     edit.onclick = () => {
       showSettings();
@@ -380,7 +383,7 @@ function render() {
   } else if (issue.resolution_hint) {
     heading = 'Guest reported a fix'; detail = 'Review their confirmation before taking another action.'; actionLabel = 'Read confirmation'; target = card.querySelector('.resolution-details');
   } else if (issue.category === 'Supplies' && profileButton && !destination.verified) {
-    heading = 'Confirm this unit once'; detail = 'Check the delivery address to unlock the next step.'; actionLabel = 'Confirm delivery details'; target = null;
+    heading = 'Complete the delivery address'; detail = 'Hospitable is missing delivery details for this unit.'; actionLabel = 'Add delivery details'; target = null;
   } else if (issue.category === 'Supplies' && issue.cleaner_live?.eligible) {
     heading = 'Ask the cleaner'; detail = 'Review and send an availability email for these items.'; actionLabel = 'Review cleaner email'; target = controls.querySelector('.cleaner-option');
   } else if (issue.category === 'Supplies') {
