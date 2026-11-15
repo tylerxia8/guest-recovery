@@ -175,6 +175,7 @@ function render() {
     button.setAttribute('aria-pressed', String(issue.id === selected));
     button.append(node('span', issue.property, 'request-property'), node('strong', title(issue)), node('span', issue.evidence[issue.evidence.length - 1].body, 'request-preview'));
     if (issue.priority === 'Urgent') button.append(node('span', 'Urgent review', 'urgent'));
+    if (issue.resolution_hint) button.append(node('span', 'Likely resolved · practice scenario', 'help-text'));
     button.onclick = () => { selected = issue.id; render(); };
     requests.append(button);
   }
@@ -187,7 +188,12 @@ function render() {
   const quote = node('blockquote', issue.evidence[issue.evidence.length - 1].body);
   quote.append(node('cite', `Guest · ${date(issue.latest_at)}`));
   card.append(quote);
-  if (issue.resolution_hint) card.append(node('p', 'The original conversation contains a possible resolution. For this exercise, assume the request is still open.', 'context-note'));
+  if (issue.resolution_hint) {
+    card.append(node('p', 'Likely resolved: the guest reported a fix. This remains an open practice scenario; no action was taken automatically.', 'context-note'));
+    const resolution = node('blockquote', issue.resolution_hint.body);
+    resolution.append(node('cite', `Guest confirmation · ${date(issue.resolution_hint.created_at)}`));
+    card.append(resolution);
+  }
   const solution = node('div', '', 'saved-plan');
   solution.append(node('span', 'Suggested fix', 'eyebrow'));
   if (issue.worksheet) {
