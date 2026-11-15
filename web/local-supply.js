@@ -133,6 +133,8 @@ function cleanerPanel(issue) {
         };
         card.append(receipt);
       }
+      if (request.details.reply_source === 'cleaner_link') card.append(node('p', 'Cleaner replied through their response link.', 'help-text'));
+      if (request.details.charge_cents !== undefined) card.append(node('p', `Proposed cleaner charge: $${(request.details.charge_cents / 100).toFixed(2)} · manager authorization required before dispatch`, 'help-text'));
       if (request.state === 'pending' && request.notice_status === 'sent' && !request.fallback) {
         const reply = document.createElement('details');
         reply.append(node('summary', 'Record a reply received by the manager'));

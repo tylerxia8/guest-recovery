@@ -375,7 +375,7 @@ function render() {
   let actionLabel = 'View conversation';
   let target = history;
   const pendingPurchase = issue.purchases.find(request => request.decision !== 'vetoed');
-  const activeCleaner = issue.local_requests.find(request => ['pending', 'available'].includes(request.state));
+  const activeCleaner = issue.local_requests.find(request => ['pending', 'available'].includes(request.state) && !request.fallback);
   if (pendingPurchase) {
     heading = 'Purchase notice'; detail = pendingPurchase.status; actionLabel = 'Review purchase notice'; target = controls.querySelector('.purchase-panel');
   } else if (activeCleaner) {
@@ -384,6 +384,8 @@ function render() {
     heading = 'Guest reported a fix'; detail = 'Review their confirmation before taking another action.'; actionLabel = 'Read confirmation'; target = card.querySelector('.resolution-details');
   } else if (issue.category === 'Supplies' && profileButton && !destination.verified) {
     heading = 'Complete the delivery address'; detail = 'Hospitable is missing delivery details for this unit.'; actionLabel = 'Add delivery details'; target = null;
+  } else if (issue.category === 'Supplies' && issue.local_requests[0]?.fallback) {
+    heading = 'Use Amazon instead'; detail = issue.local_requests[0].status; actionLabel = 'Review replacement'; target = controls.querySelector('.shopping');
   } else if (issue.category === 'Supplies' && issue.cleaner_live?.eligible) {
     heading = 'Ask the cleaner'; detail = 'Review and send an availability email for these items.'; actionLabel = 'Review cleaner email'; target = controls.querySelector('.cleaner-option');
   } else if (issue.category === 'Supplies') {

@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 import sqlite3
 import uuid
 from zoneinfo import ZoneInfo
@@ -242,6 +243,14 @@ def deliver_requests(connect, stop):
                             reply = dt.datetime.fromisoformat(details['reply_by']).astimezone(ZoneInfo(timezone)).strftime('%b %d, %Y at %I:%M %p %Z')
                             heading = 'Availability inquiry only. Do not dispatch or purchase anything.' if details.get('mode') == 'live' else '[SIMULATION: availability inquiry only. Do not dispatch or purchase anything.]'
                             text = '\n'.join((heading, 'Request ID: ' + row['id'], 'Unit: ' + details['property'], 'Items to check: ' + (', '.join(ITEMS[item['item_type']][0] + ': ' + str(item['quantity']) + ' ' + item['unit'] for item in details['supply_quantities']) if details.get('supply_quantities') else ', '.join(ITEMS[item][0] for item in details['item_types'])), 'Needed by: ' + needed, 'Please reply by: ' + reply, 'Time zone: ' + timezone, 'Please confirm whether you have all these items, your earliest arrival time, and any charge. If you cannot help in time, please say so. No availability is assumed.', 'Reply to the property manager. This app does not read email replies automatically.'))
+                            if details.get('mode') == 'live':
+                                from settings import public_origin
+                                origin = public_origin()
+                                if origin:
+                                    token = secrets.token_urlsafe(32)
+                                    db.execute('INSERT INTO cleaner_response_links VALUES (?, ?, NULL)', (row['id'], hashlib.sha256(token.encode()).hexdigest()))
+                                    text += '\nRespond securely: ' + origin + '/cleaner-response#' + token
+                                    text += '\nThis link is private to this request and expires at the reply deadline. Availability only; wait for the manager before dispatching.'
                             subject = 'Hiddenbrook supply availability request' if details.get('mode') == 'live' else '[SIMULATION] Hiddenbrook supply availability request'
                             payload = {'from': settings['NOTIFICATION_FROM'], 'to': [details['email']], 'reply_to': settings['MANAGER_EMAIL'], 'subject': subject, 'text': text}
                             db.execute('UPDATE local_requests SET payload = ? WHERE id = ?', (json.dumps(payload), row['id']))

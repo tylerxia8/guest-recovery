@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supply availability · Lucena</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/cleaner-response.js" defer></script>
+</head>
+<body>
+<header><span class="brand">Lucena <span>/ Supply availability</span></span></header>
+<main class="login-main"><section class="detail-card">
+<h1>Can you help?</h1>
+<p id="response-status" role="status">Loading the request…</p>
+<div id="response-request" hidden><h2 id="response-property"></h2><ul id="response-items"></ul><p id="response-deadline"></p><p>Availability only. Please wait for the manager to arrange delivery and approve any charge.</p>
+<form id="response-form"><label>Earliest arrival time<select id="response-arrival" required></select></label><label>Total proposed charge, including delivery ($)<input id="response-charge" type="number" min="0" max="10000" step="0.01" value="0" required></label><label class="checkbox-label"><input id="response-confirmed" type="checkbox" required><span>I have all the listed items in the requested quantities.</span></label><button id="response-available">Confirm availability</button></form>
+<button id="response-unavailable" type="button" class="secondary">I can’t supply everything in time</button>
+</div></section></main>
+</body>
+</html>

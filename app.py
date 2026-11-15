@@ -81,6 +81,7 @@ def initialize():
             CREATE UNIQUE INDEX active_local_request ON local_requests(issue_id) WHERE state IN ('pending','available');
             COMMIT;
             ''')
+        db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
             db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
     os.chmod(DATABASE, 0o600)
@@ -318,6 +319,40 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
+                return
+            if self.command == 'GET' and self.path in ('/cleaner-response', '/cleaner-response.js'):
+                filename = 'cleaner-response.js' if self.path.endswith('.js') else 'cleaner-response.html'
+                content_type = 'text/javascript' if filename.endswith('.js') else 'text/html; charset=utf-8'
+                self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
+                return
+            if self.command == 'POST' and self.path in ('/api/cleaner-response/context', '/api/cleaner-response/reply'):
+                if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                    raise ValueError('JSON content type required')
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 4000 or self.headers.get('Transfer-Encoding'):
+                    raise ValueError('Invalid request size')
+                raw = self.rfile.read(length)
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise ValueError('JSON object required')
+                submit = self.path.endswith('/reply')
+                if submit and not 8 <= len(self.headers.get('Idempotency-Key', '')) <= 200:
+                    raise ValueError('Idempotency-Key required')
+                from cleaner_response import respond
+                key = hashlib.sha256(('cleaner-response\n' + str(data.get('token')) + '\n' + self.headers.get('Idempotency-Key', '')).encode()).hexdigest()
+                fingerprint = hashlib.sha256(self.path.encode() + b'\n' + raw).hexdigest() if submit else None
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    previous = db.execute('SELECT * FROM operations WHERE key = ?', (key,)).fetchone() if submit else None
+                    if previous:
+                        if previous['fingerprint'] != fingerprint:
+                            raise ValueError('Idempotency key reused with a different reply')
+                        result = json.loads(previous['response'])
+                    else:
+                        result = respond(db, data, now(), self.path)
+                        if submit:
+                            db.execute('INSERT INTO operations VALUES (?, ?, ?)', (key, fingerprint, json.dumps(result)))
+                self.respond(200, result)
                 return
             auth_action = self.command == 'POST' and self.path in ('/api/auth/login', '/api/auth/setup', '/api/auth/logout')
             if not actor and not auth_action:
