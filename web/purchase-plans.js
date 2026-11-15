@@ -15,7 +15,7 @@ function purchasePlanPanel(issue, message) {
   for (const item of plan.lines) {
     const row = node('div', '', 'preferred-row');
     row.append(node('strong', item.label), node('p', `Need ${item.quantity} ${item.unit} · ${item.basis}`, 'help-text'));
-    if (item.url) {
+    if (item.asin) {
       const link = node('a', item.title + ' ↗', 'amazon-link');
       link.href = item.url;
       link.target = '_blank';
@@ -34,7 +34,13 @@ function purchasePlanPanel(issue, message) {
       label.append(input);
       row.append(label, count);
       counts.set(item.item_type, {input, asin: item.asin});
-    } else row.append(node('p', item.title + ' · select a compatible product in Settings.', 'help-text'));
+    } else {
+      const search = node('a', item.title + ' ↗', 'amazon-link');
+      search.href = item.url;
+      search.target = '_blank';
+      search.rel = 'noopener noreferrer';
+      row.append(search, node('p', 'Small-pack preference · exact Amazon listing and pack size need selection in Settings.', 'help-text'));
+    }
     row.append(node('p', item.check, 'help-text'));
     form.append(row);
   }

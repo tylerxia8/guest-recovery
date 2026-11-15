@@ -35,7 +35,7 @@ def build(db, issue, message, choices=None):
                 raise ValueError('Pack sizes must be whole numbers between 1 and 1000')
             if override['asin'] == asin:
                 units = override['units']
-        lines.append({**amount, 'label': ITEMS[kind][0], 'title': title, 'asin': asin, 'units_per_pack': units, 'packs': math.ceil(amount['quantity'] / units) if units else None, 'check': (product['room'] + ' · ' + product['tv_brand'] + ' ' + product['tv_model']) if product and kind == 'tv_remote' else shared[1] if shared else 'Verify the selected unit product and pack contents.', 'url': 'https://www.amazon.com/dp/' + asin if asin else None})
+        lines.append({**amount, 'label': ITEMS[kind][0], 'title': title, 'asin': asin, 'units_per_pack': units, 'packs': math.ceil(amount['quantity'] / units) if units else None, 'check': (product['room'] + ' · ' + product['tv_brand'] + ' ' + product['tv_model']) if product and kind == 'tv_remote' else shared[1] if shared else 'Verify the selected unit product and pack contents.', 'url': 'https://www.amazon.com/dp/' + asin if asin else 'https://www.amazon.com/s?' + urlencode({'k': title})})
     blockers = []
     if issue['lane'] == 'practice':
         blockers.append('Practice case; do not order for this historical or unverified stay.')
@@ -49,7 +49,7 @@ def build(db, issue, message, choices=None):
         blockers.append('Choose an exact compatible preferred product for each item in Settings.')
     if any(not line['units_per_pack'] for line in lines):
         blockers.append('Enter the selected product’s units per pack.')
-    fingerprint = hashlib.sha256(json.dumps({'issue': issue['id'], 'message': message['id'], 'messages': issue['messages'], 'source': issue['source_messages_fingerprint'], 'lane': issue['lane'], 'resolution': issue['resolution_hint'], 'destination': destination, 'products': products, 'defaults': DEFAULTS, 'pack_sizes': PACK_SIZES}, sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps({'issue': issue['id'], 'message': message['id'], 'messages': issue['messages'], 'source': issue['source_messages_fingerprint'], 'lane': issue['lane'], 'resolution': issue['resolution_hint'], 'destination': destination, 'products': products, 'defaults': DEFAULTS, 'pack_sizes': PACK_SIZES, 'amounts': amounts}, sort_keys=True).encode()).hexdigest()
     summary = '; '.join(line['title'] + ' · ' + (str(line['packs']) + ' pack(s)' if line['packs'] else 'pack size needed') + ' · need ' + str(line['quantity']) + ' ' + line['unit'] for line in lines)
     gift = {'title': DEFAULTS['chocolates'][0], 'maximum_cents': 300, 'requested': choices['gift'], 'url': 'https://www.amazon.com/s?' + urlencode({'k': DEFAULTS['chocolates'][0]}), 'check': 'Add only if the full gift cost is $3 or less, fits the order budget, and arrives with the essentials without delaying them. Otherwise skip.'}
     notice = 'PURCHASE PROPOSAL — NOT ORDERED\nProperty: ' + issue['property'] + '\n' + summary + ('\nOptional Ghirardelli chocolates, up to $3, only without delaying essentials.' if choices['gift'] else '') + '\nAmazon price and arrival remain unverified. Totals up to $25 require a successful manager notice and a 10-minute veto window; above $25 requires manager approval before purchase. Checkout is manual.'
