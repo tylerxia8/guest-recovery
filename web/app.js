@@ -247,6 +247,8 @@ function render() {
   card.append(quote);
   const nextStep = node('section', '', 'next-step');
   card.append(nextStep);
+  const replyPanel = guestReplyPanel(issue, text.message);
+  card.append(replyPanel);
   const propertyDetails = node('details', '', 'property-details');
   propertyDetails.append(node('summary', 'Property details'));
   card.append(propertyDetails);
@@ -420,7 +422,10 @@ function render() {
   next.disabled = visible.length < 2;
   next.onclick = () => { selected = visible[(visible.findIndex(item => item.key === selected) + 1) % visible.length].key; render(); };
   const actions = node('div', '', 'primary-actions');
-  actions.append(action, next);
+  const reply = node('button', 'Reply draft', 'secondary');
+  reply.type = 'button';
+  reply.onclick = () => { replyPanel.open = true; replyPanel.scrollIntoView({behavior: 'smooth', block: 'start'}); };
+  actions.append(action, reply, next);
   nextStep.append(actions);
   if (text.issues.length > 1) {
     const alternatives = node('details');

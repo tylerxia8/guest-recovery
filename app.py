@@ -81,6 +81,7 @@ def initialize():
             CREATE UNIQUE INDEX active_local_request ON local_requests(issue_id) WHERE state IN ('pending','available');
             COMMIT;
             ''')
+        db.execute('CREATE TABLE IF NOT EXISTS guest_reply_drafts (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
             db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
@@ -103,6 +104,9 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
+    if path == '/api/guest-replies':
+        from guest_replies import save
+        return save(db, data, now())
     if path == '/api/fulfillment':
         from fulfillment import save
         return save(db, data, now())
@@ -308,7 +312,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and self.path == '/api/auth/session':
                 self.respond(200, {'authenticated': bool(actor), 'setup_allowed': setup_allowed, 'username': actor['username'] if actor else None, 'role': actor['role'] if actor else None, 'csrf': actor['csrf'] if actor else None})
                 return
-            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if self.command == 'GET' and self.path == '/':
                 if not actor:
                     target = requested if re.fullmatch(r'/\?purchase=[a-f0-9-]{36}', requested) else '/'
@@ -375,6 +379,9 @@ class Handler(BaseHTTPRequestHandler):
                     result['local_supply_types'] = list(SUPPORTED)
                     for issue in result['issues']:
                         issue['local_requests'] = [describe_local(row) for row in db.execute('SELECT * FROM local_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
+                    from guest_replies import draft as reply_draft
+                    for issue in result['issues']:
+                        issue['guest_replies'] = [reply_draft(db, issue, message) for message in issue['evidence']]
                     from catalog import ITEMS, DEFAULTS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
                     result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1], 'asin': value[2], 'source_url': value[3]} for key, value in DEFAULTS.items()]
@@ -415,7 +422,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
+            if self.path not in ('/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
