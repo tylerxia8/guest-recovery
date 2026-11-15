@@ -79,15 +79,15 @@ function cleanerPanel(issue) {
   const supplier = dataset.local_supplier;
   const types = issue.item_types.filter(kind => supplier.item_types.includes(kind));
   if (!types.length && !issue.local_requests.length) return null;
-  const section = node('section', '', 'cleaner-option');
-  section.append(node('h3', 'Try the Hiddenbrook cleaner'), node('p', 'Ask about cleaning supplies or toiletries before relying on them. Availability changes by day. Keep Amazon open if it can arrive sooner. Times below use your device’s local time zone.', 'help-text'));
+  const section = node('details', '', 'cleaner-option');
+  section.append(node('summary', 'Optional: ask the Hiddenbrook cleaner'), node('p', 'Use this alternative when convenient. Amazon is the default; do not wait on cleaner availability to review Amazon delivery. Times below use your device’s local time zone.', 'help-text'));
   for (const request of issue.local_requests) {
     const card = node('div', '', 'purchase-request');
     card.append(node('strong', request.status), node('p', request.details.item_types.map(kind => dataset.catalog.item_types.find(item => item.id === kind).label).join(', '), 'help-text'), node('p', `Reply by ${date(request.details.reply_by)} · Needed by ${date(request.details.needed_by)}`, 'help-text'));
     card.append(node('p', request.details.mode === 'live' ? 'Real availability inquiry · No dispatch or purchase authorized' : 'Simulation inquiry', 'help-text'));
     if (request.error) card.append(node('p', request.error, 'warning'));
     if (request.details.arrival) card.append(node('p', `Cleaner-reported arrival: ${date(request.details.arrival)}. Confirm any fee before arranging delivery.`, 'help-text'));
-    if (request.fallback) card.append(node('p', 'Continue with the Amazon options below. No purchase or cleaner dispatch happens automatically.', 'delivery-priority'));
+    if (request.fallback) card.append(node('p', 'Continue with the Amazon options above. No purchase or cleaner dispatch happens automatically.', 'delivery-priority'));
     if (request.fallback) {
       const amazon = node('button', 'View Amazon replacements', 'secondary');
       amazon.type = 'button';

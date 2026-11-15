@@ -290,10 +290,8 @@ function render() {
   }
   const solution = node('div', '', 'saved-plan');
   if (issue.category === 'Supplies') {
-    const cleaner = cleanerPanel(issue);
-    if (cleaner) solution.append(cleaner);
     const shopping = node('section', '', 'shopping');
-    shopping.append(node('h3', 'Preferred replacements'));
+    shopping.append(node('h3', 'Amazon replacements'));
     shopping.append(node('p', 'Check the earliest arrival. Skip the gift if it delays the essentials.', 'help-text'));
     const catalog = dataset.catalog;
     const units = issue.property_ids || [];
@@ -354,6 +352,8 @@ function render() {
     }
     shopping.append(links, node('p', 'Price and Charlotte delivery unverified', 'delivery-status'), node('p', 'Selected listings identify the preferred product and variant. Search links are fallbacks. In Amazon, confirm the unit compatibility, seller, full price, and arrival date at the property address. Do not place an order yet.', 'help-text'));
     solution.append(shopping);
+    const cleaner = cleanerPanel(issue);
+    if (cleaner) solution.append(cleaner);
   }
 
   const controls = node('details', '', 'action-details');
@@ -386,10 +386,9 @@ function render() {
     heading = 'Complete the delivery address'; detail = 'Hospitable is missing delivery details for this unit.'; actionLabel = 'Add delivery details'; target = null;
   } else if (issue.category === 'Supplies' && issue.local_requests[0]?.fallback) {
     heading = 'Use Amazon instead'; detail = issue.local_requests[0].status; actionLabel = 'Review replacement'; target = controls.querySelector('.shopping');
-  } else if (issue.category === 'Supplies' && issue.cleaner_live?.eligible) {
-    heading = 'Ask the cleaner'; detail = 'Review and send an availability email for these items.'; actionLabel = 'Review cleaner email'; target = controls.querySelector('.cleaner-option');
+
   } else if (issue.category === 'Supplies') {
-    heading = 'Replace the missing item'; detail = 'Preferred items are ready. Amazon checkout is not connected.'; actionLabel = 'Review replacement'; target = controls.querySelector('.shopping');
+    heading = 'Order a replacement from Amazon'; detail = 'Choose quality and earliest delivery, then cost. Checkout is not connected yet.'; actionLabel = 'Review Amazon items'; target = controls.querySelector('.shopping');
   } else if (issue.category === 'Maintenance') {
     heading = /remote/i.test(text.message.body) ? 'Check the remote' : 'Review a repair'; detail = /remote/i.test(text.message.body) ? 'Start with the batteries. Repair dispatch needs a manager.' : 'Repair dispatch needs a manager.';
   } else if (issue.category === 'Cleaning') {
