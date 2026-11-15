@@ -142,7 +142,7 @@ def change(db, path, data, timestamp):
             raise ValueError('Purchase proposal not found')
         if row['decision'] == 'vetoed':
             raise ValueError('This proposal was cancelled')
-        if action == 'approve' and (row['total_cents'] <= AUTO_LIMIT_CENTS or row['decision'] == 'approved'):
+        if action == 'approve' and row['decision'] == 'approved':
             raise ValueError('This proposal does not need another approval')
         db.execute('UPDATE purchase_requests SET decision = ?, updated_at = ? WHERE id = ?', ('approved' if action == 'approve' else 'vetoed', timestamp, identifier))
         details = {'simulation': True}

@@ -172,7 +172,7 @@ function purchasePanel(issue) {
 function updateCountdowns() {
   for (const element of document.querySelectorAll('[data-deadline]')) {
     const seconds = Math.max(0, Math.ceil((new Date(element.dataset.deadline) - Date.now()) / 1000));
-    element.textContent = seconds ? `Manager veto time remaining: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : 'Veto window complete. Purchase remains blocked because checkout is not connected.';
+    element.textContent = seconds ? `Time to deny: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : 'Window ended · checkout not connected.';
   }
 }
 function showSettings() {
@@ -188,7 +188,7 @@ document.querySelector('#settings-toggle').onclick = () => {
   document.querySelector('#inbox-workspace').hidden = false;
   document.querySelector('#settings-toggle').textContent = 'Settings';
   document.querySelector('#page-title').textContent = 'Guest inbox';
-  document.querySelector('#page-subtitle').textContent = 'Select a text. Review the next step.';
+  document.querySelector('#page-subtitle').textContent = 'Read the conversation. Confirm or deny the purchase.';
 };
 function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
@@ -407,6 +407,8 @@ function render() {
   action.type = 'button';
   action.onclick = () => {
     if (!target) { profileButton?.click(); return; }
+    if (target === history) { thread.scrollIntoView({behavior: 'smooth', block: 'start'}); return; }
+    advanced.open = true;
     if (controls.contains(target)) controls.open = true;
     if (target.tagName === 'DETAILS') target.open = true;
     if (target.classList.contains('cleaner-option')) {
@@ -441,7 +443,29 @@ function render() {
     card.append(alternatives);
   }
   card.append(node('p', 'Purchases are off. Guest replies require manager approval.', 'automation-note'));
+  const advanced = node('details', '', 'manager-advanced');
+  advanced.append(node('summary', 'More controls'));
+  while (card.firstChild) advanced.append(card.firstChild);
+  const managerHeading = node('div', '', 'manager-heading');
+  managerHeading.append(back, node('h2', issue.property), next);
+  const layout = node('div', '', 'manager-layout');
+  const thread = node('section', '', 'manager-thread');
+  thread.append(node('h3', 'Text chain'), conversation);
+  const selectedMessage = conversation.children[issue.messages.findIndex(item => item.id === text.message.id)];
+  if (selectedMessage) selectedMessage.classList.add('selected-message');
+  const purchaseIssue = text.issues.find(item => item.category === 'Supplies') || issue;
+  let purchaseControls = controls;
+  if (purchaseIssue !== issue) {
+    purchaseControls = node('details', '', 'action-details');
+    purchaseControls.append(node('summary', 'Purchase setup'), purchasePlanPanel(purchaseIssue, text.message), purchasePanel(purchaseIssue));
+    advanced.append(purchaseControls);
+  }
+  if (text.issues.some(item => item.category === 'Safety')) managerHeading.append(node('span', 'Urgent safety concern', 'urgent'));
+  layout.append(thread, managerPurchaseCard(purchaseIssue, text.message, purchaseControls));
+  history.remove();
+  card.append(managerHeading, layout, advanced);
   container.append(card);
+  if (selectedMessage) conversation.scrollTop = conversation.scrollTop + selectedMessage.getBoundingClientRect().top - conversation.getBoundingClientRect().top - 24;
   renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
   renderedPreferences = JSON.stringify(dataset.catalog);
   renderedSupplier = JSON.stringify(dataset.local_supplier);
