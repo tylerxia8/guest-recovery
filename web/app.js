@@ -307,12 +307,14 @@ function render() {
       link.rel = 'noopener noreferrer';
       links.append(link);
     }
-    if (searches.length) {
-      const gift = node('a', 'Optional chocolates, up to $3 ↗', 'amazon-link gift-link');
-      gift.href = 'https://www.amazon.com/s?' + new URLSearchParams({k: 'small chocolate gift under 3 dollars'});
+    if (searches.length || matching.length) {
+      const preferredGift = catalog.defaults.find(product => product.item_type === 'chocolates');
+      const gift = node('a', preferredGift ? `Optional: ${preferredGift.title} · up to $3 ↗` : 'Optional chocolates, up to $3 ↗', 'amazon-link gift-link');
+      gift.href = preferredGift?.asin ? 'https://www.amazon.com/dp/' + preferredGift.asin : 'https://www.amazon.com/s?' + new URLSearchParams({k: preferredGift?.title || 'small chocolate gift under 3 dollars'});
       gift.target = '_blank';
       gift.rel = 'noopener noreferrer';
       links.append(gift);
+      if (preferredGift) links.append(node('p', preferredGift.check, 'help-text'));
     }
     shopping.append(links, node('p', 'Price and Charlotte delivery unverified', 'delivery-status'), node('p', 'Selected listings identify the preferred product and variant. Search links are fallbacks. In Amazon, confirm the unit compatibility, seller, full price, and arrival date at the property address. Do not place an order yet.', 'help-text'));
     solution.append(shopping);

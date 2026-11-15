@@ -38,9 +38,11 @@ ITEMS = {
     'toaster': ('Toaster', r'\btoasters?\b', 'Hamilton Beach 22614V Toaster'),
     'high_chair': ('High chair', r'\bhigh ?chairs?\b', 'Graco Slim Snacker Highchair'),
     'travel_crib': ('Travel crib or playard', r'\b(?:travel cribs?|playards?|pack.?n.?play)\b', 'Graco Pack n Play Portable Playard'),
+    'chocolates': ('Optional apology chocolates', r'\bchocolates?\b', 'Ghirardelli Milk Chocolate Caramel 2 Squares single 1.06 oz bar'),
 }
 
 DEFAULTS = {
+    'chocolates': ('Ghirardelli Milk Chocolate Caramel 2-Squares, single 1.06 oz bar', 'Optional gift. Full gift cost must stay within $3 and arrive with the essentials without delaying them. Skip if only bulk packs are available. Amazon listing, price, and Charlotte delivery remain unverified.', None, 'https://www.meijer.com/shopping/product/ghirardelli-milk-chocolate-caramel-2-squares-1-06-oz-bar/74759940722'),
     'trash_bags': ('Glad ForceFlex fragrance-free 13-gallon drawstring trash bags, 110-count', 'Confirm bin size; custom-fit bins may require specific liners.', 'B0CK9RZGDX', 'https://www.amazon.com/dp/B0CK9RZGDX'),
     'laundry_pods': ('Tide PODS Free & Gentle, 76-count', 'Confirm the washer permits pods; choose a practical pack for the stay.', 'B0BSJSFY1M', 'https://kortingoutlet.com/product/lpnq1lvvm13fhk/'),
     'dish_pods': ('Cascade Free & Clear ActionPacs, Lemon Essence, 62-count', 'Dishwasher detergent only; keep separate from laundry pods.', 'B08VPYMJ43', 'https://kortingoutlet.com/product/lpnspqy9ndrlvz/'),
