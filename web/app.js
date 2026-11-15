@@ -161,7 +161,7 @@ function purchasePanel(issue) {
       form.blur();
       document.activeElement?.blur();
       await load();
-      notice.textContent = 'Proposal saved. The clock starts after a successful Gmail send or confirmed Resend delivery; uncertain sends stay blocked. No purchase will be made in simulation mode.';
+      notice.textContent = 'Proposal saved. The clock starts after a successful Gmail send; uncertain sends stay blocked. No purchase will be made in simulation mode.';
     } catch (error) { feedback.textContent = error.message; }
     finally { for (const control of form.elements) control.disabled = false; timezoneSelect.disabled = bound; }
   };

@@ -41,23 +41,14 @@ document.querySelector('#logout').onclick = async () => {
   } catch (error) { document.querySelector('#notice').textContent = error.message; }
 };
 const emailForm = document.querySelector('#email-settings');
-function showEmailProvider() {
-  const gmail = emailForm.elements.provider.value === 'gmail';
-  document.querySelector('#gmail-settings').hidden = !gmail;
-  document.querySelector('#resend-settings').hidden = gmail;
-}
-emailForm.elements.provider.onchange = showEmailProvider;
 document.querySelector('#email-panel').addEventListener('toggle', async event => {
   if (!event.target.open || emailForm.dataset.loaded) return;
   try {
     const response = await apiFetch('/api/settings/email', {signal: AbortSignal.timeout(15000)});
     if (!response.ok) throw new Error('Could not load email settings.');
     const settings = await response.json();
-    emailForm.elements.provider.value = settings.provider;
-    showEmailProvider();
     emailForm.elements.sender.value = settings.sender;
     emailForm.elements.recipient.value = settings.recipient;
-    emailForm.elements.api_key.placeholder = settings.api_key_configured ? 'Already configured — leave blank to keep it' : 'Paste your Resend API key';
     emailForm.elements.app_password.placeholder = settings.app_password_configured ? 'Already configured — leave blank to keep it' : '16-character Google app password';
     document.querySelector('#email-hosting').textContent = settings.remote_ready ? `Manager email links use ${settings.public_url}.` : 'Manager email links currently open this computer. Set APP_PUBLIC_URL when deploying for remote access.';
     emailForm.dataset.loaded = 'true';
@@ -69,9 +60,8 @@ emailForm.onsubmit = async event => {
   submit.disabled = true;
   try {
     const result = await submitAction('/api/settings/email', Object.fromEntries(new FormData(emailForm)));
-    emailForm.elements.api_key.value = '';
     emailForm.elements.app_password.value = '';
-    document.querySelector('#email-feedback').textContent = result.configured ? 'Email settings saved. Queued manager notices and cleaner inquiries can now be sent if their deadlines are still valid.' : 'Addresses saved. Add the selected email service’s credential before notices can be sent.';
+    document.querySelector('#email-feedback').textContent = result.configured ? 'Email settings saved. Queued manager notices and cleaner inquiries can now be sent if their deadlines are still valid.' : 'Addresses saved. Add a Google app password before notices can be sent.';
     delete emailForm.dataset.loaded;
     await load();
   } catch (error) { document.querySelector('#email-feedback').textContent = error.message; }

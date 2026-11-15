@@ -36,7 +36,7 @@ def manager_url():
 def email_configuration():
     with CONFIG_LOCK:
         settings = {name: os.environ.get(name, '') for name in ('RESEND_API_KEY', 'SMTP_APP_PASSWORD', 'NOTIFICATION_FROM', 'MANAGER_EMAIL')}
-        settings['EMAIL_PROVIDER'] = os.environ.get('EMAIL_PROVIDER') or ('resend' if settings['RESEND_API_KEY'] else 'gmail')
+        settings['EMAIL_PROVIDER'] = os.environ.get('EMAIL_PROVIDER') or 'gmail'
         return settings
 
 
