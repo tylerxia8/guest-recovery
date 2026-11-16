@@ -29,15 +29,13 @@ def quantities(issue, destination):
     from catalog import ITEMS
     home = destination.get('home', {}) if destination else {}
     bathrooms = max(1, math.ceil(home.get('bathrooms') or 1))
-    bedrooms = max(1, math.ceil(home.get('bedrooms') or 1))
-    guests = max(1, math.ceil(home.get('guests') or bedrooms * 2))
     if any(re.search(r'\b(?:in (?:the |our )?(?:bathroom|kitchen)|(?:master|main|upstairs|downstairs|guest) bathroom)\b', message['body'], re.I) for message in issue['evidence']):
         bathrooms = 1
-    defaults = {'hand_towels': (2, 'towels'), 'bath_towels': (min(20, guests), 'towels'), 'trash_bags': (2, 'bags'), 'toilet_paper': (min(20, 2 * bathrooms), 'rolls'), 'paper_towels': (2, 'rolls'), 'laundry_pods': (2, 'pods'), 'dish_pods': (2, 'pods'), 'soap': (bathrooms, 'bottles'), 'shampoo': (1, 'bottle'), 'conditioner': (1, 'bottle'), 'body_wash': (bathrooms, 'bottles'), 'bath_soap': (bathrooms, 'bars'), 'blankets': (1, 'blanket'), 'pillows': (1, 'pillow'), 'batteries': (4, 'batteries'), 'sponges': (2, 'sponges'), 'salt_pepper': (1, 'small salt-and-pepper set'), 'cooking_oil': (1, 'small bottle')}
+    defaults = {'hand_towels': (2, 'towels'), 'bath_towels': (2, 'towels'), 'trash_bags': (2, 'bags'), 'toilet_paper': (min(20, 2 * bathrooms), 'rolls'), 'paper_towels': (2, 'rolls'), 'laundry_pods': (2, 'pods'), 'dish_pods': (2, 'pods'), 'soap': (bathrooms, 'bottles'), 'shampoo': (1, 'bottle'), 'conditioner': (1, 'bottle'), 'body_wash': (bathrooms, 'bottles'), 'bath_soap': (bathrooms, 'bars'), 'blankets': (1, 'blanket'), 'pillows': (1, 'pillow'), 'batteries': (4, 'batteries'), 'sponges': (2, 'sponges'), 'salt_pepper': (1, 'small salt-and-pepper set'), 'cooking_oil': (1, 'small bottle')}
     result = []
     for kind in issue['item_types']:
         count, unit = defaults.get(kind, (1, 'item'))
-        source = 'Home-size default' if kind in ('bath_towels', 'toilet_paper', 'soap', 'body_wash', 'bath_soap') else 'Starter replenishment'
+        source = 'Home-size default' if kind in ('toilet_paper', 'soap', 'body_wash', 'bath_soap') else 'Starter replenishment'
         for message in issue['evidence']:
             pattern = r'\b(?:need|bring|send|provide|request|can we have|could we have|can we get|could we get)\s+(?:us\s+)?([1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:(?:extra|additional|more)\s+)?(?:' + ITEMS[kind][1] + ')'
             match = re.search(pattern, message['body'].replace('\u2019', "'"), re.I)

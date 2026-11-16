@@ -51,7 +51,7 @@ DEFAULTS = {
     'paper_towels': ('Bounty Select-A-Size, white, 2 Triple Rolls', 'Choose enough for the stay without unnecessary bulk.', 'B0DQYR6X8R', 'https://app.parseshelf.com/best-sellers/asin/B0DQYR6X8R/'),
     'bath_soap': ('Dove Sensitive Beauty Bar, 8 bars, 3.75 oz each', 'Choose individually wrapped bars for guest use.', 'B001ET7IQK', 'https://www.bullsprice.com/product-details/B001ET7IQK/Beauty'),
     'batteries': ('Duracell Coppertop AA alkaline batteries, 8-pack', 'AA only. Confirm the device size; for AAA use Duracell 8-pack ASIN B003SIOZYI instead.', 'B003SI0TD4', 'https://pricehistory.app/p/duracell-coppertop-aa-batteries-power-boost-ingredients-cXITKvce'),
-    'bath_towels': ('American Soft Linen bright white bath towels, 4-pack, 27 x 54 inches', 'Match existing towels and confirm pack contents.', 'B08JQ672VN', 'https://www.amazon.com/dp/B08JQ672VN'),
+    'bath_towels': ('White cotton bath towels, 2-count pack, approximately 27 x 54 inches', 'Supply 2 bath towels unless the guest asks for a different quantity. Choose a suitable two-pack and confirm pack contents.', None, None),
     'hand_towels': ('White cotton hand towels, 2-count pack, approximately 16 x 28 inches', 'Supply 2 towels unless the guest asks for a different quantity. Choose the smallest suitable pack; do not default to a larger household restock.', None, None),
     'shampoo': ('Shampoo, single travel-size bottle, about 50–100 mL', 'Supply one small sealed bottle. Prefer a single bottle or small travel pack, not the previous 28 fl oz listing.', None, None),
     'conditioner': ('Conditioner, single travel-size bottle, about 50–100 mL', 'Supply one small sealed bottle. Prefer a single bottle or small travel pack, not the previous 28 fl oz listing.', None, None),
