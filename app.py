@@ -82,6 +82,8 @@ def initialize():
             COMMIT;
             ''')
         db.execute("CREATE TABLE IF NOT EXISTS guest_reply_sends (id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL, message_id TEXT NOT NULL, issue_id TEXT NOT NULL, body TEXT NOT NULL, context TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('queued','attempting','accepted','blocked','failed','unknown')), reference TEXT, error TEXT, approved_at TEXT NOT NULL, attempted_at TEXT, updated_at TEXT NOT NULL, UNIQUE(reservation_id, message_id))")
+        db.execute('CREATE TABLE IF NOT EXISTS shared_products (id TEXT PRIMARY KEY, item_type TEXT NOT NULL, title TEXT NOT NULL, asin TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)')
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS active_shared_product ON shared_products(item_type) WHERE active = 1')
         db.execute('CREATE TABLE IF NOT EXISTS purchase_plans (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS guest_reply_drafts (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
@@ -125,11 +127,16 @@ def mutate(db, path, data):
         from catalog import save
         return save(db, data, now())
     if path == '/api/catalog/archive':
+        if data.get('scope', 'unit') not in ('shared', 'unit'):
+            raise ValueError('Choose shared supplies or a unit TV remote')
         identifier = str(uuid.UUID(required(data, 'id')))
         version = data.get('version')
         if type(version) is not int:
             raise ValueError('Invalid product version')
-        cursor = db.execute('UPDATE preferred_products SET active = 0, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND active = 1', (now(), identifier, version))
+        if data.get('scope') == 'shared':
+            cursor = db.execute('UPDATE shared_products SET active = 0, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND active = 1', (now(), identifier, version))
+        else:
+            cursor = db.execute('UPDATE preferred_products SET active = 0, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND active = 1', (now(), identifier, version))
         if cursor.rowcount != 1:
             raise ValueError('Product changed; reload before removing it')
         audit(db, identifier, 'preferred_product_archived', {})
@@ -392,7 +399,12 @@ class Handler(BaseHTTPRequestHandler):
                         issue['guest_replies'] = [reply_draft(db, issue, message) for message in issue['evidence']]
                     from catalog import ITEMS, DEFAULTS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
+                    result['catalog']['shared_products'] = [{**dict(row), 'property_id': 'shared', 'room': '', 'tv_brand': '', 'tv_model': ''} for row in db.execute('SELECT * FROM shared_products WHERE active = 1 ORDER BY item_type')]
                     result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1], 'asin': value[2], 'source_url': value[3]} for key, value in DEFAULTS.items()]
+                    for shared in result['catalog']['shared_products']:
+                        default = next((item for item in result['catalog']['defaults'] if item['item_type'] == shared['item_type']), None)
+                        if default:
+                            default.update({'title': shared['title'], 'asin': shared['asin'], 'check': 'Shared preference for all units. Verify pack contents and delivery.', 'source_url': None})
                     from fulfillment import profile as fulfillment_profile, quantities
                     result['catalog']['fulfillment'] = [fulfillment_profile(db, unit['id']) for unit in result['catalog']['properties']]
                     for issue in result['issues']:

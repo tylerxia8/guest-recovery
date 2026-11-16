@@ -20,6 +20,8 @@ def build(db, issue, message, choices=None):
     kinds = [kind for kind in issue['item_types'] if kind != 'chocolates' and re.search(ITEMS[kind][1], message['body'].replace('\u2019', "'"), re.I)]
     amounts = quantities({**issue, 'item_types': kinds, 'evidence': [message]}, destination)
     products = [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 AND property_id = ? ORDER BY item_type, room, id', (destination['property_id'],))] if destination else []
+    products = [product for product in products if product['item_type'] == 'tv_remote']
+    products += [{**dict(row), 'room': '', 'tv_brand': '', 'tv_model': ''} for row in db.execute('SELECT * FROM shared_products WHERE active = 1 ORDER BY item_type')]
     lines = []
     for amount in amounts:
         kind = amount['item_type']
@@ -51,8 +53,11 @@ def build(db, issue, message, choices=None):
         blockers.append('Enter the selected product’s units per pack.')
     fingerprint = hashlib.sha256(json.dumps({'issue': issue['id'], 'message': message['id'], 'messages': issue['messages'], 'source': issue['source_messages_fingerprint'], 'lane': issue['lane'], 'resolution': issue['resolution_hint'], 'destination': destination, 'products': products, 'defaults': DEFAULTS, 'pack_sizes': PACK_SIZES, 'amounts': amounts}, sort_keys=True).encode()).hexdigest()
     summary = '; '.join(line['title'] + ' · ' + (str(line['packs']) + ' pack(s)' if line['packs'] else 'pack size needed') + ' · need ' + str(line['quantity']) + ' ' + line['unit'] for line in lines)
-    gift = {'title': DEFAULTS['chocolates'][0], 'maximum_cents': 300, 'requested': choices['gift'], 'url': 'https://www.amazon.com/s?' + urlencode({'k': DEFAULTS['chocolates'][0]}), 'check': 'Add only if the full gift cost is $3 or less, fits the order budget, and arrives with the essentials without delaying them. Otherwise skip.'}
-    notice = 'PURCHASE PROPOSAL — NOT ORDERED\nProperty: ' + issue['property'] + '\n' + summary + ('\nOptional Ghirardelli chocolates, up to $3, only without delaying essentials.' if choices['gift'] else '') + '\nAmazon price and arrival remain unverified. Totals up to $25 require a successful manager notice and a 10-minute veto window; above $25 requires manager approval before purchase. Checkout is manual.'
+    gift_product = next((product for product in products if product['item_type'] == 'chocolates'), None)
+    gift_title = gift_product['title'] if gift_product else DEFAULTS['chocolates'][0]
+    gift_url = 'https://www.amazon.com/dp/' + gift_product['asin'] if gift_product else 'https://www.amazon.com/s?' + urlencode({'k': gift_title})
+    gift = {'title': gift_title, 'maximum_cents': 300, 'requested': choices['gift'], 'url': gift_url, 'check': 'Add only if the full gift cost is $3 or less, fits the order budget, and arrives with the essentials without delaying them. Otherwise skip.'}
+    notice = 'PURCHASE PROPOSAL — NOT ORDERED\nProperty: ' + issue['property'] + '\n' + summary + ('\nOptional gift: ' + gift_title + ', up to $3, only without delaying essentials.' if choices['gift'] else '') + '\nAmazon price and arrival remain unverified. Totals up to $25 require a successful manager notice and a 10-minute veto window; above $25 requires manager approval before purchase. Checkout is manual.'
     return {'message_id': message['id'], 'lines': lines, 'destination': destination, 'gift': gift, 'choices': choices, 'blockers': blockers, 'summary': summary, 'manager_notice': notice, 'guest_acknowledgment': draft(db, issue, message)['suggested'], 'version': saved['version'] if saved else 0, 'source_fingerprint': fingerprint, 'stale': bool(saved and saved['source_fingerprint'] != fingerprint), 'saved_at': saved['updated_at'] if saved else None}
 
 

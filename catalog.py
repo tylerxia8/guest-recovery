@@ -79,12 +79,15 @@ DEFAULTS = {
 
 
 def save(db, data, timestamp):
-    property_id = str(uuid.UUID(data.get('property_id', '')))
-    if not db.execute('SELECT id FROM rental_units WHERE id = ?', (property_id,)).fetchone():
-        raise ValueError('Choose a unit imported from Hospitable')
+    scope = data.get('scope', 'unit')
+    if scope not in ('shared', 'unit'):
+        raise ValueError('Choose shared supplies or a unit TV remote')
     kind = data.get('item_type')
-    if not isinstance(kind, str) or kind not in ITEMS:
-        raise ValueError('Choose a supported item type')
+    if not isinstance(kind, str) or kind not in ITEMS or (scope == 'shared' and kind == 'tv_remote'):
+        raise ValueError('Choose a supported item type; TV remotes must belong to a unit')
+    property_id = 'shared' if scope == 'shared' else str(uuid.UUID(data.get('property_id', '')))
+    if scope == 'unit' and not db.execute('SELECT id FROM rental_units WHERE id = ?', (property_id,)).fetchone():
+        raise ValueError('Choose a unit imported from Hospitable')
     fields = {}
     for key, maximum in [('title', 300), ('room', 100), ('tv_brand', 100), ('tv_model', 100), ('amazon_product', 2000)]:
         value = data.get(key)
@@ -116,15 +119,18 @@ def save(db, data, timestamp):
     identifier = data.get('id')
     if identifier:
         identifier = str(uuid.UUID(identifier))
-        previous = db.execute('SELECT * FROM preferred_products WHERE id = ? AND active = 1', (identifier,)).fetchone()
-        if not previous or previous['property_id'] != property_id or previous['version'] != version:
+        previous = db.execute('SELECT * FROM shared_products WHERE id = ? AND active = 1', (identifier,)).fetchone() if scope == 'shared' else db.execute('SELECT * FROM preferred_products WHERE id = ? AND active = 1', (identifier,)).fetchone()
+        if not previous or (scope == 'unit' and previous['property_id'] != property_id) or previous['version'] != version:
             raise ValueError('Product changed; reload before editing')
     elif version != 0:
         raise ValueError('New products must have version zero')
-    duplicate = db.execute('SELECT id FROM preferred_products WHERE property_id = ? AND item_type = ? AND lower(room) = lower(?) AND active = 1', (property_id, kind, fields['room'])).fetchone()
+    duplicate = db.execute('SELECT id FROM shared_products WHERE item_type = ? AND active = 1', (kind,)).fetchone() if scope == 'shared' else db.execute('SELECT id FROM preferred_products WHERE property_id = ? AND item_type = ? AND lower(room) = lower(?) AND active = 1', (property_id, kind, fields['room'])).fetchone()
     if duplicate and duplicate['id'] != identifier:
-        raise ValueError('This unit already has a preferred product for that item and room. Edit it instead.')
+        raise ValueError('A preferred product already exists for this item. Edit it instead.')
     identifier = identifier or str(uuid.uuid4())
-    db.execute('INSERT INTO preferred_products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET item_type = excluded.item_type, room = excluded.room, tv_brand = excluded.tv_brand, tv_model = excluded.tv_model, title = excluded.title, asin = excluded.asin, version = excluded.version, updated_at = excluded.updated_at', (identifier, property_id, kind, fields['room'], fields['tv_brand'], fields['tv_model'], fields['title'], asin, version + 1, timestamp, timestamp))
+    if scope == 'shared':
+        db.execute('INSERT INTO shared_products VALUES (?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET item_type = excluded.item_type, title = excluded.title, asin = excluded.asin, version = excluded.version, updated_at = excluded.updated_at', (identifier, kind, fields['title'], asin, version + 1, timestamp, timestamp))
+    else:
+        db.execute('INSERT INTO preferred_products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET item_type = excluded.item_type, room = excluded.room, tv_brand = excluded.tv_brand, tv_model = excluded.tv_model, title = excluded.title, asin = excluded.asin, version = excluded.version, updated_at = excluded.updated_at', (identifier, property_id, kind, fields['room'], fields['tv_brand'], fields['tv_model'], fields['title'], asin, version + 1, timestamp, timestamp))
     db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (property_id, 'preferred_product_saved', timestamp, json.dumps({'id': identifier, 'asin': asin, 'version': version + 1})))
     return {'id': identifier}

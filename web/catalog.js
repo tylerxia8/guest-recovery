@@ -1,5 +1,6 @@
 let selectedUnit = null;
 let selectedProduct = null;
+let deliveryScope = 'shared';
 let catalogSignature = '';
 const preferenceDrafts = new Map();
 const fulfillmentDrafts = new Map();
@@ -16,8 +17,10 @@ function renderCatalog() {
   propertyContainer.replaceChildren();
   const defaults = node('details');
   defaults.append(node('summary', 'Shared preferred items · Charlotte'));
-  defaults.append(node('p', 'Choose suitable quality and earliest confirmed arrival, then compare full cost. Unit-specific products take priority. Sizes, prices, and delivery still require confirmation on Amazon.', 'help-text'));
-  for (const product of catalog.defaults || []) {
+  defaults.append(node('p', 'Choose suitable quality and earliest confirmed arrival, then compare full cost. Supplies are shared across units; TV remotes are matched per unit. Sizes, prices, and delivery still require confirmation on Amazon.', 'help-text'));
+  for (const fallback of catalog.defaults || []) {
+    const shared = catalog.shared_products.find(item => item.item_type === fallback.item_type);
+    const product = shared ? {...shared, check: 'Shared preference for all units.', source_url: null} : fallback;
     const row = node('div', '', 'preferred-row');
     const link = node('a', product.title + ' ↗', 'amazon-link');
     link.href = product.asin ? 'https://www.amazon.com/dp/' + product.asin : 'https://www.amazon.com/s?' + new URLSearchParams({k: product.title});
@@ -56,7 +59,7 @@ function renderCatalog() {
     propertyContainer.append(next);
   }
   if (!catalog.properties.some(unit => unit.id === selectedUnit)) selectedUnit = (pendingHB[0] || catalog.properties[0]).id;
-  for (const target of [propertyContainer, container]) {
+  for (const target of [propertyContainer]) {
     const unitLabel = node('label', 'Rental unit');
     const unitSelect = document.createElement('select');
     for (const unit of catalog.properties) {
@@ -98,23 +101,13 @@ function renderCatalog() {
     instructions.value = draft.instructions;
     instructions.maxLength = 2000;
     instructionsLabel.append(instructions);
-    const quantityLabel = node('label', 'Default hand towels needed (individual towels, not packs)');
-    const quantity = document.createElement('input');
-    quantity.name = 'hand_towel_quantity';
-    quantity.type = 'number';
-    quantity.min = '1';
-    quantity.max = '20';
-    quantity.step = '1';
-    quantity.required = true;
-    quantity.value = draft.hand_towel_quantity;
-    quantityLabel.append(quantity);
     const confirmation = node('label', '', 'checkbox-label');
     const confirmed = document.createElement('input');
     confirmed.type = 'checkbox';
     confirmed.required = true;
     confirmed.checked = draft.confirmed;
-    confirmation.append(confirmed, node('span', 'I confirm the complete delivery address, unit number, instructions, and default towel quantity.'));
-    const collect = () => ({property_id: profileUnit, version: draft.version, address: Object.fromEntries([...form.querySelectorAll('input[name]')].filter(input => input.name !== 'hand_towel_quantity').map(input => [input.name, input.value])), instructions: instructions.value, hand_towel_quantity: Number(quantity.value), confirmed: confirmed.checked});
+    confirmation.append(confirmed, node('span', 'I confirm the complete delivery address, unit number, and instructions.'));
+    const collect = () => ({property_id: profileUnit, version: draft.version, address: Object.fromEntries([...form.querySelectorAll('input[name]')].map(input => [input.name, input.value])), instructions: instructions.value, confirmed: confirmed.checked});
     form.oninput = event => {
       if (event.target !== confirmed) confirmed.checked = false;
       fulfillmentDrafts.set(profileUnit, collect());
@@ -125,7 +118,7 @@ function renderCatalog() {
     discard.onclick = () => { fulfillmentDrafts.delete(profileUnit); document.activeElement?.blur(); catalogSignature = ''; renderCatalog(); };
     const feedback = node('p', '', 'save-status');
     feedback.setAttribute('role', 'status');
-    form.append(instructionsLabel, quantityLabel, confirmation, save, discard, feedback);
+    form.append(instructionsLabel, confirmation, save, discard, feedback);
     form.onsubmit = async event => {
       event.preventDefault();
       const data = collect();
@@ -143,9 +136,34 @@ function renderCatalog() {
     details.append(form);
     propertyContainer.append(details);
   }
-  const products = catalog.products.filter(product => product.property_id === selectedUnit);
+  const scopeLabel = node('label', 'Delivery items');
+  const scopeSelect = document.createElement('select');
+  for (const [value, title] of [['shared', 'Shared supplies · all units'], ['unit', 'TV remotes · by unit']]) {
+    const option = node('option', title);
+    option.value = value;
+    scopeSelect.append(option);
+  }
+  scopeSelect.value = deliveryScope;
+  scopeSelect.onchange = () => { deliveryScope = scopeSelect.value; selectedProduct = null; catalogSignature = ''; renderCatalog(); };
+  scopeLabel.append(scopeSelect);
+  container.append(scopeLabel);
+  if (deliveryScope === 'unit') {
+    const label = node('label', 'TV unit');
+    const select = document.createElement('select');
+    for (const unit of catalog.properties) {
+      const option = node('option', unit.name + ' · ' + unit.id.slice(0, 8));
+      option.value = unit.id;
+      select.append(option);
+    }
+    select.value = selectedUnit;
+    select.onchange = () => { selectedUnit = select.value; selectedProduct = null; catalogSignature = ''; renderCatalog(); };
+    label.append(select);
+    container.append(label);
+  } else container.append(node('p', 'These items apply to every unit. Default hand-towel top-up: 2; guest quantities take priority.', 'help-text'));
+  const products = deliveryScope === 'shared' ? catalog.shared_products : catalog.products.filter(product => product.property_id === selectedUnit && product.item_type === 'tv_remote');
   const list = node('div', '', 'preferred-list');
   for (const product of products) {
+    const scope = deliveryScope;
     const row = node('div', '', 'preferred-row');
     const kind = catalog.item_types.find(item => item.id === product.item_type).label;
     row.append(node('strong', `${kind}${product.room ? ' · ' + product.room : ''}`), node('p', product.title, 'help-text'));
@@ -158,8 +176,8 @@ function renderCatalog() {
     remove.onclick = async () => {
       remove.disabled = true;
       try {
-        await submitAction('/api/catalog/archive', {id: product.id, version: product.version});
-        preferenceDrafts.delete(product.property_id + ':' + product.id);
+        await submitAction('/api/catalog/archive', {id: product.id, version: product.version, scope});
+        preferenceDrafts.delete(scope + ':' + product.property_id + ':' + product.id);
         if (selectedProduct === product.id) selectedProduct = null;
         document.activeElement?.blur();
         await load();
@@ -169,18 +187,18 @@ function renderCatalog() {
     row.append(edit, remove);
     list.append(row);
   }
-  if (!products.length) list.append(node('p', 'No preferred products saved for this unit yet.', 'help-text'));
+  if (!products.length) list.append(node('p', 'No custom preferences saved here yet. Shared supplies use the defaults above.', 'help-text'));
   container.append(list);
   const current = products.find(product => product.id === selectedProduct);
-  const key = selectedUnit + ':' + (current?.id || 'new');
-  const base = preferenceDrafts.get(key) || {id: current?.id || null, version: current?.version || 0, property_id: selectedUnit, item_type: current?.item_type || 'hand_towels', title: current?.title || '', amazon_product: current?.asin || '', room: current?.room || '', tv_brand: current?.tv_brand || '', tv_model: current?.tv_model || ''};
+  const key = deliveryScope + ':' + (deliveryScope === 'shared' ? 'shared' : selectedUnit) + ':' + (current?.id || 'new');
+  const base = preferenceDrafts.get(key) || {id: current?.id || null, version: current?.version || 0, scope: deliveryScope, property_id: deliveryScope === 'shared' ? 'shared' : selectedUnit, item_type: current?.item_type || (deliveryScope === 'shared' ? 'hand_towels' : 'tv_remote'), title: current?.title || '', amazon_product: current?.asin || '', room: current?.room || '', tv_brand: current?.tv_brand || '', tv_model: current?.tv_model || ''};
   const form = node('form', '', 'preference-form');
   form.append(node('h3', current ? 'Edit preferred product' : 'Add a preferred product'));
   if (current && base.version !== current.version) form.append(node('p', 'This draft is based on an older version. Discard it before editing the current preference.', 'warning'));
   const kindLabel = node('label', 'Item');
   const kindSelect = document.createElement('select');
   kindSelect.name = 'item_type';
-  for (const item of catalog.item_types) {
+  for (const item of catalog.item_types.filter(item => deliveryScope === 'shared' ? item.id !== 'tv_remote' : item.id === 'tv_remote')) {
     const option = node('option', item.label);
     option.value = item.id;
     kindSelect.append(option);
@@ -229,7 +247,7 @@ function renderCatalog() {
       document.activeElement?.blur();
       catalogSignature = '';
       await load();
-      notice.textContent = 'Preferred product saved for this unit. Price, delivery, and TV compatibility still need checking.';
+      notice.textContent = 'Preferred item saved. Shared supplies apply to all units; TV remotes stay with their selected unit.';
     } catch (error) { feedback.textContent = error.message; }
     finally { for (const control of form.elements) control.disabled = false; }
   };

@@ -48,9 +48,9 @@ function purchasePlanPanel(issue, message) {
   const gift = document.createElement('input');
   gift.type = 'checkbox';
   gift.checked = choices.gift;
-  giftLabel.append(gift, node('span', 'Optional Ghirardelli chocolates · up to $3, only without delaying essentials'));
+  giftLabel.append(gift, node('span', `Optional: ${plan.gift.title} · up to $3, only without delaying essentials`));
   form.append(giftLabel);
-  const giftLink = node('a', 'Find the single Ghirardelli bar ↗', 'amazon-link');
+  const giftLink = node('a', 'Find ' + plan.gift.title + ' ↗', 'amazon-link');
   giftLink.href = plan.gift.url;
   giftLink.target = '_blank';
   giftLink.rel = 'noopener noreferrer';
@@ -96,7 +96,7 @@ function purchasePlanPanel(issue, message) {
   quote.disabled = Boolean(plan.blockers.length || plan.stale || !plan.saved_at || cached || issue.purchases.some(item => item.decision !== 'vetoed'));
   quote.onclick = () => {
     const address = plan.destination.address;
-    purchaseDrafts.set(issue.id, {purchase_plan: {message_id: message.id, version: plan.version, source_fingerprint: plan.source_fingerprint}, summary: plan.summary + (plan.gift.requested ? '; Optional Ghirardelli chocolates only if verified at $3 or less and without delaying essentials' : ''), asins: [...new Set(plan.lines.map(item => item.asin))].join(', '), location: `${address.city}, ${address.region}`, timezone: address.timezone, fulfillment_version: plan.destination.version, arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false});
+    purchaseDrafts.set(issue.id, {purchase_plan: {message_id: message.id, version: plan.version, source_fingerprint: plan.source_fingerprint}, summary: plan.summary + (plan.gift.requested ? '; Optional ' + plan.gift.title + ' only if verified at $3 or less and without delaying essentials' : ''), asins: [...new Set(plan.lines.map(item => item.asin))].join(', '), location: `${address.city}, ${address.region}`, timezone: address.timezone, fulfillment_version: plan.destination.version, arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false});
     document.activeElement?.blur();
     render();
     const form = document.querySelector('.purchase-form');

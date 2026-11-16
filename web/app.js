@@ -89,7 +89,7 @@ function purchasePanel(issue) {
   details.append(node('summary', 'Prepare a purchase notice'));
   const form = node('form', '', 'purchase-form');
   const picks = issue.item_types.filter(kind => kind !== 'tv_remote').map(kind => {
-    const unitProducts = (issue.property_ids || []).length === 1 ? dataset.catalog.products.filter(product => product.property_id === issue.property_ids[0] && product.item_type === kind) : [];
+    const unitProducts = dataset.catalog.shared_products.filter(product => product.item_type === kind);
     return unitProducts[0] || dataset.catalog.defaults.find(product => product.item_type === kind);
   }).filter(product => product?.asin);
   const destination = issue.fulfillment;
@@ -299,12 +299,12 @@ function render() {
     shopping.append(node('p', 'Check the earliest arrival. Skip the gift if it delays the essentials.', 'help-text'));
     const catalog = dataset.catalog;
     const units = issue.property_ids || [];
-    const matching = units.length === 1 ? catalog.products.filter(product => product.property_id === units[0] && issue.item_types.includes(product.item_type)) : [];
+    const matching = [...catalog.shared_products.filter(product => issue.item_types.includes(product.item_type)), ...(units.length === 1 ? catalog.products.filter(product => product.property_id === units[0] && product.item_type === 'tv_remote' && issue.item_types.includes(product.item_type)) : [])];
     if (units.length !== 1) shopping.append(node('p', 'This request is not mapped to exactly one rental unit. Confirm the unit before choosing a preferred product.', 'context-note'));
     for (const product of matching) {
       const preference = node('div', '', 'matched-product');
       const label = catalog.item_types.find(item => item.id === product.item_type).label;
-      preference.append(node('strong', `Unit’s preferred ${label.toLowerCase()}${product.room ? ' · ' + product.room : ''}`), node('p', product.title));
+      preference.append(node('strong', `${product.property_id === 'shared' ? 'Shared preferred' : 'Unit’s preferred'} ${label.toLowerCase()}${product.room ? ' · ' + product.room : ''}`), node('p', product.title));
       if (product.item_type === 'tv_remote') preference.append(node('p', `TV: ${product.tv_brand} · ${product.tv_model}. Confirm this is the affected TV and check the remote’s compatibility.`, 'help-text'));
       const link = node('a', 'Check preferred item on Amazon ↗', 'amazon-link');
       link.href = 'https://www.amazon.com/dp/' + product.asin;
@@ -324,7 +324,7 @@ function render() {
       preference.append(link, use);
       shopping.append(preference);
     }
-    if (!matching.length && units.length === 1) shopping.append(node('p', 'No unit-specific product saved yet. Shared preferences apply; override them under “Delivery items” above.', 'help-text'));
+    if (!matching.length && units.length === 1) shopping.append(node('p', 'Shared defaults apply; override them under “Delivery items” above.', 'help-text'));
     const searches = issue.item_types.filter(kind => kind !== 'tv_remote' && !matching.some(product => product.item_type === kind)).map(kind => {
       const type = catalog.item_types.find(item => item.id === kind);
       const preferred = (catalog.defaults || []).find(product => product.item_type === kind);
