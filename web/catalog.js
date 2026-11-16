@@ -228,6 +228,38 @@ function renderCatalog() {
   }
   televisionFields();
   kindSelect.addEventListener('change', televisionFields);
+  if (deliveryScope === 'unit') {
+    kindLabel.hidden = true;
+    const savedModels = new Map();
+    for (const product of catalog.products.filter(item => item.item_type === 'tv_remote')) {
+      const signature = JSON.stringify([product.tv_brand.trim().toLowerCase(), product.tv_model.trim().toLowerCase(), product.asin]);
+      if (!savedModels.has(signature)) savedModels.set(signature, product);
+    }
+    const label = node('label', 'Use a saved TV and remote');
+    const select = document.createElement('select');
+    const empty = node('option', savedModels.size ? 'Choose the same TV model…' : 'Save your first TV below to reuse it in other units');
+    empty.value = '';
+    select.append(empty);
+    for (const product of savedModels.values()) {
+      const option = node('option', `${product.tv_brand} · ${product.tv_model} · ${product.title}`);
+      option.value = product.id;
+      select.append(option);
+    }
+    select.disabled = !savedModels.size;
+    select.onchange = () => {
+      const product = [...savedModels.values()].find(item => item.id === select.value);
+      if (!product) return;
+      form.elements.title.value = product.title;
+      form.elements.amazon_product.value = product.asin;
+      form.elements.tv_brand.value = product.tv_brand;
+      form.elements.tv_model.value = product.tv_model;
+      form.dispatchEvent(new Event('input', {bubbles: true}));
+      form.elements.room.focus();
+    };
+    label.append(select);
+    form.insertBefore(label, form.querySelector('[data-field=title]'));
+    form.insertBefore(node('p', 'Choose the exact same TV model, set its room in this unit, then save. This copies the setup; later edits stay specific to each unit.', 'help-text'), form.querySelector('[data-field=title]'));
+  }
   form.oninput = () => preferenceDrafts.set(key, {...base, ...Object.fromEntries(new FormData(form))});
   const save = node('button', 'Save preferred item');
   const discard = node('button', 'Clear / start a new item', 'secondary');
