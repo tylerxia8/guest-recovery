@@ -91,7 +91,7 @@ function purchasePanel(issue) {
   const picks = issue.item_types.filter(kind => kind !== 'tv_remote').map(kind => {
     const unitProducts = dataset.catalog.shared_products.filter(product => product.item_type === kind);
     return unitProducts[0] || dataset.catalog.defaults.find(product => product.item_type === kind);
-  }).filter(product => product?.asin);
+  }).filter(product => product?.asin).filter((product, index, products) => products.findIndex(item => item.asin === product.asin) === index);
   const destination = issue.fulfillment;
   const draft = purchaseDrafts.get(issue.id) || {summary: picks.map(product => { const amount = issue.supply_quantities?.find(item => item.item_type === product.item_type); return product.title + (amount ? ` · Need ${amount.quantity} ${amount.unit}; check pack size` : ''); }).join('; '), asins: picks.map(product => product.asin).join(', '), location: destination?.verified ? `${destination.address.city}, ${destination.address.region}` : 'Charlotte, NC', timezone: destination?.verified ? destination.address.timezone : 'America/New_York', arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false, fulfillment_version: destination?.verified ? destination.version : null};
   const bound = draft.fulfillment_version !== null && draft.fulfillment_version !== undefined;

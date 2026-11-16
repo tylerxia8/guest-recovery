@@ -30,7 +30,7 @@ function managerSolutionCard(issue, message, controls) {
     panel.append(actions);
   } else {
     if (plan?.lines.length) {
-      for (const item of plan.lines) panel.append(node('p', `${item.quantity} ${item.unit} · ${item.label}`, 'purchase-summary'));
+      for (const item of plan.order_lines) panel.append(node('p', `${item.packs || '?'} pack(s) · ${item.title}`, 'purchase-summary'));
       if (plan.gift.requested) panel.append(node('p', 'Optional chocolates · up to $3', 'help-text'));
       panel.append(node('p', 'Price and delivery need an Amazon quote.', 'purchase-status'));
       const setup = node('button', 'Complete purchase details', 'secondary');

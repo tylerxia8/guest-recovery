@@ -12,6 +12,7 @@ function purchasePlanPanel(issue, message) {
   for (const reason of plan.blockers) section.append(node('p', reason, 'help-text'));
   const form = node('form');
   const counts = new Map();
+  for (const item of plan.order_lines) section.append(node('p', `${item.packs || '?'} pack(s) · ${item.title}`, 'purchase-summary'));
   for (const item of plan.lines) {
     const row = node('div', '', 'preferred-row');
     row.append(node('strong', item.label), node('p', `Need ${item.quantity} ${item.unit} · ${item.basis}`, 'help-text'));
@@ -21,19 +22,22 @@ function purchasePlanPanel(issue, message) {
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       row.append(link);
-      const label = node('label', 'Individual units per Amazon pack');
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.min = '1';
-      input.max = '1000';
-      input.step = '1';
-      input.value = choices.pack_sizes[item.item_type]?.asin === item.asin ? choices.pack_sizes[item.item_type].units : item.units_per_pack || '';
-      const count = node('p', '', 'help-text');
-      input.oninput = () => { count.textContent = input.value && input.validity.valid ? `Buy ${Math.ceil(item.quantity / Number(input.value))} pack(s)` : 'Pack quantity needs review'; };
-      input.oninput();
-      label.append(input);
-      row.append(label, count);
-      counts.set(item.item_type, {input, asin: item.asin});
+      if (item.bundle) row.append(node('p', 'Included in the shampoo-and-conditioner set. Buy the combined pack quantity above, not a separate set for each item.', 'help-text'));
+      else {
+        const label = node('label', 'Individual units per Amazon pack');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.max = '1000';
+        input.step = '1';
+        input.value = choices.pack_sizes[item.item_type]?.asin === item.asin ? choices.pack_sizes[item.item_type].units : item.units_per_pack || '';
+        const count = node('p', '', 'help-text');
+        input.oninput = () => { count.textContent = input.value && input.validity.valid ? `Buy ${Math.ceil(item.quantity / Number(input.value))} pack(s)` : 'Pack quantity needs review'; };
+        input.oninput();
+        label.append(input);
+        row.append(label, count);
+        counts.set(item.item_type, {input, asin: item.asin});
+      }
     } else {
       const search = node('a', item.title + ' ↗', 'amazon-link');
       search.href = item.url;

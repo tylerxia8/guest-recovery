@@ -107,7 +107,7 @@ def change(db, path, data, timestamp):
             extras = set(offer['asins']) - essentials
             if not essentials.issubset(offer['asins']) or (extras and (not plan['gift']['requested'] or gift == 0 or len(extras) != 1)) or (gift > 0 and not extras):
                 raise ValueError('Quote ASINs must match the saved essentials, plus one optional gift when its cost is included. Update the plan before changing products.')
-            offer['purchase_plan'] = {'message_id': message['id'], 'version': plan['version'], 'lines': plan['lines'], 'gift_requested': plan['gift']['requested']}
+            offer['purchase_plan'] = {'message_id': message['id'], 'version': plan['version'], 'lines': plan['lines'], 'order_lines': plan['order_lines'], 'gift_requested': plan['gift']['requested']}
         if 'fulfillment_version' in data:
             from fulfillment import profile, quantities
             if len(issue['property_ids']) != 1 or offer is None:
