@@ -188,7 +188,7 @@ document.querySelector('#settings-toggle').onclick = () => {
   document.querySelector('#inbox-workspace').hidden = false;
   document.querySelector('#settings-toggle').textContent = 'Settings';
   document.querySelector('#page-title').textContent = 'Guest inbox';
-  document.querySelector('#page-subtitle').textContent = 'Read the conversation. Confirm or deny the purchase.';
+  document.querySelector('#page-subtitle').textContent = 'Read the conversation. Review the solution.';
 };
 function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
@@ -461,7 +461,7 @@ function render() {
     advanced.append(purchaseControls);
   }
   if (text.issues.some(item => item.category === 'Safety')) managerHeading.append(node('span', 'Urgent safety concern', 'urgent'));
-  layout.append(thread, managerPurchaseCard(purchaseIssue, text.message, purchaseControls));
+  layout.append(thread, managerSolutionCard(purchaseIssue, text.message, purchaseControls));
   history.remove();
   card.append(managerHeading, layout, advanced);
   container.append(card);
