@@ -56,7 +56,7 @@ def build(issue, saved):
     if saved:
         inputs = json.loads(saved['body'])
     stale = bool(saved and saved['source_fingerprint'] != fingerprint)
-    current = dt.datetime.now(dt.timezone.utc)
+    current = dt.datetime.now(dt.UTC)
     checkout = current + dt.timedelta(days=2)
     checks = [{'label': 'Scenario assumes an open request and checkout in 48 hours', 'status': 'confirmed'}, {'label': 'Hand towels are included at this property', 'status': 'confirmed' if inputs['provided'] == 'yes' else 'unknown' if inputs['provided'] == 'unknown' else 'needs_decision'}]
     blockers = []

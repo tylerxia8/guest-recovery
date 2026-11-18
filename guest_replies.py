@@ -1,35 +1,60 @@
 import datetime as dt
 import hashlib
+import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 import uuid
-import json
-import re
 
 
 def draft(db, issue, message):
     from catalog import ITEMS
-    from research import RULES
+    from safety import POLICY_VERSION, detect, guest_message
     text = message['body'].replace('\u2019', "'")
-    safety = re.search(RULES[0][1], text, re.I)
+    safety = detect(text)
+    instruction_versions = []
+    instruction_context = None
+    stay_policy_approvals = []
+    needs_manager = False
     if safety:
-        suggested = 'Please prioritize your safety. If there is immediate danger, contact local emergency services and move to a safe location if you can. Please contact the property manager right away.'
+        from fulfillment import profile
+        destination = profile(db, issue['property_ids'][0]) if len(issue['property_ids']) == 1 else None
+        city = (destination or {}).get('address', {}).get('city') or 'Charlotte'
+        suggested = guest_message(safety, city)
     elif issue['resolution_hint']:
         suggested = 'Thank you for the update. Please let us know if you need anything else during your stay.'
     elif issue['category'] == 'Supplies':
-        items = [label.lower() for label, pattern, _ in ITEMS.values() if re.search(pattern, text, re.I)]
+        items = [label.lower() for label, pattern, _ in ITEMS.values() if re.search(pattern, text, re.IGNORECASE)]
         subject = items[0] if len(items) == 1 else 'the missing items'
         suggested = "I'm sorry for the inconvenience, and thank you for letting us know about " + subject + ". We're reviewing what is needed and will update you once a replacement and delivery time are confirmed."
     elif issue['category'] == 'Instructions':
-        suggested = "Thanks for reaching out. We're checking the details for your property so we can give you the correct information."
+        from property_instructions import solution
+        answer = solution(db, issue, message)
+        suggested = answer['body']
+        instruction_versions = answer['guide_versions']
+        stay_policy_approvals = [item['request_id'] for item in answer.get('stay_requests', []) if item.get('scheduler_approved')]
+        instruction_context = hashlib.sha256(json.dumps({'body': answer['body'], 'missing': answer['missing'], 'versions': instruction_versions}, sort_keys=True).encode()).hexdigest()
+        needs_manager = bool(answer['missing']) or not bool(suggested)
     else:
         suggested = "I'm sorry for the inconvenience, and thank you for letting us know. We're reviewing the issue and will follow up with the next steps."
-    fingerprint = hashlib.sha256(json.dumps({'messages': issue['messages'], 'category': issue['category'], 'lane': issue['lane'], 'resolution_hint': issue['resolution_hint'], 'source_messages_fingerprint': issue['source_messages_fingerprint'], 'conversation_id': issue['conversation_id']}, sort_keys=True).encode()).hexdigest()
+    fingerprint_data = {'messages': issue['messages'], 'category': issue['category'], 'lane': issue['lane'], 'resolution_hint': issue['resolution_hint'], 'source_messages_fingerprint': issue['source_messages_fingerprint'], 'conversation_id': issue['conversation_id']}
+    fingerprint_data.update({key: issue[key] for key in ('property_ids', 'reservation_id', 'check_in', 'check_out')})
+    fingerprint_data.update({key: issue.get(key) for key in ('effective_check_in', 'effective_check_out', 'stay_adjustment_ids', 'stay_phase')})
+    if safety:
+        fingerprint_data['safety_policy'] = POLICY_VERSION
+        fingerprint_data['safety_message'] = suggested
+    if instruction_versions:
+        fingerprint_data['instruction_versions'] = instruction_versions
+    if instruction_context:
+        fingerprint_data['instruction_context'] = instruction_context
+    fingerprint = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()
     saved = db.execute('SELECT * FROM guest_reply_drafts WHERE issue_id = ? AND message_id = ?', (issue['id'], message['id'])).fetchone()
+    if saved and saved['source_fingerprint'] == fingerprint:
+        needs_manager = False
     send = db.execute('SELECT id, state, body, reference, error, approved_at, updated_at FROM guest_reply_sends WHERE reservation_id = ? AND message_id = ?', (issue['reservation_id'], message['id'])).fetchone()
-    return {'send': dict(send) if send else None, 'message_id': message['id'], 'suggested': suggested, 'body': saved['body'] if saved else suggested, 'version': saved['version'] if saved else 0, 'source_fingerprint': fingerprint, 'draft_source_fingerprint': saved['source_fingerprint'] if saved else fingerprint, 'stale': bool(saved and saved['source_fingerprint'] != fingerprint), 'updated_at': saved['updated_at'] if saved else None, 'practice': issue['lane'] == 'practice', 'safety': bool(safety), 'sending_enabled': bool(os.environ.get('HOSPITABLE_TOKEN')) and issue['lane'] != 'practice' and len(issue['property_ids']) == 1 and bool(issue['conversation_id'] and issue['source_messages_fingerprint'])}
+    return {'send': dict(send) if send else None, 'message_id': message['id'], 'suggested': suggested, 'needs_manager': needs_manager, 'instruction_context': instruction_context, 'instruction_versions': instruction_versions, 'stay_policy_approvals': stay_policy_approvals, 'body': saved['body'] if saved else suggested, 'version': saved['version'] if saved else 0, 'source_fingerprint': fingerprint, 'draft_source_fingerprint': saved['source_fingerprint'] if saved else fingerprint, 'stale': bool(saved and saved['source_fingerprint'] != fingerprint), 'updated_at': saved['updated_at'] if saved else None, 'practice': issue['lane'] == 'practice', 'safety': bool(safety), 'safety_kind': safety, 'sending_enabled': bool(os.environ.get('HOSPITABLE_TOKEN')) and issue['lane'] != 'practice' and len(issue['property_ids']) == 1 and bool(issue['conversation_id'] and issue['source_messages_fingerprint'])}
 
 
 def save(db, data, timestamp):
@@ -37,7 +62,7 @@ def save(db, data, timestamp):
     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
     if not snapshot:
         raise ValueError('Refresh Hospitable before preparing a guest reply')
-    issue = next((item for item in analyze(json.loads(snapshot['body']))['issues'] if item['id'] == data.get('issue_id')), None)
+    issue = next((item for item in analyze(json.loads(snapshot['body']), db)['issues'] if item['id'] == data.get('issue_id')), None)
     message = next((item for item in issue['evidence'] if item['id'] == data.get('message_id') and item['sender_type'] == 'guest'), None) if issue else None
     if not message:
         raise ValueError('Choose a guest text from this request')
@@ -63,7 +88,7 @@ def approve(db, data, timestamp):
     age = dt.datetime.fromisoformat(timestamp) - dt.datetime.fromisoformat(snapshot['synced_at'])
     if not dt.timedelta(0) <= age <= dt.timedelta(minutes=10):
         raise ValueError('Refresh Hospitable before sending; the import must be less than 10 minutes old')
-    issue = next((item for item in analyze(snapshot)['issues'] if item['id'] == data.get('issue_id')), None)
+    issue = next((item for item in analyze(snapshot, db)['issues'] if item['id'] == data.get('issue_id')), None)
     message = next((item for item in issue['evidence'] if item['id'] == data.get('message_id') and item['sender_type'] == 'guest'), None) if issue else None
     if not message:
         raise ValueError('Choose a guest text from this request')
@@ -78,22 +103,71 @@ def approve(db, data, timestamp):
     if existing and existing['state'] not in ('blocked', 'failed'):
         raise ValueError('A send already exists for this guest text. Check its status in Hospitable before replying again.')
     context = {'property_id': issue['property_ids'][0], 'conversation_id': issue['conversation_id'], 'source_messages_fingerprint': issue['source_messages_fingerprint'], 'source_fingerprint': current['source_fingerprint'], 'draft_version': current['version'], 'check_in': issue['check_in'], 'check_out': issue['check_out']}
+    context['instruction_versions'] = current['instruction_versions']
+    context['instruction_context'] = current['instruction_context']
+    context['stay_adjustment_ids'] = list(dict.fromkeys([*issue.get('stay_adjustment_ids', []), *current['stay_policy_approvals']]))
+    context['prearrival_reply'] = issue.get('stay_phase') == 'upcoming' and issue['category'] == 'Instructions'
     identifier = existing['id'] if existing else str(uuid.uuid4())
     db.execute("INSERT INTO guest_reply_sends VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, NULL, ?) ON CONFLICT(reservation_id, message_id) DO UPDATE SET issue_id = excluded.issue_id, body = excluded.body, context = excluded.context, state = 'queued', reference = NULL, error = NULL, approved_at = excluded.approved_at, attempted_at = NULL, updated_at = excluded.updated_at", (identifier, issue['reservation_id'], message['id'], issue['id'], current['body'], json.dumps(context), timestamp, timestamp))
     db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'guest_reply_approved', timestamp, json.dumps({'send_id': identifier, 'message_id': message['id'], 'draft_version': current['version']})))
     return {'id': identifier, 'state': 'queued'}
 
 
-def deliver_pending(connect, stop):
+def emergency_reply_exists(messages, reported_at):
+    reported = dt.datetime.fromisoformat(reported_at)
+    for message in messages:
+        if message['sender_type'] != 'host' or message.get('source') not in ('platform', 'hospitable') or dt.datetime.fromisoformat(message['created_at']) <= reported:
+            continue
+        text = (message.get('body') or '').replace('\u2019', "'")
+        for sentence in re.findall(r'[^.!?\n]+[.!?]?', text):
+            if sentence.rstrip().endswith('?') or re.search(r"\b(?:do not|don.t|no need to|not necessary to|avoid)\s+(?:call|dial|contact)\b", sentence, re.IGNORECASE):
+                continue
+            if re.search(r'\b(?:call|dial|contact)\b.{0,40}\b(?:911|9-1-1|800[ .-]752[ .-]7504|emergency services|fire department)\b', sentence, re.IGNORECASE):
+                return True
+    return False
+
+
+def queue_safety_replies(db, alerts, snapshot, timestamp):
+    from fulfillment import profile
+    from safety import POLICY_VERSION, detect, guest_message
+    conversations = {item['reservation_id']: item for item in snapshot['conversations']}
+    current = dt.datetime.fromisoformat(timestamp)
+    for alert in alerts:
+        conversation = conversations[alert['reservation_id']]
+        message = next((item for item in conversation['messages'] if item['id'] == alert['message_id']), None)
+        if not message:
+            continue
+        if not dt.timedelta(0) <= current - dt.datetime.fromisoformat(message['created_at']) <= dt.timedelta(minutes=10):
+            continue
+        if emergency_reply_exists(conversation['messages'], message['created_at']):
+            continue
+        if db.execute('SELECT 1 FROM guest_reply_sends WHERE reservation_id = ? AND message_id = ?', (alert['reservation_id'], alert['message_id'])).fetchone():
+            continue
+        kind = detect(message['body'])
+        if not kind:
+            raise ValueError('Safety alert has no matching hazard')
+        property_id = conversation['property_ids'][0]
+        destination = profile(db, property_id)
+        city = conversation.get('city') or (destination or {}).get('address', {}).get('city') or 'Charlotte'
+        context = {'property_id': property_id, 'conversation_id': conversation['conversation_id'], 'source_messages_fingerprint': conversation['source_messages_fingerprint'], 'check_in': conversation['check_in'], 'check_out': conversation['check_out'], 'automatic_safety': kind, 'safety_policy': POLICY_VERSION, 'safety_city': city, 'safety_message_hash': hashlib.sha256(message['body'].encode()).hexdigest()}
+        identifier = str(uuid.uuid5(uuid.NAMESPACE_URL, 'guest-recovery:safety:' + alert['reservation_id'] + ':' + alert['message_id']))
+        issue_id = alert['reservation_id'] + ':safety'
+        db.execute("INSERT INTO guest_reply_sends VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, NULL, ?)", (identifier, alert['reservation_id'], alert['message_id'], issue_id, guest_message(kind, city), json.dumps(context), timestamp, timestamp))
+        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue_id, 'safety_guest_reply_queued', timestamp, json.dumps({'send_id': identifier, 'kind': kind, 'automatic': True})))
+
+
+def deliver_pending(connect, stop, queue='standard'):
     from hospitable import get
+    if queue not in ('standard', 'safety'):
+        raise ValueError('Unknown guest-message queue')
     with connect() as db:
-        for row in db.execute("SELECT id, issue_id FROM guest_reply_sends WHERE state = 'attempting'").fetchall():
-            timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        for row in db.execute("SELECT id, issue_id FROM guest_reply_sends WHERE state = 'attempting' AND CASE WHEN json_extract(context, '$.automatic_safety') IS NULL THEN 'standard' ELSE 'safety' END = ?", (queue,)).fetchall():
+            timestamp = dt.datetime.now(dt.UTC).isoformat()
             db.execute("UPDATE guest_reply_sends SET state = 'unknown', error = 'The app restarted during sending. Check Hospitable before sending anything else.', updated_at = ? WHERE id = ?", (timestamp, row['id']))
             db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['issue_id'], 'guest_reply_send_unknown', timestamp, json.dumps({'send_id': row['id'], 'reason': 'restart'})))
     while not stop.wait(2):
         with connect() as db:
-            rows = db.execute("SELECT * FROM guest_reply_sends WHERE state = 'queued' ORDER BY approved_at LIMIT 10").fetchall()
+            rows = db.execute("SELECT * FROM guest_reply_sends WHERE state = 'queued' AND CASE WHEN json_extract(context, '$.automatic_safety') IS NULL THEN 'standard' ELSE 'safety' END = ? ORDER BY approved_at LIMIT 10", (queue,)).fetchall()
         for row in rows:
             if stop.is_set():
                 return
@@ -102,7 +176,7 @@ def deliver_pending(connect, stop):
             error = None
             try:
                 context = json.loads(row['context'])
-                current = dt.datetime.now(dt.timezone.utc)
+                current = dt.datetime.now(dt.UTC)
                 if not dt.timedelta(0) <= current - dt.datetime.fromisoformat(row['approved_at']) <= dt.timedelta(minutes=10):
                     raise ValueError('Approval expired. Review and approve the draft again.')
                 token = os.environ.get('HOSPITABLE_TOKEN')
@@ -112,19 +186,42 @@ def deliver_pending(connect, stop):
                     since = (current - dt.timedelta(minutes=5)).isoformat()
                     recent = db.execute("SELECT COUNT(*) AS count FROM audit WHERE action = 'guest_reply_send_attempted' AND at >= ?", (since,)).fetchone()['count']
                     same = db.execute("SELECT 1 FROM audit WHERE action = 'guest_reply_send_attempted' AND json_extract(details, '$.reservation_id') = ? AND at >= ?", (row['reservation_id'], (current - dt.timedelta(minutes=1)).isoformat())).fetchone()
+                if context.get('automatic_safety'):
+                    with connect() as db:
+                        recent = db.execute("SELECT COUNT(*) AS count FROM audit WHERE action = 'guest_reply_send_attempted' AND json_extract(details, '$.automatic_safety') IS NOT NULL AND at >= ?", (since,)).fetchone()['count']
+                        same = db.execute("SELECT 1 FROM audit WHERE action = 'guest_reply_send_attempted' AND json_extract(details, '$.automatic_safety') IS NOT NULL AND json_extract(details, '$.reservation_id') = ? AND at >= ?", (row['reservation_id'], (current - dt.timedelta(minutes=1)).isoformat())).fetchone()
                 if recent >= 40 or same:
                     continue
                 reservation = get('reservations/' + row['reservation_id'] + '?include=properties', token)
-                check_in = dt.datetime.fromisoformat(reservation['check_in'].replace('Z', '+00:00'))
-                check_out = dt.datetime.fromisoformat(reservation['check_out'].replace('Z', '+00:00'))
-                if reservation['id'] != row['reservation_id'] or reservation['reservation_status']['current']['category'] != 'accepted' or not check_in <= current < check_out or [item['id'] for item in reservation['properties']] != [context['property_id']] or reservation['conversation_id'] != context['conversation_id'] or reservation['check_in'] != context['check_in'] or reservation['check_out'] != context['check_out']:
+                from stay_adjustments import effective_stay, verify_for_reply
+                with connect() as db:
+                    bounds = effective_stay(db, {'reservation_id': row['reservation_id'], 'property_ids': [item['id'] for item in reservation['properties']], 'check_in': reservation['check_in'], 'check_out': reservation['check_out']})
+                check_in = dt.datetime.fromisoformat(bounds['effective_check_in'])
+                check_out = dt.datetime.fromisoformat(bounds['effective_check_out'])
+                prearrival = bool(context.get('prearrival_reply') or context.get('automatic_safety')) and current < check_in <= current + dt.timedelta(days=2)
+                if reservation['id'] != row['reservation_id'] or reservation['reservation_status']['current']['category'] != 'accepted' or not (check_in <= current < check_out or prearrival) or [item['id'] for item in reservation['properties']] != [context['property_id']] or reservation['conversation_id'] != context['conversation_id'] or reservation['check_in'] != context['check_in'] or reservation['check_out'] != context['check_out']:
                     raise ValueError('Reservation details changed. Refresh Hospitable and review the reply again.')
+                if context.get('stay_adjustment_ids') and not context.get('automatic_safety'):
+                    verify_for_reply(connect, context['stay_adjustment_ids'])
                 messages = get('reservations/' + row['reservation_id'] + '/messages', token)
                 fingerprint = hashlib.sha256(json.dumps(sorted(messages, key=lambda message: str(message['id'])), sort_keys=True).encode()).hexdigest()
-                if fingerprint != context['source_messages_fingerprint'] or not any(str(message['id']) == row['message_id'] and message['sender_type'] == 'guest' and message['conversation_id'] == context['conversation_id'] for message in messages):
+                original = next((message for message in messages if str(message['id']) == row['message_id'] and message['sender_type'] == 'guest' and message['conversation_id'] == context['conversation_id']), None)
+                if context.get('automatic_safety'):
+                    from safety import POLICY_VERSION, detect, guest_message
+                    if not original or detect(original['body']) != context['automatic_safety'] or hashlib.sha256(original['body'].encode()).hexdigest() != context['safety_message_hash'] or context.get('safety_policy') != POLICY_VERSION or row['body'] != guest_message(context['automatic_safety'], context['safety_city']):
+                        raise ValueError('Safety report or emergency instructions changed; manager review is required.')
+                    if emergency_reply_exists(messages, original['created_at']):
+                        raise ValueError('The property manager has already sent emergency calling instructions.')
+                    for message in messages:
+                        if dt.datetime.fromisoformat(message['created_at']) <= dt.datetime.fromisoformat(original['created_at']):
+                            continue
+                        if message['sender_type'] == 'guest' and re.search(r'\b(?:false alarm|all clear|resolved|no longer (?:smell|smelling)|(?:no|not) (?:a )?gas leak)\b', message.get('body') or '', re.IGNORECASE):
+                            raise ValueError('The guest has updated or withdrawn the safety report; manager review is required.')
+                elif fingerprint != context['source_messages_fingerprint'] or not original:
                     raise ValueError('The conversation changed. Refresh Hospitable and review the reply again.')
-                current = dt.datetime.now(dt.timezone.utc)
-                if not check_in <= current < check_out or current - dt.datetime.fromisoformat(row['approved_at']) > dt.timedelta(minutes=10):
+                current = dt.datetime.now(dt.UTC)
+                prearrival = bool(context.get('prearrival_reply') or context.get('automatic_safety')) and current < check_in <= current + dt.timedelta(days=2)
+                if not (check_in <= current < check_out or prearrival) or current - dt.datetime.fromisoformat(row['approved_at']) > dt.timedelta(minutes=10):
                     raise ValueError('The stay ended or approval expired. Refresh and review before sending.')
                 timestamp = current.isoformat()
                 with connect() as db:
@@ -133,10 +230,23 @@ def deliver_pending(connect, stop):
                     saved = db.execute('SELECT * FROM guest_reply_drafts WHERE issue_id = ? AND message_id = ?', (row['issue_id'], row['message_id'])).fetchone()
                     if live['state'] != 'queued' or live['context'] != row['context']:
                         continue
-                    if not saved or saved['version'] != context['draft_version'] or saved['body'] != row['body'] or saved['source_fingerprint'] != context['source_fingerprint']:
+                    if not context.get('automatic_safety') and (not saved or saved['version'] != context['draft_version'] or saved['body'] != row['body'] or saved['source_fingerprint'] != context['source_fingerprint']):
                         raise ValueError('The draft changed after approval. Review and approve again.')
+                    if context.get('automatic_safety') and not db.execute('SELECT 1 FROM safety_alerts WHERE reservation_id = ? AND message_id = ?', (row['reservation_id'], row['message_id'])).fetchone():
+                        raise ValueError('The recorded safety alert is missing; manager review is required.')
+                    for expected in context.get('instruction_versions', []):
+                        answer = db.execute('SELECT version FROM property_answers WHERE property_id = ? AND intent = ?', (expected['property_id'], expected['intent'])).fetchone()
+                        if not answer or answer['version'] != expected['version']:
+                            raise ValueError('Property instructions changed after approval. Review the latest answer before sending.')
+                    if context.get('instruction_context'):
+                        from research import analyze
+                        snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+                        issue = next((item for item in analyze(json.loads(snapshot['body']), db)['issues'] if item['id'] == row['issue_id']), None) if snapshot else None
+                        question = next((item for item in issue['evidence'] if item['id'] == row['message_id']), None) if issue else None
+                        if not question or draft(db, issue, question)['instruction_context'] != context['instruction_context']:
+                            raise ValueError('The instruction answer changed. Review and approve the current answer before sending.')
                     db.execute("UPDATE guest_reply_sends SET state = 'attempting', attempted_at = ?, updated_at = ? WHERE id = ?", (timestamp, timestamp, row['id']))
-                    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['issue_id'], 'guest_reply_send_attempted', timestamp, json.dumps({'send_id': row['id'], 'reservation_id': row['reservation_id']})))
+                    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['issue_id'], 'guest_reply_send_attempted', timestamp, json.dumps({'send_id': row['id'], 'reservation_id': row['reservation_id'], 'automatic_safety': context.get('automatic_safety')})))
                 state = 'unknown'
                 request = urllib.request.Request('https://public.api.hospitable.com/v2/reservations/' + row['reservation_id'] + '/messages', data=json.dumps({'body': row['body']}).encode(), method='POST', headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json', 'Content-Type': 'application/json'})
                 try:
@@ -155,21 +265,23 @@ def deliver_pending(connect, stop):
                     else:
                         error = 'Send outcome is unknown. Check Hospitable before sending again.'
                 except Exception:
+                    logging.getLogger(__name__).exception(json.dumps({'event': 'guest_reply_send_unconfirmed', 'send_id': row['id']}))
                     error = 'Send outcome is unknown. Check Hospitable before sending again.'
             except Exception as failure:
+                logging.getLogger(__name__).exception(json.dumps({'event': 'guest_reply_verification_failed', 'send_id': row['id']}))
                 error = str(failure) if isinstance(failure, ValueError) else 'Could not verify the current Hospitable conversation. Refresh and review before approving again.'
             with connect() as db:
-                timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+                timestamp = dt.datetime.now(dt.UTC).isoformat()
                 db.execute('BEGIN IMMEDIATE')
                 db.execute('UPDATE guest_reply_sends SET state = ?, reference = ?, error = ?, updated_at = ? WHERE id = ? AND state IN (\'queued\',\'attempting\') AND context = ?', (state, reference, error, timestamp, row['id'], row['context']))
                 db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['issue_id'], 'guest_reply_send_' + state, timestamp, json.dumps({'send_id': row['id']})))
-            logging.info(json.dumps({'event': 'guest_reply_send_' + state, 'send_id': row['id']}))
+            logging.getLogger(__name__).info(json.dumps({'event': 'guest_reply_send_' + state, 'send_id': row['id']}))
 
 
-def deliver(connect, stop):
+def deliver(connect, stop, queue='standard'):
     while not stop.is_set():
         try:
-            deliver_pending(connect, stop)
+            deliver_pending(connect, stop, queue)
         except Exception as error:
-            logging.error(json.dumps({'event': 'guest_reply_worker_failed', 'error_type': type(error).__name__}))
+            logging.getLogger(__name__).exception(json.dumps({'event': 'guest_reply_worker_failed', 'queue': queue, 'error_type': type(error).__name__}))
             stop.wait(15)

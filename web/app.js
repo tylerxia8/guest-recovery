@@ -16,6 +16,9 @@ function date(value) {
 function title(issue) {
   return issue.worksheet ? 'Missing hand towels' : {Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
 }
+function problemTypes(issue, message) {
+  return issue.problem_types?.[message.id] || [issue.category];
+}
 const purchaseDrafts = new Map();
 let renderedIssues = '';
 let renderedPreferences = '';
@@ -180,7 +183,7 @@ function showSettings() {
   document.querySelector('#inbox-workspace').hidden = true;
   document.querySelector('#settings-toggle').textContent = 'Back to inbox';
   document.querySelector('#page-title').textContent = 'Settings';
-  document.querySelector('#page-subtitle').textContent = 'Properties, cleaner, and email.';
+  document.querySelector('#page-subtitle').textContent = 'Properties, maintenance, cleaner, and email.';
 }
 document.querySelector('#settings-toggle').onclick = () => {
   if (document.querySelector('#settings-workspace').hidden) { showSettings(); return; }
@@ -217,7 +220,8 @@ function render() {
     }
   }
   for (const [lane, label] of [['needs_attention', 'Needs attention'], ['likely_resolved', 'Likely resolved'], ['practice', 'Practice']]) view.querySelector(`option[value="${lane}"]`).textContent = `${label} (${texts.filter(text => (text.issues[0].lane || 'practice') === lane).length})`;
-  const visible = texts.filter(text => (text.issues[0].lane || 'practice') === view.value && (!category || text.issues.some(issue => issue.category === category)) && (!search || `${text.issues[0].property} ${text.message.body}`.toLowerCase().includes(search)));
+  view.querySelector('option[value="all"]').textContent = `All saved texts (${texts.length})`;
+  const visible = texts.filter(text => (view.value === 'all' || (text.issues[0].lane || 'practice') === view.value) && (!category || text.issues.some(issue => problemTypes(issue, text.message).includes(category))) && (!search || `${text.issues[0].property} ${text.message.body}`.toLowerCase().includes(search)));
   if (!visible.some(text => text.key === selected)) selected = visible[0]?.key;
   document.querySelector('#result-count').textContent = String(visible.length);
   const requests = document.querySelector('#requests');
@@ -235,14 +239,23 @@ function render() {
   const container = document.querySelector('#issues');
   container.replaceChildren();
   const text = visible.find(item => item.key === selected);
-  if (!text) { container.append(node('p', 'No texts here. Try another view.', 'empty')); return; }
-  const issue = (category ? text.issues.find(item => item.category === category) : text.issues.find(item => item.id === selectedIssueByText.get(text.key))) || text.issues[0];
+  if (!text) {
+    container.append(node('p', 'No texts match these filters.', 'empty'));
+    if (texts.length) {
+      const showAll = node('button', 'Show all saved texts', 'secondary');
+      showAll.type = 'button';
+      showAll.onclick = () => { view.value = 'all'; document.querySelector('#category').value = ''; document.querySelector('#search').value = ''; render(); };
+      container.append(showAll);
+    }
+    return;
+  }
+  const issue = (category ? text.issues.find(item => problemTypes(item, text.message).includes(category)) : text.issues.find(item => item.id === selectedIssueByText.get(text.key))) || text.issues[0];
   const card = node('article', '', 'detail-card');
   const back = node('button', '← Texts', 'mobile-back secondary');
   back.type = 'button';
   back.onclick = () => document.querySelector('aside').scrollIntoView({behavior: 'smooth', block: 'start'});
   card.append(back);
-  card.append(node('p', issue.property, 'eyebrow'), node('p', issue.lane === 'practice' ? 'Practice · historical or unverified stay' : 'Current stay', 'help-text'));
+  card.append(node('p', issue.property, 'eyebrow'), node('p', issue.lane === 'practice' ? 'Practice · historical or unverified stay' : issue.stay_phase === 'upcoming' ? 'Upcoming arrival' : 'Current stay', 'help-text'));
   const quote = node('blockquote', text.message.body, 'guest-text');
   quote.append(node('cite', date(text.message.created_at)));
   card.append(quote);
@@ -442,7 +455,7 @@ function render() {
     }
     card.append(alternatives);
   }
-  card.append(node('p', 'Purchases are off. Guest replies require manager approval.', 'automation-note'));
+  card.append(node('p', 'Purchases are off. Safety reports trigger emergency guidance; other guest replies require approval.', 'automation-note'));
   const advanced = node('details', '', 'manager-advanced');
   advanced.append(node('summary', 'More controls'));
   while (card.firstChild) advanced.append(card.firstChild);
@@ -453,7 +466,7 @@ function render() {
   thread.append(node('h3', 'Text chain'), conversation);
   const selectedMessage = conversation.children[issue.messages.findIndex(item => item.id === text.message.id)];
   if (selectedMessage) selectedMessage.classList.add('selected-message');
-  const purchaseIssue = text.issues.find(item => item.category === 'Supplies') || issue;
+  const purchaseIssue = issue.category === 'Maintenance' ? issue : text.issues.find(item => item.category === 'Supplies') || issue;
   let purchaseControls = controls;
   if (purchaseIssue !== issue) {
     purchaseControls = node('details', '', 'action-details');
@@ -461,7 +474,9 @@ function render() {
     advanced.append(purchaseControls);
   }
   if (text.issues.some(item => item.category === 'Safety')) managerHeading.append(node('span', 'Urgent safety concern', 'urgent'));
-  layout.append(thread, managerSolutionCard(purchaseIssue, text.message, purchaseControls));
+  const safetyIssue = text.issues.find(item => item.category === 'Safety');
+  const solutionPanel = safetyIssue ? managerSolutionCard(safetyIssue, text.message, controls) : issue.category === 'Cleaning' ? cleanerReturnPanel(issue, text.message) : issue.category === 'Instructions' ? propertyInstructionPanel(issue, text.message) : managerSolutionCard(purchaseIssue, text.message, purchaseControls);
+  layout.append(thread, solutionPanel);
   history.remove();
   card.append(managerHeading, layout, advanced);
   container.append(card);
@@ -483,8 +498,11 @@ async function load() {
     const next = await response.json();
     const previousIssues = renderedIssues;
     const nextIssues = JSON.stringify(next.issues.map(({worksheet, ...issue}) => issue));
-    const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || renderedSupplier !== JSON.stringify(next.local_supplier) || !document.querySelector('#issues').firstChild;
+    const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || renderedSupplier !== JSON.stringify(next.local_supplier) || JSON.stringify(dataset.cleaner_scheduler) !== JSON.stringify(next.cleaner_scheduler) || JSON.stringify(dataset.maintenance) !== JSON.stringify(next.maintenance) || !document.querySelector('#issues').firstChild;
     dataset = next;
+    const maintenanceLink = document.querySelector('#maintenance-workspace-link');
+    maintenanceLink.hidden = !dataset.maintenance?.dashboard_url;
+    if (dataset.maintenance?.dashboard_url) maintenanceLink.href = dataset.maintenance.dashboard_url + '/maintenance/review';
     const connection = dataset.integration;
     const connectionText = connection.status === 'syncing' ? 'Syncing Hospitable…' : connection.status === 'connected' ? `Hospitable · Updated ${date(connection.last_success)}` : connection.status === 'error' ? connection.error : 'Connecting to Hospitable…';
     document.querySelector('#connection').textContent = connectionText;

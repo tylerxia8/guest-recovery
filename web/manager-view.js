@@ -1,6 +1,26 @@
 function managerSolutionCard(issue, message, controls) {
   const panel = node('section', '', 'manager-purchase');
   panel.append(node('h2', 'Solution'));
+  if (issue.category === 'Safety') {
+    panel.append(node('p', 'Urgent safety response', 'eyebrow'));
+    const reply = issue.guest_replies.find(item => item.message_id === message.id);
+    const alert = issue.safety_alerts?.find(item => item.message_id === message.id);
+    if (reply?.suggested) panel.append(node('blockquote', reply.suggested));
+    if (issue.lane === 'practice') panel.append(node('p', 'Historical practice case. No automatic alerts or messages are sent.', 'help-text'));
+    else {
+      const emailStates = {pending: 'Urgent manager email queued', sending: 'Sending urgent manager email', sent: 'Gmail accepted the manager alert', unknown: 'Manager email outcome unknown — contact the manager directly'};
+      panel.append(node('p', alert ? emailStates[alert.state] : 'No automatic manager alert recorded — contact the manager immediately.', alert?.state === 'sent' ? 'help-text' : 'warning'));
+      if (alert?.error) panel.append(node('p', alert.error, 'warning'));
+      const guestStates = {queued: 'Emergency guest message queued', attempting: 'Sending emergency instructions', accepted: 'Hospitable accepted the emergency message', blocked: 'Emergency message blocked — contact the guest immediately', failed: 'Emergency message failed — contact the guest immediately', unknown: 'Guest message outcome unknown — check Hospitable and contact the guest'};
+      panel.append(node('p', reply?.send ? guestStates[reply.send.state] : 'No emergency guest message recorded — contact the guest immediately.', reply?.send?.state === 'accepted' ? 'help-text' : 'warning'));
+    }
+    panel.append(node('p', 'Do not assume that emergency services have been called.', 'warning'));
+    return panel;
+  }
+  if (issue.category === 'Maintenance') {
+    panel.append(maintenancePanel(issue, message));
+    return panel;
+  }
   const request = issue.purchases.find(item => item.decision !== 'vetoed');
   const plan = issue.purchase_plans?.find(item => item.message_id === message.id);
   const subtitle = request || plan?.lines.length ? 'Amazon purchase' : {Maintenance: 'Repair', Cleaning: 'Cleaning follow-up', Instructions: 'Property instructions', Safety: 'Urgent manager review', Supplies: 'Supply replacement'}[issue.category];

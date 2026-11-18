@@ -21,7 +21,7 @@ class AuthError(Exception):
 
 
 def timestamp():
-    return dt.datetime.now(dt.timezone.utc).timestamp()
+    return dt.datetime.now(dt.UTC).timestamp()
 
 
 def credentials(data):
@@ -53,7 +53,7 @@ def create_user(db, data, role):
     identifier = str(uuid.uuid4())
     password_hash = digest(password, salt)
     db.execute('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)', (identifier, username, salt, password_hash, role, timestamp()))
-    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (identifier, 'manager_account_created', dt.datetime.now(dt.timezone.utc).isoformat(), json.dumps({'username': username, 'role': role})))
+    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (identifier, 'manager_account_created', dt.datetime.now(dt.UTC).isoformat(), json.dumps({'username': username, 'role': role})))
     return db.execute('SELECT * FROM users WHERE id = ?', (identifier,)).fetchone()
 
 
@@ -105,7 +105,7 @@ def login(connect, data, address, request_key):
                 raise AuthError(401, 'Account changed. Sign in again.')
             db.execute('DELETE FROM login_attempts WHERE key = ?', (keys[1],))
             token = new_session(db, latest, request_key)
-            db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (user['id'], 'manager_signed_in', dt.datetime.now(dt.timezone.utc).isoformat(), json.dumps({'username': username})))
+            db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (user['id'], 'manager_signed_in', dt.datetime.now(dt.UTC).isoformat(), json.dumps({'username': username})))
     if not valid:
         raise AuthError(401, 'Invalid username or password.')
     return token
@@ -145,5 +145,5 @@ if __name__ == '__main__':
             salt = secrets.token_bytes(16)
             db.execute('UPDATE users SET salt = ?, password_hash = ? WHERE id = ?', (salt, digest(password, salt), user['id']))
             db.execute('DELETE FROM sessions WHERE user_id = ?', (user['id'],))
-            db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (user['id'], 'manager_password_reset', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
+            db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (user['id'], 'manager_password_reset', dt.datetime.now(dt.UTC).isoformat(), '{}'))
     print('Account updated.')
