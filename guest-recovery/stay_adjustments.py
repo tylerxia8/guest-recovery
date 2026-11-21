@@ -169,7 +169,8 @@ def validate_remote(result, row):
     end = dt.datetime.fromisoformat(result['effective_checkout_at']).astimezone(EASTERN)
     booked_start = dt.datetime.fromisoformat(plan['check_in']).astimezone(EASTERN)
     booked_end = dt.datetime.fromisoformat(plan['check_out']).astimezone(EASTERN)
-    maximum = max(booked_end, dt.datetime.combine(booked_end.date(), dt.time(12), EASTERN))
+    internal = (row['scheduler_url'] or '').startswith('internal-scheduler:')
+    maximum = dt.datetime.combine(booked_end.date(), dt.time.max, EASTERN) if internal else max(booked_end, dt.datetime.combine(booked_end.date(), dt.time(12), EASTERN))
     if start.date() != booked_start.date() or start > booked_start or end.date() != booked_end.date() or end < booked_end or end > maximum:
         raise ValueError('The scheduler returned times outside this booking and stay policy.')
     if result['decision'] == 'approved':
@@ -214,7 +215,10 @@ def synchronize(connect, stop):
                     except SchedulerNotFound:
                         remote = None
                     if remote is None or remote.get('decision') == 'pending':
-                        remote = scheduler_request(origin, 'POST', '/v1/stay-adjustments', json.loads(row['payload']), row['id'])
+                        payload = json.loads(row['payload'])
+                        if settings.get('internal'):
+                            payload.update(booked_check_in=plan['check_in'], booked_check_out=plan['check_out'])
+                        remote = scheduler_request(origin, 'POST', '/v1/stay-adjustments', payload, row['id'])
                     result = validate_remote(remote, row)
                 except (ValueError, TypeError, KeyError, sqlite3.Error) as error:
                     with connect() as db:
@@ -251,7 +255,14 @@ def verify_for_reply(connect, identifiers):
             raise ValueError('The stay change is not connected to the scheduler.')
         if changed or row['state'] == 'invalidated' or not message:
             raise ValueError('Review the guest’s latest request before confirming a stay change.')
-        remote = validate_remote(scheduler_request(row['scheduler_url'], 'GET', '/v1/stay-adjustments/' + identifier), row)
+        if row['scheduler_url'].startswith('internal-scheduler:'):
+            plan = json.loads(row['plan'])
+            payload = json.loads(row['payload'])
+            payload.update(booked_check_in=plan['check_in'], booked_check_out=plan['check_out'])
+            response = scheduler_request(row['scheduler_url'], 'POST', '/v1/stay-adjustments', payload, identifier)
+        else:
+            response = scheduler_request(row['scheduler_url'], 'GET', '/v1/stay-adjustments/' + identifier)
+        remote = validate_remote(response, row)
         previous = json.loads(row['remote']) if row['remote'] else None
         with connect() as db:
             checked = dt.datetime.now(dt.UTC).isoformat()

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.tables import Assignment, Cleaner, CleaningTask, Property, Reservation
+from app.services.guest_stay_policy import assess
 from app.services.workspace_lock import SCHEDULE_PUBLICATION_LOCK, acquire_workspace_lock, get_workspace_id
 
 
@@ -128,14 +129,16 @@ def handle(session: Session, method: str, path: str, body: dict[str, Any] | None
         if path == "/v1/cleaner-returns":
             return _create_touchup(session, body)
         if path == "/v1/stay-adjustments":
+            acquire_workspace_lock(session, get_workspace_id(session), SCHEDULE_PUBLICATION_LOCK)
             reservation = _reservation(session, body)
-            return {
-                "request_id": body["request_id"],
-                "decision": "pending",
-                "reason": "manager_schedule_review_required",
-                "effective_checkin_at": reservation.checkin_at.isoformat(),
-                "effective_checkout_at": reservation.checkout_at.isoformat(),
-            }
+            if (
+                _time(body["booked_check_in"]) != reservation.checkin_at
+                or _time(body["booked_check_out"]) != reservation.checkout_at
+            ):
+                raise ValueError("The booking times changed. Refresh both reservation sources before confirming.")
+            return assess(
+                session, reservation, body["request_id"], body["kind"], _time(body["target_at"]), datetime.now(UTC)
+            )
     if method == "GET" and path.startswith("/v1/cleaner-returns/"):
         return _touchup_status(session, path.rsplit("/", 1)[1])
     raise ValueError("Use Cleaner Scheduling to review this operation.")

@@ -12,11 +12,26 @@ from app.services.weekly_availability import NY
 from app.workspaces import LEGACY_WORKSPACE_ID
 
 
-def baseline_checkout(session: Session, reservation: Reservation) -> datetime:
+def booked_checkout(session: Session, reservation: Reservation) -> datetime:
     if session.info.get("workspace_id", LEGACY_WORKSPACE_ID) == LEGACY_WORKSPACE_ID:
         return reservation.checkout_at
     morning = datetime.combine(reservation.checkout_at.astimezone(NY).date(), time(10), tzinfo=NY)
     return max(reservation.checkout_at, morning.astimezone(UTC))
+
+
+def baseline_checkout(session: Session, reservation: Reservation) -> datetime:
+    booked = booked_checkout(session, reservation)
+    approved = reservation.approved_guest_checkout_at
+    if approved is not None and approved.astimezone(NY).date() == booked.astimezone(NY).date():
+        return max(booked, approved)
+    return booked
+
+
+def effective_checkin(reservation: Reservation) -> datetime:
+    approved = reservation.approved_guest_checkin_at
+    if approved is not None and approved.astimezone(NY).date() == reservation.checkin_at.astimezone(NY).date():
+        return min(reservation.checkin_at, approved)
+    return reservation.checkin_at
 
 
 def departure_message(body: str) -> Literal["departed", "still_present", "unknown"]:

@@ -50,10 +50,15 @@ def test_touchup_is_separate_and_idempotent(monkeypatch):
     )
 
 
-def test_internal_timing_does_not_claim_approval(monkeypatch):
+def test_internal_timing_rejects_a_stale_booking(monkeypatch):
     clock = datetime.now(UTC)
     reservation = Reservation(checkin_at=clock, checkout_at=clock + timedelta(days=1))
     monkeypatch.setattr(service, "_reservation", lambda *_: reservation)
-    result = service.handle(Mock(), "POST", "/v1/stay-adjustments", {"request_id": "request"})
-    assert result["decision"] == "pending"
-    assert result["effective_checkout_at"] == reservation.checkout_at.isoformat()
+    monkeypatch.setattr(service, "acquire_workspace_lock", lambda *_: None)
+    with pytest.raises(ValueError, match="booking times changed"):
+        service.handle(
+            Mock(info={"workspace_id": uuid4()}),
+            "POST",
+            "/v1/stay-adjustments",
+            {"booked_check_in": clock.isoformat(), "booked_check_out": clock.isoformat()},
+        )

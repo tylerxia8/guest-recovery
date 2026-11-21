@@ -171,6 +171,8 @@ class Reservation(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     checkin_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     checkout_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    approved_guest_checkin_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_guest_checkout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

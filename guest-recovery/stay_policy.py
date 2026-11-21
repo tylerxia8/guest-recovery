@@ -1,4 +1,5 @@
 import datetime as dt
+import os
 import re
 import uuid
 from zoneinfo import ZoneInfo
@@ -66,6 +67,7 @@ def requested_clock(text):
 
 
 def request(issue, message, evaluated_at):
+    schedule_based = bool(os.environ.get('INTERNAL_SCHEDULER_WORKSPACE_ID'))
     body = message['body']
     if not isinstance(body, str):
         raise TypeError('Guest request must be text')
@@ -170,7 +172,15 @@ def request(issue, message, evaluated_at):
         if arrival_clock and arrival_clock >= arrival:
             reason = 'not_an_early_arrival'
     else:
-        if received >= cutoff:
+        if schedule_based and not ambiguous and clock_source != 'range':
+            target = departure_clock if clock is not None else departure + dt.timedelta(hours=1)
+            if target is None or target.date() != departure.date():
+                target = None
+                reason = 'time_clarification_required'
+            elif target <= current_checkout:
+                target = None
+                reason = 'already_covered'
+        elif received >= cutoff and not schedule_based:
             decision, reason = 'denied', 'after_cutoff'
         elif not ambiguous and clock_source == 'range':
             reason = 'time_clarification_required'
@@ -187,10 +197,11 @@ def request(issue, message, evaluated_at):
     if re.search(r'\b(?:policy|policies|rules)\b', context) and not re.search(r"\b(?:can|could|may|would)\s+(?:we|i)\b|\b(?:we|i).{0,10}(?:need|want|request|hoping)\b", text):
         target = None
         decision, reason = 'pending', 'policy_information'
-    normalized_clock = clock.isoformat() if clock else 'ready_now' if wants_early and clock_source in ('', 'range') else 'default_11' if wants_late and not clock_source else 'unresolved:' + context
+    normalized_clock = clock.isoformat() if clock else 'ready_now' if wants_early and clock_source in ('', 'range') else 'default_plus_hour' if schedule_based and wants_late and not clock_source else 'default_11' if wants_late and not clock_source else 'unresolved:' + context
     normalized_target = event_date.isoformat() + ':' + normalized_clock
     identifier = str(uuid.uuid5(uuid.NAMESPACE_URL, 'guest-recovery:stay-policy:' + issue['reservation_id'] + ':' + message['id'] + ':' + kind + ':' + normalized_target))
     result = {'request_id': identifier, 'policy_version': POLICY_VERSION, 'kind': kind, 'requested_at': received.astimezone(dt.UTC).isoformat(), 'target_at': target.astimezone(dt.UTC).isoformat() if target else None, 'target_source': source, 'cutoff_at': cutoff.astimezone(dt.UTC).isoformat(), 'decision': decision, 'reason': reason, 'can_request_scheduler': bool(target and decision == 'pending' and received <= current and (target > current or wants_early and target.date() == current.date() and current < arrival)), 'evaluated_at': current.astimezone(dt.UTC).isoformat(), 'booked_checkin_at': arrival.astimezone(dt.UTC).isoformat(), 'current_checkout_at': current_checkout.astimezone(dt.UTC).isoformat(), 'current_checkin_at': current_checkin.astimezone(dt.UTC).isoformat()}
+    result['schedule_based'] = schedule_based
     if source == 'ready_now' and target and decision == 'pending' and received <= current:
         result['can_request_scheduler'] = True
     result['body'] = policy_reply(result)
@@ -206,6 +217,8 @@ def policy_reply(proposal, remote=None):
     if proposal['reason'] == 'policy_information':
         if kind == 'early_checkin':
             return 'Early check-in is available once the home has been cleaned and is ready, without affecting another guest’s stay. Please wait for readiness confirmation before entering.'
+        if proposal.get('schedule_based'):
+            return 'A checkout extension of up to one hour is available before the checkout-day cleaning schedule is released, if the turnover and the next guest’s stay remain protected. A longer extension needs confirmation that cleaning and the next stay still fit.'
         return 'Requests received before 8 p.m. Eastern Time the night before checkout are eligible for 11 a.m. checkout when cleaning and the next guest’s stay remain protected. Noon checkout requires cleaning-schedule approval. Requests at or after that cutoff cannot receive an extension.'
     if remote and remote.get('request_id') != proposal['request_id']:
         raise ValueError('Scheduler response belongs to a different guest request')
@@ -228,6 +241,8 @@ def policy_reply(proposal, remote=None):
     if proposal['reason'] == 'after_cutoff':
         return 'Late checkout requests must be received before 8 p.m. Eastern Time the night before departure. Since this request arrived at or after that cutoff, we cannot offer this checkout extension. Your current checkout time remains ' + current_checkout + '.'
     if proposal['reason'] == 'multiple_stay_changes':
+        if proposal.get('schedule_based'):
+            return 'Please confirm each requested time in Eastern Time. Early arrival depends on cleaning completion. We’ll check a later checkout against the cleaning schedule and the next stay.'
         return 'Early check-in requires the home to be cleaned and ready. Late checkout requests must arrive before 8 p.m. Eastern Time the night before departure, and noon checkout requires cleaning-schedule confirmation. Please confirm the date and time for each change you would like. Neither change can affect another guest’s stay.'
     if proposal['reason'] == 'already_covered':
         return 'Your current checkout time is ' + current_checkout + '. The time you requested is already within your current stay.'
@@ -237,6 +252,10 @@ def policy_reply(proposal, remote=None):
         if proposal['reason'] in {'arrival_time_required', 'time_clarification_required', 'timezone_clarification_required', 'date_clarification_required'}:
             return 'Early check-in depends on the home being cleaned and ready, without affecting another guest’s stay. Please confirm the arrival date and time you would like, in Eastern Time. Please wait for confirmation before entering.'
         return 'Early check-in is possible once the home has been cleaned and is ready, as long as it does not affect another guest’s stay. We need to confirm that it is ready before you enter. Please wait for confirmation.'
+    if proposal.get('schedule_based'):
+        if not proposal['target_at']:
+            return 'Please confirm the checkout time you’d like, in Eastern Time. We’ll check it against the cleaning schedule and the next guest’s stay.'
+        return 'We’re checking whether your requested checkout time fits the cleaning schedule and the next guest’s stay. Please keep your current checkout time until we confirm.'
     if proposal['reason'] in {'time_clarification_required', 'timezone_clarification_required', 'date_clarification_required', 'unsupported_checkout_time', 'not_a_late_departure'}:
         return 'Our standard checkout is 10 a.m. Requests received before 8 p.m. Eastern Time the night before departure may qualify for 11 a.m.; noon checkout also requires confirmation that the cleaning schedule can accommodate it. Please confirm the checkout time you are requesting. Any change must protect the next guest’s stay.'
     target = timestamp(proposal['target_at']) if proposal['target_at'] else None
