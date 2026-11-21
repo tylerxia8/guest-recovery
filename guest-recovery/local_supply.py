@@ -8,8 +8,8 @@ import sqlite3
 import uuid
 from zoneinfo import ZoneInfo
 
-from purchases import email_settings
 from mailer import email_ready, send_email
+from purchases import email_settings
 
 SUPPORTED = ('laundry_pods', 'trash_bags', 'dish_pods', 'toilet_paper', 'paper_towels', 'dish_soap', 'sponges', 'rinse_aid', 'soap', 'shampoo', 'conditioner', 'body_wash', 'bath_soap')
 
@@ -37,7 +37,7 @@ def live_context(db, issue, snapshot, timestamp):
         raise LiveRequestUnavailable('Confirm cleaner coverage, email, and supported items first.')
     if not email_ready(email_settings()):
         raise LiveRequestUnavailable('Configure email sending before using real inquiries.')
-    if not current < dt.datetime.fromisoformat(issue['check_out'].replace('Z', '+00:00')):
+    if not current < dt.datetime.fromisoformat(issue['check_out']):
         raise LiveRequestUnavailable('This stay has ended.')
     return destination, supplier
 
@@ -54,7 +54,7 @@ def recheck_live(db, details, issue_id, timestamp):
     items = [item for item in issue['item_types'] if item in supplier['item_types']]
     if destination['property_id'] != details['property_id'] or issue['property'] != details['property'] or destination['version'] != details['profile_version'] or supplier['version'] != details['supplier_version'] or supplier['email'] != details['email'] or items != details['item_types'] or fingerprint != details['evidence_fingerprint']:
         raise LiveRequestUnavailable('The unit profile, cleaner settings, or complaint changed. Review and create a new inquiry.')
-    if dt.datetime.fromisoformat(details['needed_by']) > dt.datetime.fromisoformat(issue['check_out'].replace('Z', '+00:00')):
+    if dt.datetime.fromisoformat(details['needed_by']) > dt.datetime.fromisoformat(issue['check_out']):
         raise LiveRequestUnavailable('The needed-by time is after checkout.')
 
 
@@ -68,7 +68,7 @@ def describe(row):
     request['details'] = json.loads(request.pop('body'))
     request.pop('payload')
     request.pop('email_id')
-    current = dt.datetime.now(dt.timezone.utc)
+    current = dt.datetime.now(dt.UTC)
     details = request['details']
     request['fallback'] = False
     if details.get('received_at'):
@@ -152,12 +152,12 @@ def change(db, path, data, timestamp):
                 raise ValueError('The displayed request or settings changed. Refresh and confirm the listed items again.')
             if data.get('needed_confirmed') is not True:
                 raise ValueError('Confirm these listed items are still needed and authorize the real availability email.')
-            if needed > dt.datetime.fromisoformat(issue['check_out'].replace('Z', '+00:00')):
+            if needed > dt.datetime.fromisoformat(issue['check_out']):
                 raise ValueError('Needed-by time must be before checkout')
         if db.execute("SELECT id FROM local_requests WHERE issue_id = ? AND state IN ('pending', 'available')", (issue['id'],)).fetchone():
             raise ValueError('Cancel the existing cleaner check before requesting another')
         identifier = str(uuid.uuid4())
-        body = {'property_id': property_id, 'property': issue['property'], 'email': supplier['email'], 'item_types': items, 'needed_by': needed.astimezone(dt.timezone.utc).isoformat(), 'reply_by': min(current + dt.timedelta(minutes=minutes), needed).astimezone(dt.timezone.utc).isoformat()}
+        body = {'property_id': property_id, 'property': issue['property'], 'email': supplier['email'], 'item_types': items, 'needed_by': needed.astimezone(dt.UTC).isoformat(), 'reply_by': min(current + dt.timedelta(minutes=minutes), needed).astimezone(dt.UTC).isoformat()}
         body['mode'] = mode
         simulation = mode != 'live'
         if mode == 'live':
@@ -195,7 +195,7 @@ def change(db, path, data, timestamp):
                 raise ValueError('Arrival must be in the future and no later than the needed-by time; otherwise record unavailable')
             if data.get('items_confirmed') is not True:
                 raise ValueError('Confirm that the cleaner has all requested items')
-            details['arrival'] = arrival.astimezone(dt.timezone.utc).isoformat()
+            details['arrival'] = arrival.astimezone(dt.UTC).isoformat()
         state = {'available': 'available', 'unavailable': 'unavailable', 'cancel': 'cancelled', 'received': 'received'}[action]
         db.execute('UPDATE local_requests SET state = ?, body = ?, version = version + 1, updated_at = ? WHERE id = ?', (state, json.dumps(details), timestamp, identifier))
     db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (identifier, action, timestamp, json.dumps({'simulation': simulation})))
@@ -205,7 +205,7 @@ def change(db, path, data, timestamp):
 def deliver_requests(connect, stop):
     from catalog import ITEMS
     while not stop.is_set():
-        timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        timestamp = dt.datetime.now(dt.UTC).isoformat()
         try:
             with connect() as db:
                 db.execute('BEGIN IMMEDIATE')
@@ -216,7 +216,7 @@ def deliver_requests(connect, stop):
                     db.execute("UPDATE local_requests SET state = 'cancelled', body = ?, version = version + 1, updated_at = ? WHERE id = ?", (json.dumps(details), timestamp, row['id']))
                     db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_check_timed_out', timestamp, '{}'))
         except sqlite3.Error as error:
-            logging.error(json.dumps({'event': 'cleaner_deadline_update_failed', 'error_type': type(error).__name__}))
+            logging.getLogger(__name__).error(json.dumps({'event': 'cleaner_deadline_update_failed', 'error_type': type(error).__name__}))
             if stop.wait(15):
                 return
             continue
@@ -232,10 +232,10 @@ def deliver_requests(connect, stop):
                     with connect() as db:
                         db.execute('BEGIN IMMEDIATE')
                         current = db.execute('SELECT * FROM local_requests WHERE id = ?', (row['id'],)).fetchone()
-                        if current['state'] != 'pending' or current['notice_status'] != 'pending' or dt.datetime.now(dt.timezone.utc) >= dt.datetime.fromisoformat(details['reply_by']):
+                        if current['state'] != 'pending' or current['notice_status'] != 'pending' or dt.datetime.now(dt.UTC) >= dt.datetime.fromisoformat(details['reply_by']):
                             continue
                         if details.get('mode') == 'live':
-                            recheck_live(db, details, row['issue_id'], dt.datetime.now(dt.timezone.utc).isoformat())
+                            recheck_live(db, details, row['issue_id'], dt.datetime.now(dt.UTC).isoformat())
                         payload = json.loads(current['payload']) if current['payload'] else None
                         if payload is None:
                             timezone = details.get('timezone', 'America/New_York')
@@ -262,13 +262,13 @@ def deliver_requests(connect, stop):
                         email_id = str(uuid.UUID(email_id))
                     with connect() as db:
                         db.execute("UPDATE local_requests SET notice_status = 'sent', email_id = ?, error = NULL WHERE id = ?", (email_id, row['id']))
-                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_email_sent', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
+                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'cleaner_email_sent', dt.datetime.now(dt.UTC).isoformat(), '{}'))
                 except LiveRequestUnavailable as error:
                     with connect() as db:
-                        db.execute("UPDATE local_requests SET state = 'cancelled', error = ?, version = version + 1, updated_at = ? WHERE id = ? AND state = 'pending'", (str(error), dt.datetime.now(dt.timezone.utc).isoformat(), row['id']))
-                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'live_cleaner_inquiry_blocked', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
+                        db.execute("UPDATE local_requests SET state = 'cancelled', error = ?, version = version + 1, updated_at = ? WHERE id = ? AND state = 'pending'", (str(error), dt.datetime.now(dt.UTC).isoformat(), row['id']))
+                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'live_cleaner_inquiry_blocked', dt.datetime.now(dt.UTC).isoformat(), '{}'))
                 except Exception as error:
-                    logging.error(json.dumps({'event': 'cleaner_email_failed', 'request_id': row['id'], 'error_type': type(error).__name__}))
+                    logging.getLogger(__name__).error(json.dumps({'event': 'cleaner_email_failed', 'request_id': row['id'], 'error_type': type(error).__name__}), exc_info=(RuntimeError, RuntimeError(type(error).__name__), error.__traceback__))
                     message = 'Gmail send outcome is unconfirmed. The email may have arrived; check before resending. Use Amazon if the cleaner cannot confirm in time.' if settings['EMAIL_PROVIDER'] == 'gmail' else 'Email failed; use Amazon or cancel and retry the availability check'
                     with connect() as db:
                         db.execute("UPDATE local_requests SET notice_status = 'failed', error = ? WHERE id = ?", (message, row['id']))

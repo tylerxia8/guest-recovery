@@ -12,7 +12,15 @@ Run setup and deployment commands from the corresponding application directory. 
 
 ## Guest Recovery development
 
-From `guest-recovery/`, use Python 3.13 to run `python -m unittest discover -s tests -v`. Start a local instance with `PORT=3200 python app.py` and open `http://127.0.0.1:3200`. For a hosted instance, see its Dockerfile and configure its server-side environment separately.
+From `guest-recovery/`, use Python 3.13 to run `python -m unittest discover -s tests -v`. Start a local instance with `PORT=3200 python app.py` and open `http://127.0.0.1:3200`. For full property-answer retrieval locally, install `requirements.txt` and run `python instruction_search.py --prepare-model` from that directory. The Docker build includes this setup. Configure the server-side environment separately for hosted instances.
+
+Guest Recovery can draft property answers from manager-approved guidance and matching past replies. The recovered safety workflow queues manager alerts. Automatic emergency replies to guests require `AUTOMATIC_SAFETY_REPLIES=1`.
+
+### Co-located Cleaner Scheduling
+
+Set `INTERNAL_SCHEDULER_WORKSPACE_ID` to the single scheduler workspace ID assigned to this Guest Recovery instance. Use the monorepo root Docker build and configure the scheduler's normal `DATABASE_URL` with the restricted `cleaning_app` role and its required backend settings. Apply scheduler migrations through `0029_stay_times` before starting the co-located deployment. Guest Recovery calls the scheduler's Python service and never sends a scheduler HTTP request in this mode. The scheduler's HTTP manager and cleaner interfaces retain their existing authentication.
+
+Manager-confirmed return visits enter the scheduler as distinct touch-up tasks, with the guest-approved entry window. Use the regular schedule preview and publication controls to assign them. Guest Recovery reads status and completion from the same task. The scheduler approves early check-in only after verified turnover completion. Up to one extra hour is eligible before the checkout-day schedule is published. A longer extension requires an existing published or acknowledged cleaning assignment that still fits, with no other guest affected. Requests without enough evidence stay pending. Confirmed times protect scheduler occupancy and cleaning release times. The original Hospitable booking times stay intact, and guest replies still require review. Existing requests tied to a separate scheduler deployment keep their original connection identity.
 
 ## Source history
 

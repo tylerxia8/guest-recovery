@@ -19,7 +19,7 @@ def build(db, issue, message, choices=None):
     if type(choices.get('gift')) is not bool or not isinstance(choices.get('pack_sizes'), dict):
         raise ValueError('Choose optional chocolates and valid pack sizes')
     destination = profile(db, issue['property_ids'][0]) if len(issue['property_ids']) == 1 else None
-    kinds = [kind for kind in issue['item_types'] if kind != 'chocolates' and re.search(ITEMS[kind][1], message['body'].replace('\u2019', "'"), re.I)]
+    kinds = [kind for kind in issue['item_types'] if kind != 'chocolates' and re.search(ITEMS[kind][1], message['body'].replace('\u2019', "'"), re.IGNORECASE)]
     amounts = quantities({**issue, 'item_types': kinds, 'evidence': [message]}, destination)
     products = [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 AND property_id = ? ORDER BY item_type, room, id', (destination['property_id'],))] if destination else []
     products = [product for product in products if product['item_type'] == 'tv_remote']
@@ -88,10 +88,8 @@ def save(db, data, timestamp):
     if type(data.get('version')) is not int or data['version'] != current['version'] or data.get('source_fingerprint') != current['source_fingerprint']:
         raise ValueError('This plan or conversation changed. Reload and review before saving.')
     choices = data.get('choices')
-    if not isinstance(choices, dict):
-        raise ValueError('Choose plan options')
-    if not isinstance(choices.get('pack_sizes'), dict):
-        raise ValueError('Enter valid pack sizes')
+    if not isinstance(choices, dict) or type(choices.get('gift')) is not bool or not isinstance(choices.get('pack_sizes'), dict):
+        raise ValueError('Choose valid plan options and pack sizes')
     selected = {line['item_type']: line['asin'] for line in current['lines']}
     for kind, size in choices['pack_sizes'].items():
         if kind not in selected or not selected[kind] or not isinstance(size, dict) or size.get('asin') != selected[kind]:
