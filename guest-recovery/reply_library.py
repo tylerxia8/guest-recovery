@@ -244,12 +244,13 @@ def relevant_excerpt(question, answer):
 
 
 def retrieve(db, property_id, question, conversation_id=None, message_id=None, stay=None):
-    import numpy as np
-
-    from instruction_search import query_embedding
     rows = db.execute("SELECT conversation_id, question_id, question, answer, answer_ids, answered_at, scope, embedding FROM instruction_exchanges WHERE property_id = ? AND model_version = ? AND (scope = 'property' OR conversation_id = ?)", (property_id, INDEX_VERSION, conversation_id or '')).fetchall()
     if not rows:
         return []
+    import numpy as np
+
+    from instruction_search import query_embedding
+
     query = query_embedding(question)
     matrix = np.stack([np.frombuffer(row[7], dtype=np.float32) for row in rows])
     similarities = matrix @ query
