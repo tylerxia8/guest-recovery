@@ -140,3 +140,46 @@ details>p{font-size:13px}
 .manager-advanced>summary{font-size:12px}
 @media(min-width:1101px){.workspace{grid-template-columns:260px minmax(0,1fr)}.detail-card{padding:24px}.request-preview{-webkit-line-clamp:2}.page-heading p{display:none}.connection{margin:12px 0}main{margin-top:28px}}
 @media(max-width:1100px){.manager-layout{grid-template-columns:1fr}.manager-thread .conversation{max-height:45vh}.manager-purchase{margin-top:4px}}
+
+.phone-empty { display: none; }
+
+@media (max-width: 760px) {
+  header {
+    min-height: 0;
+    gap: 10px 12px;
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
+  }
+  main {
+    margin: 18px auto 0;
+    padding: 0 max(12px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  .brand { gap: 8px; font-size: 20px; }
+  .brand-symbol { width: 36px; height: 36px; font-size: 22px; }
+  .brand small { display: block; }
+  .account-controls { flex-wrap: wrap; gap: 6px; min-width: 0; }
+  header button, header .button { padding-inline: 9px; }
+  button, .button, summary { min-height: 44px; }
+  summary { padding-block: 10px; }
+  input:not([type="checkbox"]):not([type="radio"]), textarea, select, .search-label input { font-size: 16px; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  #inbox-workspace:not([data-phone-view="detail"]) #issues,
+  #inbox-workspace[data-phone-view="detail"] aside,
+  body:has(#inbox-workspace[data-phone-view="detail"]:not([hidden])) #issue-summary {
+    display: none;
+  }
+  #requests { max-height: none; overflow: visible; padding-right: 0; }
+  .phone-empty { display: block; margin: 8px 12px; }
+  #issues, .manager-thread, .manager-purchase { min-width: 0; }
+  .detail-card, .manager-purchase, .catalog-panel { padding: 14px; }
+  .detail-card { overflow-wrap: anywhere; }
+  .manager-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+  .manager-heading h2 { font-size: 17px; }
+  .manager-heading .urgent { grid-column: 1 / -1; justify-self: start; }
+  .mobile-back { margin-bottom: 0; }
+  .manager-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .manager-thread .conversation { max-height: 34vh; max-height: 34dvh; overscroll-behavior: contain; }
+  .manager-thread .message { padding: 9px 11px; }
+  .primary-actions, .purchase-actions { flex-wrap: wrap; }
+  .primary-actions button, .purchase-actions button { min-width: min(100%, 110px); }
+  .login-main .detail-card { padding: 18px; }
+}

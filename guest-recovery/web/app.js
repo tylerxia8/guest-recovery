@@ -3,6 +3,45 @@ let selected = null;
 let loading = false;
 let purchaseLinkSelected = false;
 const selectedIssueByText = new Map();
+const phoneViewport = window.matchMedia('(max-width: 760px)');
+const inboxWorkspace = document.querySelector('#inbox-workspace');
+let phoneDetail = false;
+let inboxScroll = 0;
+
+function showPhoneIssue() {
+  if (!phoneViewport.matches || phoneDetail) return;
+  inboxScroll = window.scrollY;
+  window.history.pushState({guestIssueOpen: true}, '');
+  phoneDetail = true;
+}
+
+function backToPhoneInbox() {
+  if (window.history.state?.guestIssueOpen) {
+    window.history.back();
+    return;
+  }
+  renderPhoneInbox();
+}
+
+function renderPhoneInbox() {
+  phoneDetail = false;
+  render();
+  requestAnimationFrame(() => {
+    const request = document.querySelector('#requests [aria-pressed="true"]');
+    request?.focus({preventScroll: true});
+    window.scrollTo(0, inboxScroll);
+  });
+}
+
+window.addEventListener('popstate', event => {
+  if (event.state?.guestIssueOpen) {
+    phoneDetail = true;
+    render();
+    return;
+  }
+  if (phoneDetail) renderPhoneInbox();
+});
+
 const notice = document.querySelector('#notice');
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -234,6 +273,7 @@ function render() {
     const target = texts.find(text => text.issues.some(issue => issue.purchases.some(request => request.id === requestedPurchase)));
     if (target) {
       selected = target.key;
+      if (phoneViewport.matches) phoneDetail = true;
       const targetIssue = target.issues.find(issue => issue.purchases.some(request => request.id === requestedPurchase));
       selectedIssueByText.set(target.key, targetIssue.id);
       view.value = target.issues[0].lane || 'practice';
@@ -243,9 +283,12 @@ function render() {
   view.querySelector('option[value="all"]').textContent = `All saved texts (${texts.length})`;
   const visible = texts.filter(text => (view.value === 'all' || (text.issues[0].lane || 'practice') === view.value) && (!category || text.issues.some(issue => problemTypes(issue, text.message).includes(category))) && (!search || `${text.issues[0].property} ${text.message.body}`.toLowerCase().includes(search)));
   if (!visible.some(text => text.key === selected)) selected = visible[0]?.key;
+  inboxWorkspace.dataset.phoneView = phoneDetail && visible.length ? 'detail' : 'list';
   document.querySelector('#result-count').textContent = String(visible.length);
   const requests = document.querySelector('#requests');
   requests.replaceChildren();
+  if (!visible.length) requests.append(node('p', 'No messages match these filters.', 'phone-empty'));
+
   for (const text of visible) {
     const issue = text.issues[0];
     const button = node('button', '', 'request');
@@ -253,7 +296,15 @@ function render() {
     button.setAttribute('aria-pressed', String(text.key === selected));
     button.append(node('span', issue.property, 'request-property'), node('span', text.message.body, 'request-preview'), node('span', date(text.message.created_at), 'request-time'));
     if (issue.priority === 'Urgent') button.append(node('span', 'Urgent', 'urgent'));
-    button.onclick = () => { selected = text.key; render(); if (window.matchMedia('(max-width:760px)').matches) document.querySelector('#issues').scrollIntoView({behavior: 'smooth', block: 'start'}); };
+    button.onclick = () => {
+      selected = text.key;
+      showPhoneIssue();
+      render();
+      if (phoneViewport.matches) {
+        document.querySelector('.mobile-back')?.focus({preventScroll: true});
+        document.querySelector('#issues').scrollIntoView({block: 'start'});
+      }
+    };
     requests.append(button);
   }
   const container = document.querySelector('#issues');
@@ -271,9 +322,9 @@ function render() {
   }
   const issue = (category ? text.issues.find(item => problemTypes(item, text.message).includes(category)) : text.issues.find(item => item.id === selectedIssueByText.get(text.key))) || text.issues[0];
   const card = node('article', '', 'detail-card');
-  const back = node('button', '← Texts', 'mobile-back secondary');
+  const back = node('button', '← Inbox', 'mobile-back secondary');
   back.type = 'button';
-  back.onclick = () => document.querySelector('aside').scrollIntoView({behavior: 'smooth', block: 'start'});
+  back.onclick = backToPhoneInbox;
   card.append(back);
   card.append(node('p', issue.property, 'eyebrow'), node('p', issue.lane === 'practice' ? 'Practice · historical or unverified stay' : issue.stay_phase === 'upcoming' ? 'Upcoming arrival' : 'Current stay', 'help-text'));
   const quote = node('blockquote', text.message.body, 'guest-text');
