@@ -1,12 +1,12 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /frontend
+    directory: /cleaner-scheduling/frontend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: uv
-    directory: /backend
+    directory: /cleaner-scheduling/backend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -1,5 +1,5 @@
 # Local evidence suite. No deployment, payment provider, or repository secret.
-name: ci
+name: Maintenance CI
 
 on:
   pull_request:
@@ -12,6 +12,10 @@ permissions:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: maintenance
 
 jobs:
   evidence:
@@ -28,7 +32,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: maintenance/apps/web/package-lock.json
 
       - name: Install PostgreSQL and ffmpeg
         run: |
@@ -38,7 +42,7 @@ jobs:
           pg_isready -h 127.0.0.1
           # psql runs as the postgres user and opens SQL files by path.
           # The runner home directory is not traversable by that user.
-          sudo chmod a+rx /home/runner /home/runner/work /home/runner/work/property-management-bot "$GITHUB_WORKSPACE"
+          sudo chmod a+rx /home/runner /home/runner/work "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE"
           sudo chmod -R a+rX "$GITHUB_WORKSPACE"
 
       - name: Install locked Python packages
@@ -56,7 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: regression-browser-failure
-          path: apps/web/test-results
+          path: maintenance/apps/web/test-results
           retention-days: 7
 
   demo-bundle:
@@ -69,7 +73,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: maintenance/apps/web/package-lock.json
 
       - name: Build the fixture demo and check loopback health
         run: |
@@ -113,7 +117,7 @@ jobs:
           python3 scripts/check_demo.py
 
       - name: Rehearse the packaged demo in Chromium
-        working-directory: apps/web
+        working-directory: maintenance/apps/web
         run: |
           npm ci
           npx playwright install --with-deps chromium
@@ -124,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: demo-browser-failure
-          path: apps/web/test-results
+          path: maintenance/apps/web/test-results
           retention-days: 7
 
       - name: Stop the CI sample
