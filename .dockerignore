@@ -2,5 +2,6 @@
 !Dockerfile
 !guest-recovery/
 !guest-recovery/*.py
+!guest-recovery/requirements.txt
 !guest-recovery/web/
 !guest-recovery/web/**

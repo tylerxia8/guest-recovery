@@ -18,7 +18,7 @@ def email_settings():
 
 def describe(row):
     request = dict(row)
-    current = dt.datetime.now(dt.timezone.utc)
+    current = dt.datetime.now(dt.UTC)
     request['eligible_at'] = None
     if row['decision'] == 'vetoed':
         request['status'] = 'Cancelled by manager'
@@ -183,7 +183,7 @@ def deliver_notices(connect, stop):
                                 db.execute('UPDATE purchase_requests SET email_payload = ? WHERE id = ?', (json.dumps(payload), row['id']))
                             if settings['EMAIL_PROVIDER'] == 'gmail':
                                 db.execute("UPDATE purchase_requests SET notice_status = 'sent', email_id = 'smtp:inflight' WHERE id = ?", (row['id'],))
-                        if dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(row['created_at']) >= dt.timedelta(hours=23):
+                        if dt.datetime.now(dt.UTC) - dt.datetime.fromisoformat(row['created_at']) >= dt.timedelta(hours=23):
                             raise ValueError('Notice expired; cancel and recreate the proposal')
                         result = send_email(settings, payload, 'purchase-notice/' + row['id'])
                         email_id = result['id']
@@ -191,13 +191,13 @@ def deliver_notices(connect, stop):
                             email_id = str(uuid.UUID(email_id))
                         with connect() as db:
                             db.execute("UPDATE purchase_requests SET email_id = ?, notice_status = 'sent', notified_at = ? WHERE id = ?", (email_id, result.get('accepted_at'), row['id']))
-                            db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'manager_email_sent', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
+                            db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'manager_email_sent', dt.datetime.now(dt.UTC).isoformat(), '{}'))
                     else:
                         if (row['email_id'] or '').startswith('smtp:'):
                             raise ValueError('Gmail send outcome is unknown; purchase remains blocked')
                         result = resend('emails/' + str(uuid.UUID(row['email_id'])), settings)
                         event = result['last_event']
-                        timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+                        timestamp = dt.datetime.now(dt.UTC).isoformat()
                         with connect() as db:
                             if event in ('delivered', 'opened', 'clicked'):
                                 db.execute("UPDATE purchase_requests SET notice_status = 'delivered', notified_at = ?, updated_at = ? WHERE id = ? AND notified_at IS NULL", (timestamp, timestamp, row['id']))
@@ -206,11 +206,11 @@ def deliver_notices(connect, stop):
                                 db.execute("UPDATE purchase_requests SET notice_status = 'failed', error = 'Email delivery failed', updated_at = ? WHERE id = ?", (timestamp, row['id']))
                                 db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'manager_email_failed', timestamp, '{}'))
                 except Exception as error:
-                    logging.error(json.dumps({'event': 'purchase_notice_failed', 'request_id': row['id'], 'error_type': type(error).__name__}))
+                    logging.getLogger(__name__).error(json.dumps({'event': 'purchase_notice_failed', 'request_id': row['id'], 'error_type': type(error).__name__}), exc_info=(RuntimeError, RuntimeError(type(error).__name__), error.__traceback__))
                     message = 'Gmail send outcome is unconfirmed. It may have arrived; check before resending. Purchase remains blocked.' if settings['EMAIL_PROVIDER'] == 'gmail' else 'Email not confirmed. Purchase remains blocked; check email configuration or cancel and recreate the notice.'
                     with connect() as db:
                         db.execute("UPDATE purchase_requests SET notice_status = 'failed', error = ? WHERE id = ?", (message, row['id']))
-                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'manager_email_failed', dt.datetime.now(dt.timezone.utc).isoformat(), '{}'))
+                        db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['id'], 'manager_email_failed', dt.datetime.now(dt.UTC).isoformat(), '{}'))
                 if stop.wait(0.6):
                     return
         stop.wait(15)

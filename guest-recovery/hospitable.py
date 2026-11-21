@@ -1,8 +1,8 @@
 import argparse
-from contextlib import closing
 import datetime as dt
-import json
 import hashlib
+import json
+import logging
 import os
 import sqlite3
 import time
@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from contextlib import closing
 
 from app import DATABASE, ROOT, audit, connect, initialize, mutate
 
@@ -43,11 +44,11 @@ def sync(identifier):
     reservation_id = str(uuid.UUID(reservation['id']))
     if reservation['reservation_status']['current']['category'] != 'accepted':
         raise ValueError('Only accepted reservations can be imported')
-    check_in = dt.datetime.fromisoformat(reservation['check_in'].replace('Z', '+00:00'))
-    check_out = dt.datetime.fromisoformat(reservation['check_out'].replace('Z', '+00:00'))
+    check_in = dt.datetime.fromisoformat(reservation['check_in'])
+    check_out = dt.datetime.fromisoformat(reservation['check_out'])
     if check_in.tzinfo is None or check_out.tzinfo is None:
         raise ValueError('Reservation dates must include timezones')
-    if not check_in <= dt.datetime.now(dt.timezone.utc) < check_out:
+    if not check_in <= dt.datetime.now(dt.UTC) < check_out:
         raise ValueError('Reservation is not currently in-house')
     properties = reservation['properties']
     if len(properties) != 1:
@@ -55,14 +56,14 @@ def sync(identifier):
     property_id = str(uuid.UUID(properties[0]['id']))
     messages = get('reservations/' + reservation_id + '/messages', token)
     if not isinstance(messages, list):
-        raise ValueError('Hospitable messages must be a list')
+        raise TypeError('Hospitable messages must be a list')
     imported = 0
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         for message in messages:
             if message['sender_type'] != 'guest' or message['content_type'] != 'text/plain':
                 continue
-            timestamp = dt.datetime.fromisoformat(message['created_at'].replace('Z', '+00:00'))
+            timestamp = dt.datetime.fromisoformat(message['created_at'])
             if timestamp.tzinfo is None:
                 raise ValueError('Message timestamp must include timezone')
             if timestamp < check_in or timestamp >= check_out:
@@ -99,27 +100,21 @@ def research():
             break
     else:
         raise ValueError('Property pagination limit reached; previous snapshot preserved')
-    current = dt.datetime.now(dt.timezone.utc)
+    current = dt.datetime.now(dt.UTC)
     end = current.date() + dt.timedelta(days=365 * 2)
     params = [('properties[]', item['id']) for item in properties] + [('status[]', 'accepted'), ('date_query', 'checkout'), ('start_date', str(current.date() - dt.timedelta(days=1))), ('end_date', str(end)), ('include', 'properties'), ('per_page', 100)]
     reservations = []
-    active_ids = []
-    upcoming_ids = []
     if properties:
         for page in range(1, 101):
             rows = get('reservations?' + urllib.parse.urlencode(params + [('page', page)]), token)
             for reservation in rows:
-                check_in = dt.datetime.fromisoformat(reservation['check_in'].replace('Z', '+00:00'))
-                check_out = dt.datetime.fromisoformat(reservation['check_out'].replace('Z', '+00:00'))
-                if reservation['reservation_status']['current']['category'] != 'accepted':
-                    continue
-                if check_in <= current < check_out:
-                    active_ids.append(str(uuid.UUID(reservation['id'])))
-                elif current < check_in <= current + dt.timedelta(days=7):
-                    upcoming_ids.append(str(uuid.UUID(reservation['id'])))
-                else:
-                    continue
-                reservations.append(reservation)
+                check_in = dt.datetime.fromisoformat(reservation['check_in'])
+                from stay_adjustments import effective_stay
+                candidate = {'reservation_id': str(reservation['id']), 'property_ids': [str(item['id']) for item in reservation['properties']], 'check_in': reservation['check_in'], 'check_out': reservation['check_out']}
+                with connect() as db:
+                    bounds = effective_stay(db, candidate)
+                if dt.datetime.fromisoformat(bounds['effective_check_out']) > current and check_in <= current + dt.timedelta(days=2) and reservation['reservation_status']['current']['category'] == 'accepted':
+                    reservations.append(reservation)
             if len(rows) < 100:
                 break
         else:
@@ -138,12 +133,36 @@ def research():
                 nontext += 1
                 continue
             if not isinstance(body, str):
-                raise ValueError('Unexpected message body; previous snapshot preserved')
-            timestamp = dt.datetime.fromisoformat(message['created_at'].replace('Z', '+00:00'))
+                raise TypeError('Unexpected message body; previous snapshot preserved')
+            timestamp = dt.datetime.fromisoformat(message['created_at'])
             if timestamp.tzinfo is None:
                 raise ValueError('Message timestamp requires timezone')
-            messages.append({'id': str(message['id']), 'sender_type': message['sender_type'], 'body': body, 'created_at': timestamp.astimezone(dt.timezone.utc).isoformat()})
+            messages.append({'id': str(message['id']), 'sender_type': message['sender_type'], 'source': message.get('source'), 'sender': message.get('sender'), 'body': body, 'created_at': timestamp.astimezone(dt.UTC).isoformat()})
         conversations.append({'reservation_id': identifier, 'property': ', '.join(item['name'] for item in reservation['properties']), 'property_ids': [str(uuid.UUID(item['id'])) for item in reservation['properties']], 'check_in': reservation['check_in'], 'check_out': reservation['check_out'], 'messages': messages, 'conversation_id': reservation['conversation_id'], 'source_messages_fingerprint': hashlib.sha256(json.dumps(sorted(rows, key=lambda row: str(row['id'])), sort_keys=True).encode()).hexdigest()})
+        from guest_replies import queue_safety_replies
+        from safety import ingest as ingest_safety
+        conversation = conversations[-1]
+        with connect() as db:
+            conversation.update(effective_stay(db, conversation))
+        property_data = next((item for item in properties if len(conversation['property_ids']) == 1 and item['id'] == conversation['property_ids'][0]), None)
+        city = ((property_data or {}).get('address') or {}).get('city') or 'Charlotte'
+        if not isinstance(city, str) or len(city) > 1000:
+            raise TypeError('Unexpected property city')
+        conversation['city'] = city
+        safety_now = dt.datetime.now(dt.UTC).isoformat()
+        safety_snapshot = {'synced_at': safety_now, 'active_reservation_ids': [identifier], 'upcoming_reservation_ids': [identifier], 'conversations': [conversation]}
+        with connect() as db:
+            ingest_safety(db, safety_snapshot, safety_now)
+        try:
+            with connect() as db:
+                alerts = [dict(row) for row in db.execute('SELECT reservation_id, message_id FROM safety_alerts WHERE reservation_id = ? AND created_at >= ?', (identifier, (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=10)).isoformat()))]
+                queue_safety_replies(db, alerts, safety_snapshot, safety_now)
+        except (sqlite3.Error, ValueError) as error:
+            logging.getLogger(__name__).error(json.dumps({'event': 'safety_guest_queue_failed', 'reservation_id': identifier, 'error_type': type(error).__name__}))
+        from stay_adjustments import ingest as ingest_stay_requests
+        stay_snapshot = {**safety_snapshot, 'upcoming_reservation_ids': [identifier]}
+        with connect() as db:
+            ingest_stay_requests(db, stay_snapshot, safety_now)
         print(json.dumps({'event': 'research_progress', 'conversations': len(conversations), 'total': len(reservations)}), flush=True)
     with connect() as db:
         previous = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
@@ -154,15 +173,15 @@ def research():
             matches = [item['id'] for item in properties if item['name'] == conversation['property']]
             if len(matches) == 1:
                 conversation['property_ids'] = [str(uuid.UUID(matches[0]))]
-    snapshot = {'synced_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': len(active_ids), 'nontext_message_count': nontext, 'scope': 'Active accepted reservations and arrivals within seven days are refreshed from Hospitable every five minutes after each completed import. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Suggested fixes use rules and require human review.'}
-    snapshot['active_reservation_ids'] = active_ids
-    snapshot['upcoming_reservation_ids'] = upcoming_ids
+    snapshot = {'synced_at': dt.datetime.now(dt.UTC).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': sum(dt.datetime.fromisoformat(item['effective_check_in']) <= current < dt.datetime.fromisoformat(item['effective_check_out']) for item in conversations), 'nontext_message_count': nontext, 'scope': 'Accepted current stays and arrivals within 48 hours are refreshed from Hospitable every five minutes after each completed import. Approved stay times are coordinated with the cleaning scheduler. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Guest replies require review except emergency safety guidance; stay-policy changes require scheduler confirmation.'}
+    snapshot['active_reservation_ids'] = [item['reservation_id'] for item in conversations if dt.datetime.fromisoformat(item['effective_check_in']) <= current < dt.datetime.fromisoformat(item['effective_check_out'])]
+    snapshot['upcoming_reservation_ids'] = [item['reservation_id'] for item in conversations if current < dt.datetime.fromisoformat(item['effective_check_in'])]
     with connect() as db:
         for item in properties:
             db.execute('INSERT INTO rental_units VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name', (str(uuid.UUID(item['id'])), item['name']))
             raw_address = item.get('address') or {}
             if not isinstance(raw_address, dict):
-                raise ValueError('Unexpected property address format')
+                raise TypeError('Unexpected property address format')
             fields = {}
             for field in ('number', 'street', 'city', 'state', 'postcode', 'country'):
                 value = raw_address.get(field)
@@ -179,7 +198,7 @@ def research():
             imported_address = {'line1': ' '.join(value for value in (fields['number'], fields['street']) if value), 'line2': '', 'city': fields['city'], 'region': fields['state'], 'postal_code': fields['postcode'], 'country': fields['country'].upper(), 'timezone': timezone}
             capacity = item.get('capacity') or {}
             if not isinstance(capacity, dict):
-                raise ValueError('Unexpected property capacity format')
+                raise TypeError('Unexpected property capacity format')
             home = {}
             for field, source in (('bedrooms', 'bedrooms'), ('bathrooms', 'bathrooms'), ('guests', 'max')):
                 value = capacity.get(source)
@@ -190,6 +209,9 @@ def research():
             imported_address['home'] = home
             db.execute('INSERT INTO fulfillment_profiles VALUES (?, ?, NULL, 0) ON CONFLICT(property_id) DO UPDATE SET imported_address = excluded.imported_address, version = fulfillment_profiles.version + 1 WHERE fulfillment_profiles.imported_address != excluded.imported_address', (str(uuid.UUID(item['id'])), json.dumps(imported_address, sort_keys=True)))
         db.execute('INSERT INTO research_snapshot VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body', (json.dumps(snapshot),))
+    from reply_library import learn
+    with connect() as db:
+        learn(db, conversations)
     print(json.dumps({'event': 'research_complete', 'conversations': len(conversations)}))
 
 
@@ -216,7 +238,13 @@ if __name__ == '__main__':
             descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(descriptor)
             with connect() as source, closing(sqlite3.connect(destination, timeout=5)) as target:
-                source.backup(target, pages=100, sleep=0.1)
+                deadline = time.monotonic() + 60
+
+                def progress(status, remaining, total):
+                    if time.monotonic() > deadline:
+                        raise TimeoutError('Database backup timed out')
+
+                source.backup(target, pages=100, sleep=0.1, progress=progress)
             print(json.dumps({'event': 'backup_complete'}))
     except (ValueError, KeyError, TypeError) as error:
         raise SystemExit(str(error)) from None

@@ -12,7 +12,9 @@ Run setup and deployment commands from the corresponding application directory. 
 
 ## Guest Recovery development
 
-From `guest-recovery/`, use Python 3.13 to run `python -m unittest discover -s tests -v`. Start a local instance with `PORT=3200 python app.py` and open `http://127.0.0.1:3200`. For a hosted instance, see its Dockerfile and configure its server-side environment separately.
+From `guest-recovery/`, use Python 3.13 to run `python -m unittest discover -s tests -v`. Start a local instance with `PORT=3200 python app.py` and open `http://127.0.0.1:3200`. For full property-answer retrieval locally, install `requirements.txt` and run `python instruction_search.py --prepare-model` from that directory. The Docker build includes this setup. Configure the server-side environment separately for hosted instances.
+
+Guest Recovery can draft property answers from manager-approved guidance and matching past replies. The recovered safety workflow queues manager alerts. Automatic emergency replies to guests require `AUTOMATIC_SAFETY_REPLIES=1`. The recovered cleaner-return and stay-adjustment flows need a scheduler deployment that supports their API endpoints. The Cleaner Scheduling snapshot in this repository does not expose those endpoints.
 
 ## Source history
 

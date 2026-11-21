@@ -1,5 +1,4 @@
 import datetime as dt
-from contextlib import contextmanager
 import hashlib
 import ipaddress
 import json
@@ -10,10 +9,11 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from settings import load_environment, public_origin
 
@@ -68,11 +68,6 @@ def initialize():
         CREATE UNIQUE INDEX IF NOT EXISTS active_purchase_proposal ON purchase_requests(issue_id) WHERE decision != 'vetoed';
         CREATE TABLE IF NOT EXISTS integration_state (id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT NOT NULL, last_attempt TEXT, last_success TEXT, error TEXT);
         CREATE TABLE IF NOT EXISTS worksheets (issue_id TEXT PRIMARY KEY, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS maintenance_repairs (issue_id TEXT PRIMARY KEY, body TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS issue_workflow (
-            issue_id TEXT PRIMARY KEY, decision TEXT NOT NULL, note TEXT NOT NULL,
-            fingerprint TEXT NOT NULL, version INTEGER NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS research_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, incident_id TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, details TEXT NOT NULL);
         ''')
@@ -92,13 +87,22 @@ def initialize():
         db.execute('CREATE TABLE IF NOT EXISTS purchase_plans (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS guest_reply_drafts (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
+        db.execute("CREATE TABLE IF NOT EXISTS cleaner_returns (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('draft','queued','submitted','uncertain','blocked','completed','cancelled')), remote TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_poll TEXT NOT NULL, attempted_at TEXT)")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_cleaner_return ON cleaner_returns(issue_id) WHERE state IN ('draft','queued','submitted','uncertain','blocked')")
+        db.execute('CREATE TABLE IF NOT EXISTS maintenance_links (issue_id TEXT PRIMARY KEY,ticket_id TEXT NOT NULL UNIQUE,source_fingerprint TEXT NOT NULL,remote TEXT NOT NULL,checked_at TEXT NOT NULL)')
+        from reply_library import initialize as initialize_reply_library
+        initialize_reply_library(db)
+        from safety import initialize as initialize_safety
+        initialize_safety(db)
+        from stay_adjustments import initialize as initialize_stay_policy
+        initialize_stay_policy(db)
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
             db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
     os.chmod(DATABASE, 0o600)
 
 
 def now():
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return dt.datetime.now(dt.UTC).isoformat()
 
 
 def required(data, field, maximum=200):
@@ -113,12 +117,24 @@ def audit(db, incident_id, action, details):
 
 
 def mutate(db, path, data):
-    if path in ('/api/maintenance', '/api/maintenance/status'):
-        from maintenance_bridge import change
-        return change(db, path, data, now())
-    if path == '/api/issue-workflow':
-        from issue_workflow import save
+    if path == '/api/property-instructions':
+        from property_instructions import save
         return save(db, data, now())
+    if path in ('/api/cleaner-returns/propose', '/api/cleaner-returns/approve-schedule', '/api/cleaner-returns/notify'):
+        from cleaner_returns import schedule_action
+        return schedule_action(db, path, data, now())
+    if path == '/api/cleaner-returns/decline':
+        from cleaner_returns import decline
+        return decline(db, data, now())
+    if path == '/api/cleaner-returns/retry':
+        from cleaner_returns import retry
+        return retry(db, data, now())
+    if path == '/api/cleaner-returns/confirm':
+        from cleaner_returns import confirm
+        return confirm(db, data, now())
+    if path == '/api/cleaner-returns':
+        from cleaner_returns import change
+        return change(db, data, now())
     if path == '/api/purchase-plans':
         from purchase_plans import save
         return save(db, data, now())
@@ -285,7 +301,15 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch(self):
         started = time.monotonic()
         trace = str(uuid.uuid4())
-        from auth import AuthError, cookie, create_user, login, new_session, require_csrf, session
+        from auth import (
+            AuthError,
+            cookie,
+            create_user,
+            login,
+            new_session,
+            require_csrf,
+            session,
+        )
         requested = self.path
         try:
             self.path = urlsplit(self.path).path
@@ -338,7 +362,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and self.path == '/api/auth/session':
                 self.respond(200, {'authenticated': bool(actor), 'setup_allowed': setup_allowed, 'username': actor['username'] if actor else None, 'role': actor['role'] if actor else None, 'csrf': actor['csrf'] if actor else None})
                 return
-            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/purchase-plans.js': ('purchase-plans.js', 'text/javascript'), '/manager-view.js': ('manager-view.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+            assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/purchase-plans.js': ('purchase-plans.js', 'text/javascript'), '/manager-view.js': ('manager-view.js', 'text/javascript'), '/maintenance.js': ('maintenance.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if self.command == 'GET' and self.path == '/':
                 if not actor:
                     target = requested if re.fullmatch(r'/\?purchase=[a-f0-9-]{36}', requested) else '/'
@@ -349,6 +373,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
+                return
+            if self.command == 'GET' and self.path == '/cleaner-returns.js':
+                self.respond(200, (ROOT / 'web' / 'cleaner-returns.js').read_bytes(), 'text/javascript')
+                return
+            if self.command == 'GET' and self.path == '/property-instructions.js':
+                self.respond(200, (ROOT / 'web' / 'property-instructions.js').read_bytes(), 'text/javascript')
                 return
             if self.command == 'GET' and self.path in ('/cleaner-response', '/cleaner-response.js'):
                 filename = 'cleaner-response.js' if self.path.endswith('.js') else 'cleaner-response.html'
@@ -399,20 +429,52 @@ class Handler(BaseHTTPRequestHandler):
                 with connect() as db:
                     snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
                     source_snapshot = json.loads(snapshot['body']) if snapshot else None
-                    result = analyze(source_snapshot) if source_snapshot else {'issues': [], 'synced_at': None}
-                    from local_supply import SUPPORTED, profile, describe as describe_local
+                    result = analyze(source_snapshot, db) if source_snapshot else {'issues': [], 'synced_at': None}
+                    from cleaner_returns import ESCALATE, guest_context_fingerprint
+                    from cleaner_returns import configuration as scheduler_configuration
+                    from cleaner_returns import describe as describe_return
+                    result['cleaner_scheduler'] = scheduler_configuration()
+                    import maintenance_bridge
+                    result['maintenance'] = maintenance_bridge.configuration()
+                    maintenance_links = {row['issue_id']: maintenance_bridge.describe(row) for row in db.execute('SELECT * FROM maintenance_links')}
+                    for issue in result['issues']:
+                        if issue['category'] == 'Maintenance':
+                            issue['maintenance_fingerprint'] = maintenance_bridge.fingerprint(issue)
+                            issue['maintenance_link'] = maintenance_links.get(issue['id'])
+                            issue['maintenance_fingerprints'] = {message['id']: maintenance_bridge.fingerprint(issue, message) for message in issue['evidence']}
+                            issue['maintenance_links'] = {message['id']: maintenance_links[maintenance_bridge.link_key(issue, message)] for message in issue['evidence'] if maintenance_bridge.link_key(issue, message) in maintenance_links}
+                    for issue in result['issues']:
+                        visit = db.execute('SELECT * FROM cleaner_returns WHERE issue_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', (issue['id'],)).fetchone()
+                        issue['cleaner_return'] = describe_return(visit) if visit else None
+                        issue['cleaner_return_fingerprint'] = guest_context_fingerprint(issue)
+                        if issue['cleaner_return']:
+                            issue['cleaner_return']['guest_context_changed'] = issue['cleaner_return']['plan']['source_fingerprint'] != issue['cleaner_return_fingerprint']
+                        issue['cleaner_return_escalate'] = any(ESCALATE.search(message['body']) for message in issue['evidence'])
+                        if visit and issue['category'] == 'Cleaning':
+                            plan = json.loads(visit['body'])
+                            if plan.get('guest_confirmed_at') and plan.get('confirmation_fingerprint') == issue['cleaner_return_fingerprint']:
+                                issue.update({'lane': 'likely_resolved', 'status': 'Guest confirmed resolved', 'recorded_status': 'Guest confirmed resolved'})
+                    from local_supply import SUPPORTED, profile
+                    from local_supply import describe as describe_local
                     result['local_supplier'] = profile(db)
                     result['local_supply_types'] = list(SUPPORTED)
                     for issue in result['issues']:
                         issue['local_requests'] = [describe_local(row) for row in db.execute('SELECT * FROM local_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     from guest_replies import draft as reply_draft
-                    from issue_workflow import attach
-                    from maintenance_bridge import attach as attach_maintenance
                     for issue in result['issues']:
-                        attach(db, issue)
-                        attach_maintenance(db, issue)
+                        if issue['category'] == 'Instructions':
+                            from property_instructions import (
+                                solution as instruction_solution,
+                            )
+                            from property_instructions import (
+                                source_fingerprint as instruction_source_fingerprint,
+                            )
+                            issue['instruction_solutions'] = [instruction_solution(db, issue, message) for message in issue['evidence']]
+                            issue['instruction_fingerprint'] = instruction_source_fingerprint(issue)
                         issue['guest_replies'] = [reply_draft(db, issue, message) for message in issue['evidence']]
-                    from catalog import ITEMS, DEFAULTS
+                        if issue['category'] == 'Safety':
+                            issue['safety_alerts'] = [dict(row) for row in db.execute('SELECT id, message_id, kind, state, error, updated_at FROM safety_alerts WHERE issue_id = ? ORDER BY created_at', (issue['id'],))]
+                    from catalog import DEFAULTS, ITEMS
                     result['catalog'] = {'properties': [dict(row) for row in db.execute('SELECT * FROM rental_units ORDER BY name, id')], 'products': [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 ORDER BY property_id, item_type, room')], 'item_types': [{'id': key, 'label': value[0], 'search_query': value[2]} for key, value in ITEMS.items()]}
                     result['catalog']['shared_products'] = [{**dict(row), 'property_id': 'shared', 'room': '', 'tv_brand': '', 'tv_model': ''} for row in db.execute('SELECT * FROM shared_products WHERE active = 1 ORDER BY item_type')]
                     result['catalog']['defaults'] = [{'item_type': key, 'title': value[0], 'check': value[1], 'asin': value[2], 'source_url': value[3]} for key, value in DEFAULTS.items()]
@@ -420,14 +482,19 @@ class Handler(BaseHTTPRequestHandler):
                         default = next((item for item in result['catalog']['defaults'] if item['item_type'] == shared['item_type']), None)
                         if default:
                             default.update({'title': shared['title'], 'asin': shared['asin'], 'check': 'Shared preference for all units. Verify pack contents and delivery.', 'source_url': None})
-                    from fulfillment import profile as fulfillment_profile, quantities
+                    from fulfillment import profile as fulfillment_profile
+                    from fulfillment import quantities
                     result['catalog']['fulfillment'] = [fulfillment_profile(db, unit['id']) for unit in result['catalog']['properties']]
                     for issue in result['issues']:
                         issue['fulfillment'] = next((item for item in result['catalog']['fulfillment'] if len(issue['property_ids']) == 1 and item['property_id'] == issue['property_ids'][0]), None)
+                        if issue['category'] == 'Cleaning':
+                            from cleaning_proposal import propose
+                            timezone = issue['fulfillment']['address'].get('timezone', 'America/New_York') if issue['fulfillment'] else 'America/New_York'
+                            issue['cleaner_return_proposal'] = propose(issue, timezone, now())
                         issue['supply_quantities'] = quantities(issue, issue['fulfillment'])
                         from purchase_plans import build as purchase_plan
                         issue['purchase_plans'] = [purchase_plan(db, issue, message) for message in issue['evidence']] if issue['category'] == 'Supplies' else []
-                        from local_supply import live_context, LiveRequestUnavailable
+                        from local_supply import LiveRequestUnavailable, live_context
                         try:
                             destination, supplier = live_context(db, issue, source_snapshot, now())
                         except LiveRequestUnavailable as error:
@@ -435,8 +502,13 @@ class Handler(BaseHTTPRequestHandler):
                         else:
                             issue['cleaner_live'] = {'eligible': True, 'reason': None, 'profile_version': destination['version'], 'supplier_version': supplier['version'], 'evidence_fingerprint': hashlib.sha256(json.dumps(issue['evidence'], sort_keys=True).encode()).hexdigest()}
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
-                    from purchases import AUTO_LIMIT_CENTS, VETO_SECONDS, describe, email_settings
                     from mailer import email_ready
+                    from purchases import (
+                        AUTO_LIMIT_CENTS,
+                        VETO_SECONDS,
+                        describe,
+                        email_settings,
+                    )
                     settings = email_settings()
                     result['purchase_policy'] = {'auto_limit_cents': AUTO_LIMIT_CENTS, 'veto_seconds': VETO_SECONDS, 'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
                     for issue in result['issues']:
@@ -459,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/maintenance', '/api/maintenance/status', '/api/issue-workflow', '/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
+            if self.path not in ('/api/settings/maintenance', '/api/maintenance/import', '/api/maintenance/refresh', '/api/property-instructions', '/api/cleaner-returns/notify', '/api/cleaner-returns/propose', '/api/cleaner-returns/approve-schedule', '/api/cleaner-returns', '/api/cleaner-returns/decline', '/api/cleaner-returns/retry', '/api/cleaner-returns/confirm', '/api/settings/cleaner-scheduler', '/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -470,7 +542,8 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length)
             data = json.loads(raw)
             if not isinstance(data, dict):
-                raise ValueError('JSON object required')
+                self.respond(400, {'error': 'JSON object required'})
+                return
             key = self.headers.get('Idempotency-Key', '')
             if not 8 <= len(key) <= 200:
                 raise ValueError('Idempotency-Key required')
@@ -496,16 +569,44 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, {'ok': True}, headers={'Set-Cookie': cookie(token, origin)})
                 return
             require_csrf(actor, self.headers)
-            if self.path == '/api/settings/email' and actor['role'] != 'admin':
+            if self.path in ('/api/settings/email', '/api/settings/cleaner-scheduler', '/api/settings/maintenance') and actor['role'] != 'admin':
                 raise AuthError(403, 'Administrator access required')
             key = hashlib.sha256((actor['user_id'] + '\n' + key).encode()).hexdigest()
             fingerprint = hashlib.sha256(self.path.encode() + b'\n' + raw).hexdigest()
+            prepared_maintenance = None
+            if self.path == '/api/settings/maintenance':
+                from maintenance_bridge import prepare_configuration
+                prepared_maintenance = prepare_configuration(data)
+            prepared_scheduler = None
+            if self.path == '/api/settings/cleaner-scheduler':
+                from cleaner_returns import prepare_configuration
+                prepared_scheduler = prepare_configuration(data)
+            prepared_repair = None
+            repair_remote = None
+            if self.path in ('/api/maintenance/import', '/api/maintenance/refresh'):
+                from maintenance_bridge import (
+                    perform_change,
+                    prepare_change,
+                    validate_prepared,
+                )
+                with connect() as db:
+                    current_actor = session(db, self.headers, origin)
+                    if not current_actor or current_actor['user_id'] != actor['user_id']:
+                        raise AuthError(401, 'Session expired or was revoked. Sign in again.')
+                    previous = db.execute('SELECT * FROM operations WHERE key = ?', (key,)).fetchone()
+                    if previous and previous['fingerprint'] != fingerprint:
+                        raise ValueError('Idempotency key reused with different request')
+                    if not previous:
+                        prepared_repair = prepare_change(db, self.path, data, now())
+                        validate_prepared(db, prepared_repair)
+                if prepared_repair is not None:
+                    repair_remote = perform_change(prepared_repair)
             with connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current_actor = session(db, self.headers, origin)
                 if not current_actor or current_actor['user_id'] != actor['user_id']:
                     raise AuthError(401, 'Session expired or was revoked. Sign in again.')
-                if self.path == '/api/settings/email' and current_actor['role'] != 'admin':
+                if self.path in ('/api/settings/email', '/api/settings/cleaner-scheduler', '/api/settings/maintenance') and current_actor['role'] != 'admin':
                     raise AuthError(403, 'Administrator access required')
                 previous = db.execute('SELECT * FROM operations WHERE key = ?', (key,)).fetchone()
                 if previous:
@@ -514,7 +615,20 @@ class Handler(BaseHTTPRequestHandler):
                     result = json.loads(previous['response'])
                 else:
                     audit_start = db.execute('SELECT COALESCE(MAX(id), 0) FROM audit').fetchone()[0]
-                    if self.path == '/api/settings/email':
+                    if self.path in ('/api/maintenance/import', '/api/maintenance/refresh'):
+                        from maintenance_bridge import save_change
+                        if prepared_repair is None or repair_remote is None:
+                            raise ValueError('The maintenance request is unavailable. Reload before retrying.')
+                        result = save_change(db, prepared_repair, repair_remote, now())
+                    elif self.path == '/api/settings/maintenance':
+                        from maintenance_bridge import configure
+                        result = configure(prepared_maintenance)
+                        audit(db, actor['user_id'], 'maintenance_connection_configured', {'actor': actor['username']})
+                    elif self.path == '/api/settings/cleaner-scheduler':
+                        from cleaner_returns import configure
+                        result = configure(prepared_scheduler)
+                        audit(db, actor['user_id'], 'cleaner_scheduler_configured', {'actor': actor['username']})
+                    elif self.path == '/api/settings/email':
                         from settings import save_email
                         result = save_email(data)
                         audit(db, actor['user_id'], 'email_settings_updated', {'actor': actor['username']})
@@ -530,10 +644,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError) as error:
             self.respond(400, {'error': str(error)})
         except Exception:
-            logging.error(json.dumps({'event': 'request_failed', 'trace': trace}))
+            logging.getLogger(__name__).exception(json.dumps({'event': 'request_failed', 'trace': trace}))
             self.respond(500, {'error': 'Internal error', 'trace': trace})
         finally:
-            logging.info(json.dumps({'event': 'request', 'trace': trace, 'method': self.command, 'duration_ms': round((time.monotonic() - started) * 1000)}))
+            logging.getLogger(__name__).info(json.dumps({'event': 'request', 'trace': trace, 'method': self.command, 'duration_ms': round((time.monotonic() - started) * 1000)}))
 
     do_GET = dispatch
     do_POST = dispatch
@@ -551,7 +665,7 @@ def poll_hospitable():
         try:
             research()
         except Exception as error:
-            logging.error(json.dumps({'event': 'hospitable_sync_failed', 'error_type': type(error).__name__}))
+            logging.getLogger(__name__).exception(json.dumps({'event': 'hospitable_sync_failed', 'error_type': type(error).__name__}))
             with connect() as db:
                 db.execute("UPDATE integration_state SET status = 'error', error = ? WHERE id = 1", ('Could not update from Hospitable. Previous data is preserved. Check the token and API availability.',))
         else:
@@ -585,9 +699,20 @@ if __name__ == '__main__':
     from local_supply import deliver_requests
     cleaner_notices = threading.Thread(target=deliver_requests, args=(connect, SYNC_STOP), daemon=True)
     cleaner_notices.start()
+    from cleaner_returns import synchronize as synchronize_returns
+    cleaner_return_worker = threading.Thread(target=synchronize_returns, args=(connect, SYNC_STOP), daemon=True)
+    cleaner_return_worker.start()
+    from stay_adjustments import synchronize as synchronize_stay_requests
+    stay_request_worker = threading.Thread(target=synchronize_stay_requests, args=(connect, SYNC_STOP), daemon=True)
+    stay_request_worker.start()
+    from safety import deliver as deliver_safety_alerts
+    safety_notifications = threading.Thread(target=deliver_safety_alerts, args=(connect, SYNC_STOP), daemon=True)
+    safety_notifications.start()
     from guest_replies import deliver
     guest_messages = threading.Thread(target=deliver, args=(connect, SYNC_STOP), daemon=True)
     guest_messages.start()
+    emergency_messages = threading.Thread(target=deliver, args=(connect, SYNC_STOP, 'safety'), daemon=True)
+    emergency_messages.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
