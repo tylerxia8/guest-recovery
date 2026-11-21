@@ -90,6 +90,7 @@ def initialize():
         db.execute("CREATE TABLE IF NOT EXISTS cleaner_returns (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('draft','queued','submitted','uncertain','blocked','completed','cancelled')), remote TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_poll TEXT NOT NULL, attempted_at TEXT)")
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_cleaner_return ON cleaner_returns(issue_id) WHERE state IN ('draft','queued','submitted','uncertain','blocked')")
         db.execute('CREATE TABLE IF NOT EXISTS maintenance_links (issue_id TEXT PRIMARY KEY,ticket_id TEXT NOT NULL UNIQUE,source_fingerprint TEXT NOT NULL,remote TEXT NOT NULL,checked_at TEXT NOT NULL)')
+        db.execute('CREATE TABLE IF NOT EXISTS maintenance_synced_messages (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         from reply_library import initialize as initialize_reply_library
         initialize_reply_library(db)
         from safety import initialize as initialize_safety
@@ -442,8 +443,12 @@ class Handler(BaseHTTPRequestHandler):
                     import maintenance_bridge
                     result['maintenance'] = maintenance_bridge.configuration()
                     maintenance_links = {row['issue_id']: maintenance_bridge.describe(row) for row in db.execute('SELECT * FROM maintenance_links')}
+                    synced_repairs = {}
+                    for message in db.execute('SELECT issue_id, message_id FROM maintenance_synced_messages'):
+                        synced_repairs.setdefault(message['issue_id'], []).append(message['message_id'])
                     for issue in result['issues']:
                         if issue['category'] == 'Maintenance':
+                            issue['maintenance_synced_messages'] = synced_repairs.get(issue['id'], [])
                             issue['maintenance_fingerprint'] = maintenance_bridge.fingerprint(issue)
                             issue['maintenance_link'] = maintenance_links.get(issue['id'])
                             issue['maintenance_fingerprints'] = {message['id']: maintenance_bridge.fingerprint(issue, message) for message in issue['evidence']}
@@ -704,6 +709,9 @@ def main():
     from local_supply import deliver_requests
     cleaner_notices = threading.Thread(target=deliver_requests, args=(connect, SYNC_STOP), daemon=True)
     cleaner_notices.start()
+    from maintenance_bridge import synchronize as synchronize_maintenance
+    maintenance_worker = threading.Thread(target=synchronize_maintenance, args=(connect, SYNC_STOP), daemon=True)
+    maintenance_worker.start()
     from cleaner_returns import synchronize as synchronize_returns
     cleaner_return_worker = threading.Thread(target=synchronize_returns, args=(connect, SYNC_STOP), daemon=True)
     cleaner_return_worker.start()

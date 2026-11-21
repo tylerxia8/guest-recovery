@@ -6,3 +6,5 @@
 4. Use **Refresh repair status** in the same issue to retrieve updates from Maintenance.
 
 Real guest imports require a Maintenance workspace with real accounts and linked homes. Demo mode rejects those imports. Safety reports remain in the safety workflow. Guest Recovery sends the reviewed summary and routing identifiers; the full conversation stays in Guest Recovery.
+
+Incoming guest messages labeled **Maintenance** are routed automatically for current stays once the workspace and property are linked. The first report opens an intake. The inbox sends Maintenance’s existing room, onset, access, and entry-safety questions one at a time when Hospitable messaging is configured. It adds the guest’s direct answers to the same repair. Maintenance moves the repair to manager review when intake is complete or urgent, and the inbox refreshes its status. Photos and separate contact details can be handled during manager review. The automation forwards fault details rather than the full conversation. Safety reports use the safety workflow. Individually linked historical repairs and follow-ups after closure can still be reviewed in the inbox.
