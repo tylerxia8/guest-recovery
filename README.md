@@ -25,3 +25,9 @@ Routine cleaning complaints with an explicit guest-approved entry window and ide
 ## Source history
 
 The imports retain the history available in the source repositories. Cleaner Scheduling came from the GitHub repository created from the original ZIP, so its history starts with that snapshot. Guest Recovery includes the issue workflow and Maintenance handoff commits developed locally.
+
+## Use Guest Recovery on a phone
+
+Open your hosted Guest Recovery HTTPS URL and sign in with your manager account. Tap a message to open its conversation and actions. Tap **Inbox** or use the browser Back button to return to the message list.
+
+To add a shortcut, use **Share → Add to Home Screen** in Safari on iPhone or **Add to Home screen** from the Chrome menu on Android. Guest Recovery needs a network connection to retrieve guest messages and submit changes.

@@ -370,6 +370,11 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.respond(200, (ROOT / 'web' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
                 return
+            assets['/manifest.webmanifest'] = ('manifest.webmanifest', 'application/manifest+json')
+            assets.update({
+                f'/icons/guest-recovery-{size}.png': (f'icons/guest-recovery-{size}.png', 'image/png')
+                for size in (192, 512)
+            })
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
                 self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
