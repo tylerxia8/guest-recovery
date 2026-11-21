@@ -19,7 +19,7 @@ from grok_bot.auth.permissions import Principal
 from grok_bot.auth.tokens import TokenError, _sign, verify_token
 from grok_bot.db import set_tenant
 from grok_bot.domain import idempotency
-from grok_bot.domain.maintenance import _classify, _create_ticket
+from grok_bot.domain.maintenance import _classify, _create_ticket, add_message
 from grok_bot.domain.records import write_audit
 from grok_bot.errors import problem
 
@@ -78,6 +78,10 @@ class ImportBody(BridgeBody):
     conversation_id: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=5000)
     source_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class GuestMessageBody(BridgeBody):
+    body: str = Field(min_length=1, max_length=5000)
 
 
 class RepairOut(BaseModel):
@@ -256,6 +260,32 @@ def import_request(body: ImportBody, request: Request, principal: Principal = De
         session.execute(text("INSERT INTO maintenance_source_requests(organization_id,source,issue_id,external_property_id,ticket_id,reservation_id,conversation_id,source_fingerprint) VALUES(:org,'guest_recovery',:issue,:external,:ticket,:reservation,:conversation,:fingerprint)"), {"org": principal.organization_id, "issue": body.issue_id, "external": body.external_property_id, "ticket": ticket["id"], "reservation": body.reservation_id, "conversation": body.conversation_id, "fingerprint": body.source_fingerprint})
         return source_repair(session, principal.organization_id, body.issue_id)
     return mutate(session, principal, require_idempotency_key(key), "import", body.model_dump(mode="json"), create)
+
+
+
+@router.post("/maintenance-bridge/messages/{issue_id:path}", response_model=SourceRepairOut)
+def import_guest_message(issue_id: str, body: GuestMessageBody, request: Request, principal: Principal = Depends(bridge_principal), session: Session = Depends(get_session, scope="function"), key: str | None = Header(default=None, alias="Idempotency-Key")):
+    if request.state.maintenance_connection["source"] != "guest_recovery":
+        problem(403, "FORBIDDEN", "Only the guest inbox can add guest repair messages.")
+    if request.app.state.settings.allows_demo_session:
+        problem(409, "DEMO_WORKSPACE", "Connect a real maintenance workspace before importing guest messages.")
+    if not 0 < len(issue_id) <= 200:
+        problem(422, "VALIDATION_ERROR", "Invalid guest issue identifier.")
+
+    def append():
+        repair = source_repair(session, principal.organization_id, issue_id)
+        status = session.scalar(text("SELECT status FROM maintenance_tickets WHERE organization_id=:org AND id=:ticket FOR UPDATE"),
+                                {"org": principal.organization_id, "ticket": repair["ticket_id"]})
+        if status in {"COMPLETED", "CLOSED", "CANCELED"}:
+            problem(409, "REPAIR_CLOSED", "Review this follow-up in the guest inbox before opening another repair.")
+        if _classify(body.body)[0]:
+            problem(409, "SAFETY_REVIEW_REQUIRED", "Handle this hazard in the safety workflow.")
+        settings = request.app.state.settings
+        add_message(session, principal.organization_id, UUID(repair["ticket_id"]), body.body, None,
+                    settings.session_secret, request.app.state.clock, None, origin="guest_recovery")
+        return source_repair(session, principal.organization_id, issue_id)
+
+    return mutate(session, principal, require_idempotency_key(key), "guest_message", {"issue_id": issue_id, **body.model_dump()}, append)
 
 
 @router.get("/maintenance-bridge/requests/{issue_id:path}", response_model=SourceRepairOut)

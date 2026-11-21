@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -292,3 +293,124 @@ def save_change(db, prepared, remote, timestamp):
     db.execute('INSERT INTO audit (incident_id,action,at,details) VALUES (?,?,?,?)', (prepared['issue_id'], 'maintenance_imported' if not row else 'maintenance_status_refreshed', timestamp, json.dumps({'ticket_id': remote['ticket_id'], 'organization_id': prepared['settings']['organization_id'], 'message_id': prepared['message_id']})))
     logging.getLogger(__name__).info(json.dumps({'event': 'maintenance_bridge_request', 'action': 'refresh' if row else 'import', 'ticket_id': remote['ticket_id']}))
     return describe(db.execute('SELECT * FROM maintenance_links WHERE issue_id = ?', (prepared['key'],)).fetchone())
+
+
+def repair_note(message):
+    """Forward fault details from this message without forwarding the guest thread."""
+    from reply_library import CREDENTIALS
+    from research import RULES
+    from safety import detect
+
+    body = message['body']
+    if message['sender_type'] != 'guest' or detect(body):
+        return ''
+    pattern = next(rule[1] for rule in RULES if rule[0] == 'Maintenance')
+    clauses = re.split(r'(?<=[.!?])\s+|[;\n]', body)
+    concise = []
+    for clause in clauses:
+        if not re.search(pattern, clause, re.I) or CREDENTIALS.search(clause):
+            continue
+        clause = re.sub(r'https?://\S+|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b', '[redacted]', clause, flags=re.I)
+        clause = re.sub(r'(?<!\w)\+?\d[\d ().-]{6,}\d|\b\d{4,}\b', '[redacted]', clause)
+        concise.append(clause.strip())
+    return ' '.join(concise)[:5000]
+
+
+def _automatic_change(db, issue, timestamp):
+    key = issue['id']
+    if db.execute('SELECT 1 FROM maintenance_links WHERE substr(issue_id,1,?) = ?',
+                  (len(key) + 1, key + ':')).fetchone():
+        # Keep individually linked repairs intact.
+        return None
+    existing = db.execute('SELECT * FROM maintenance_links WHERE issue_id = ?', (key,)).fetchone()
+    synced = {row[0] for row in db.execute('SELECT message_id FROM maintenance_synced_messages WHERE issue_id = ?', (key,))}
+    candidates = sorted(issue['evidence'], key=lambda item: (item['created_at'], item['id']))
+    for message in candidates:
+        if message['id'] in synced or (existing and not synced and message['created_at'] <= existing['checked_at']):
+            continue
+        note = repair_note(message)
+        if not note:
+            continue
+        if not existing:
+            prepared = prepare_change(db, '/api/maintenance/import', {
+                'issue_id': key, 'source_fingerprint': fingerprint(issue), 'description': note,
+            }, timestamp)
+            validate_prepared(db, prepared)
+            return prepared, message['id'], None
+        if json.loads(existing['remote'])['status'] in ('COMPLETED', 'CLOSED', 'CANCELED'):
+            break
+        from research import analyze
+        saved = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+        current = next((item for item in analyze(json.loads(saved['body']), db)['issues']
+                        if item['id'] == key and item['lane'] == 'needs_attention'), None) if saved else None
+        if not current or fingerprint(current) != fingerprint(issue):
+            return None
+        prepared = prepare_change(db, '/api/maintenance/refresh', {'issue_id': key}, timestamp)
+        return prepared, message['id'], note
+    if existing and dt.datetime.fromisoformat(timestamp) - dt.datetime.fromisoformat(existing['checked_at']) >= dt.timedelta(minutes=5):
+        return prepare_change(db, '/api/maintenance/refresh', {'issue_id': key}, timestamp), None, None
+    return None
+
+
+def _forward_message(prepared, message_id, note):
+    validate_prepared(None, prepared)
+    settings, token = prepared['settings'], prepared['token']
+    metadata = validate_metadata(request(settings['url'], token, 'GET', '/v1/maintenance-bridge'))
+    if (metadata['organization_id'] != settings['organization_id'] or metadata['expires_at'] != settings['expires_at']
+            or metadata['mode'] != 'workspace'):
+        raise ValueError('The Maintenance workspace changed.')
+    digest = hashlib.sha256(json.dumps(['guest-message', prepared['key'], message_id]).encode()).hexdigest()
+    remote = request(settings['url'], token, 'POST',
+                     '/v1/maintenance-bridge/messages/' + quote(prepared['key'], safe=''), {'body': note}, digest)
+    validate_prepared(None, prepared)
+    return remote
+
+
+def synchronize_pass(connect, timestamp, offset=0):
+    from research import analyze
+
+    settings = configuration()
+    if not settings['configured'] or settings['mode'] != 'workspace':
+        return 0
+    mapped = {item['external_property_id'] for item in settings['properties']}
+    with connect() as db:
+        row = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+        snapshot = json.loads(row['body']) if row else None
+        if not snapshot or not dt.timedelta(0) <= dt.datetime.fromisoformat(timestamp) - dt.datetime.fromisoformat(snapshot['synced_at']) <= dt.timedelta(minutes=10):
+            return 0
+        issues = [issue for issue in analyze(snapshot, db)['issues']
+                  if issue['category'] == 'Maintenance' and issue['lane'] == 'needs_attention'
+                  and len(issue['property_ids']) == 1 and issue['property_ids'][0] in mapped
+                  and issue['conversation_id']]
+    if not issues:
+        return 0
+    offset %= len(issues)
+    for issue in (issues[offset:] + issues[:offset])[:4]:
+        try:
+            with connect() as db:
+                work = _automatic_change(db, issue, timestamp)
+            if not work:
+                continue
+            prepared, message_id, note = work
+            remote = _forward_message(prepared, message_id, note) if note else perform_change(prepared)
+            with connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                save_change(db, prepared, remote, timestamp)
+                if message_id:
+                    db.execute('INSERT OR IGNORE INTO maintenance_synced_messages VALUES (?, ?)', (issue['id'], message_id))
+        except (ValueError, KeyError, sqlite3.Error) as error:
+            logging.getLogger(__name__).warning(json.dumps({
+                'event': 'maintenance_inbox_sync_deferred', 'error_type': type(error).__name__,
+            }))
+    return offset + 4
+
+
+def synchronize(connect, stop):
+    offset = 0
+    while not stop.wait(30):
+        try:
+            offset = synchronize_pass(connect, dt.datetime.now(dt.UTC).isoformat(), offset)
+        except Exception as error:
+            logging.getLogger(__name__).warning(json.dumps({
+                'event': 'maintenance_inbox_sync_failed', 'error_type': type(error).__name__,
+            }))

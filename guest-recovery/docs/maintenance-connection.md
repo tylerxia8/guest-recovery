@@ -6,3 +6,5 @@
 4. Use **Refresh repair status** in the same issue to retrieve updates from Maintenance.
 
 Real guest imports require a Maintenance workspace with real accounts and linked homes. Demo mode rejects those imports. Safety reports remain in the safety workflow. Guest Recovery sends the reviewed summary and routing identifiers; the full conversation stays in Guest Recovery.
+
+Incoming guest messages labeled **Maintenance** are routed automatically for current stays once the workspace and property are linked. The first report opens a repair in the existing manager queue. Additional maintenance messages are added to the same open repair, and the guest inbox refreshes its status. The automation forwards fault details rather than the full conversation. Safety reports use the safety workflow. Individually linked historical repairs and follow-ups after closure can still be reviewed in the inbox.

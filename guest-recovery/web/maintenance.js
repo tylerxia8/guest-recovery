@@ -4,10 +4,13 @@ function maintenancePanel(issue, message) {
   const settings = dataset.maintenance || {};
   const messageLink = issue.maintenance_links?.[message.id];
   const link = messageLink || issue.maintenance_link;
-  const fingerprint = !messageLink && issue.maintenance_link ? issue.maintenance_fingerprint : issue.maintenance_fingerprints?.[message.id];
+  const useMessage = Boolean(messageLink || Object.keys(issue.maintenance_links || {}).length);
+  const fingerprint = useMessage ? issue.maintenance_fingerprints?.[message.id] : issue.maintenance_fingerprint;
   if (link) {
     panel.append(node('p', `Repair #${link.remote.ticket_number} · ${link.remote.priority.toLowerCase().replaceAll('_', ' ')} priority · ${link.remote.status.toLowerCase().replaceAll('_', ' ')}`), node('p', `Status checked ${date(link.checked_at)}`, 'help-text'));
-    if (link.remote.source_fingerprint !== fingerprint) panel.append(node('p', 'New guest information is available. Review it in the existing repair; it has not been added automatically.', 'help-text'));
+    if (link.remote.source_fingerprint !== fingerprint && !issue.maintenance_synced_messages?.includes(message.id)) {
+      panel.append(node('p', 'This guest message is available in the inbox. Check the repair for the details already shared.', 'help-text'));
+    }
     if (settings.dashboard_url) {
       const open = node('a', 'Open repair', 'button');
       const repairUrl = new URL('/maintenance/review', settings.dashboard_url);
@@ -18,6 +21,10 @@ function maintenancePanel(issue, message) {
       open.rel = 'noopener noreferrer';
       panel.append(open);
     }
+  }
+  if (!link && settings.configured && settings.mode === 'workspace' && issue.lane === 'needs_attention'
+      && issue.property_ids?.some(id => settings.properties?.some(property => property.external_property_id === id))) {
+    panel.append(node('p', 'Eligible maintenance reports are sent to the repair queue automatically.', 'help-text'));
   }
   if (!settings.configured) {
     panel.append(node('p', 'Maintenance is not connected.', 'help-text'));
@@ -54,7 +61,7 @@ function maintenancePanel(issue, message) {
     }
     button.disabled = true;
     try {
-      await submitAction(link ? '/api/maintenance/refresh' : '/api/maintenance/import', {issue_id: issue.id, message_id: message.id, source_fingerprint: fingerprint, ...(summary ? {description: summary.value} : {})});
+      await submitAction(link ? '/api/maintenance/refresh' : '/api/maintenance/import', {issue_id: issue.id, ...(useMessage ? {message_id: message.id} : {}), source_fingerprint: fingerprint, ...(summary ? {description: summary.value} : {})});
       await load();
     } catch (error) {
       feedback.textContent = error.message;
