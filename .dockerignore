@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!guest-recovery/
+!guest-recovery/*.py
+!guest-recovery/web/
+!guest-recovery/web/**
