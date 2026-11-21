@@ -49,7 +49,7 @@ function issueWorkflow(issue, message) {
   const workflow = issue.workflow;
   const actions = {
     Timing: [['approved', 'Record approval'], ['declined', 'Record decline']],
-    Maintenance: [['handoff_recorded', 'Record repair handoff'], ['resolved', 'Mark resolved']],
+    Maintenance: [['resolved', 'Mark resolved']],
     Cleaning: [['handoff_recorded', 'Record cleaner handoff'], ['resolved', 'Mark resolved']],
     Safety: [['acknowledged', 'Acknowledge safety report'], ['resolved', 'Mark resolved']],
     Supplies: [['resolved', 'Mark resolved']],
@@ -62,8 +62,9 @@ function issueWorkflow(issue, message) {
   if (issue.category === 'Timing') {
     section.append(node('p', `Scheduled arrival ${date(issue.check_in)} · departure ${date(issue.check_out)}. Confirm cleaner availability separately. This decision does not change the reservation.`, 'help-text'));
   }
-  if (['Maintenance', 'Cleaning', 'Timing'].includes(issue.category)) {
-    const label = issue.category === 'Maintenance' ? 'Repair request' : issue.category === 'Cleaning' ? 'Cleaning follow-up' : 'Turnover check';
+  if (issue.category === 'Maintenance') section.append(maintenanceHandoff(issue));
+  if (['Cleaning', 'Timing'].includes(issue.category)) {
+    const label = issue.category === 'Cleaning' ? 'Cleaning follow-up' : 'Turnover check';
     const copy = node('button', `Copy ${label.toLowerCase()}`, 'secondary');
     copy.type = 'button';
     copy.onclick = async () => {
@@ -114,4 +115,46 @@ function issueWorkflow(issue, message) {
   };
   section.append(form);
   return section;
+}
+
+function maintenanceHandoff(issue) {
+  const panel = node('div');
+  const bridge = issue.maintenance;
+  if (bridge.ticket) {
+    const {ticket_number, status, priority, updated_at} = bridge.ticket;
+    panel.append(node('p', `Repair #${ticket_number} · ${status.replaceAll('_', ' ').toLowerCase()} · ${priority.toLowerCase()}`, 'purchase-status'));
+    panel.append(node('p', `Last repair update ${date(updated_at)}`, 'help-text'));
+  }
+  if (!bridge.available || (!bridge.ticket && !bridge.eligible)) {
+    panel.append(node('p', bridge.available ? 'A current stay with one matched property is required to send a repair.' : 'Maintenance workspace connection is not configured.', 'help-text'));
+    return panel;
+  }
+  const form = node('form');
+  let summary;
+  if (!bridge.ticket) {
+    const label = node('label', 'Repair summary for Maintenance');
+    summary = node('textarea');
+    summary.required = true;
+    summary.maxLength = 5000;
+    label.append(summary);
+    form.append(label, node('p', 'Describe the fault and leave out guest names, contact details, and access codes.', 'help-text'));
+  }
+  const button = node('button', bridge.ticket ? 'Refresh repair status' : 'Send to Maintenance', 'secondary');
+  form.append(button);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    button.disabled = true;
+    try {
+      await submitAction(bridge.ticket ? '/api/maintenance/status' : '/api/maintenance',
+        {issue_id: issue.id, ...(summary ? {description: summary.value, fingerprint: bridge.fingerprint} : {})});
+      document.activeElement?.blur();
+      await load();
+    } catch (error) {
+      notice.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  };
+  panel.append(form);
+  return panel;
 }
