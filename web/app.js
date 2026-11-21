@@ -14,7 +14,7 @@ function date(value) {
   return new Date(value).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
 }
 function title(issue) {
-  return issue.worksheet ? 'Missing hand towels' : {Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
+  return issue.worksheet ? 'Missing hand towels' : {Timing: 'Early check-in or late checkout', Other: 'Other guest request', Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
 }
 const purchaseDrafts = new Map();
 let renderedIssues = '';
@@ -178,6 +178,7 @@ function updateCountdowns() {
 function showSettings() {
   document.querySelector('#settings-workspace').hidden = false;
   document.querySelector('#inbox-workspace').hidden = true;
+  document.querySelector('#issue-summary').hidden = true;
   document.querySelector('#settings-toggle').textContent = 'Back to inbox';
   document.querySelector('#page-title').textContent = 'Settings';
   document.querySelector('#page-subtitle').textContent = 'Properties, cleaner, and email.';
@@ -186,6 +187,7 @@ document.querySelector('#settings-toggle').onclick = () => {
   if (document.querySelector('#settings-workspace').hidden) { showSettings(); return; }
   document.querySelector('#settings-workspace').hidden = true;
   document.querySelector('#inbox-workspace').hidden = false;
+  document.querySelector('#issue-summary').hidden = false;
   document.querySelector('#settings-toggle').textContent = 'Settings';
   document.querySelector('#page-title').textContent = 'Guest inbox';
   document.querySelector('#page-subtitle').textContent = 'Read the conversation. Review the solution.';
@@ -194,8 +196,21 @@ function render() {
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
   const view = document.querySelector('#request-view');
+  const summary = document.querySelector('#issue-counts');
+  const issues = dataset.issues.filter(issue => (issue.lane === 'practice') === (view.value === 'practice'));
+  summary.replaceChildren(node('p', `${issues.length} detected issues across ${view.value === 'practice' ? 'practice conversations' : 'current and upcoming stays'}`));
+  const counts = node('ul');
+  for (const [label, categories] of [
+    ['Early check-in / late checkout', ['Timing']], ['Maintenance', ['Maintenance']],
+    ['Missing supplies', ['Supplies']], ['Safety', ['Safety']], ['Cleaning', ['Cleaning']],
+    ['Other', ['Instructions', 'Other']],
+  ]) {
+    const count = issues.filter(issue => categories.includes(issue.category)).length;
+    counts.append(node('li', `${label}: ${count} (${issues.length ? (100 * count / issues.length).toFixed(1) : '0.0'}%)`));
+  }
+  summary.append(counts);
   const entries = new Map();
-  const priority = ['Safety', 'Maintenance', 'Cleaning', 'Supplies', 'Instructions'];
+  const priority = ['Safety', 'Maintenance', 'Cleaning', 'Timing', 'Supplies', 'Instructions', 'Other'];
   for (const issue of dataset.issues) {
     for (const message of issue.evidence) {
       const key = issue.reservation_id + ':' + message.id;
@@ -203,7 +218,10 @@ function render() {
       entries.get(key).issues.push(issue);
     }
   }
-  const texts = [...entries.values()].sort((a, b) => b.message.created_at.localeCompare(a.message.created_at));
+  const urgent = text => text.issues.some(issue => issue.category === 'Safety'
+    && (issue.workflow.stale || !issue.workflow.decision));
+  const texts = [...entries.values()].sort((a, b) => Number(urgent(b)) - Number(urgent(a))
+    || b.message.created_at.localeCompare(a.message.created_at));
   for (const text of texts) text.issues.sort((a, b) => priority.indexOf(a.category) - priority.indexOf(b.category));
   if (!purchaseLinkSelected && dataset.purchase_policy) {
     purchaseLinkSelected = true;
@@ -242,7 +260,7 @@ function render() {
   back.type = 'button';
   back.onclick = () => document.querySelector('aside').scrollIntoView({behavior: 'smooth', block: 'start'});
   card.append(back);
-  card.append(node('p', issue.property, 'eyebrow'), node('p', issue.lane === 'practice' ? 'Practice · historical or unverified stay' : 'Current stay', 'help-text'));
+  card.append(node('p', issue.property, 'eyebrow'), node('p', issue.lane === 'practice' ? 'Practice · historical or unverified stay' : issue.upcoming ? 'Upcoming stay' : 'Current stay', 'help-text'));
   const quote = node('blockquote', text.message.body, 'guest-text');
   quote.append(node('cite', date(text.message.created_at)));
   card.append(quote);
@@ -453,15 +471,10 @@ function render() {
   thread.append(node('h3', 'Text chain'), conversation);
   const selectedMessage = conversation.children[issue.messages.findIndex(item => item.id === text.message.id)];
   if (selectedMessage) selectedMessage.classList.add('selected-message');
-  const purchaseIssue = text.issues.find(item => item.category === 'Supplies') || issue;
-  let purchaseControls = controls;
-  if (purchaseIssue !== issue) {
-    purchaseControls = node('details', '', 'action-details');
-    purchaseControls.append(node('summary', 'Purchase setup'), purchasePlanPanel(purchaseIssue, text.message), purchasePanel(purchaseIssue));
-    advanced.append(purchaseControls);
-  }
   if (text.issues.some(item => item.category === 'Safety')) managerHeading.append(node('span', 'Urgent safety concern', 'urgent'));
-  layout.append(thread, managerSolutionCard(purchaseIssue, text.message, purchaseControls));
+  const managerPanel = managerSolutionCard(issue, text.message, controls);
+  managerPanel.append(issueWorkflow(issue, text.message));
+  layout.append(thread, managerPanel);
   history.remove();
   card.append(managerHeading, layout, advanced);
   container.append(card);

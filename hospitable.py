@@ -103,14 +103,23 @@ def research():
     end = current.date() + dt.timedelta(days=365 * 2)
     params = [('properties[]', item['id']) for item in properties] + [('status[]', 'accepted'), ('date_query', 'checkout'), ('start_date', str(current.date() - dt.timedelta(days=1))), ('end_date', str(end)), ('include', 'properties'), ('per_page', 100)]
     reservations = []
+    active_ids = []
+    upcoming_ids = []
     if properties:
         for page in range(1, 101):
             rows = get('reservations?' + urllib.parse.urlencode(params + [('page', page)]), token)
             for reservation in rows:
                 check_in = dt.datetime.fromisoformat(reservation['check_in'].replace('Z', '+00:00'))
                 check_out = dt.datetime.fromisoformat(reservation['check_out'].replace('Z', '+00:00'))
-                if check_in <= current < check_out and reservation['reservation_status']['current']['category'] == 'accepted':
-                    reservations.append(reservation)
+                if reservation['reservation_status']['current']['category'] != 'accepted':
+                    continue
+                if check_in <= current < check_out:
+                    active_ids.append(str(uuid.UUID(reservation['id'])))
+                elif current < check_in <= current + dt.timedelta(days=7):
+                    upcoming_ids.append(str(uuid.UUID(reservation['id'])))
+                else:
+                    continue
+                reservations.append(reservation)
             if len(rows) < 100:
                 break
         else:
@@ -145,8 +154,9 @@ def research():
             matches = [item['id'] for item in properties if item['name'] == conversation['property']]
             if len(matches) == 1:
                 conversation['property_ids'] = [str(uuid.UUID(matches[0]))]
-    snapshot = {'synced_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': len(reservations), 'nontext_message_count': nontext, 'scope': 'Active accepted reservations are refreshed from Hospitable every five minutes after each completed import. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Suggested fixes use rules and require human review.'}
-    snapshot['active_reservation_ids'] = [str(uuid.UUID(reservation['id'])) for reservation in reservations]
+    snapshot = {'synced_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': len(active_ids), 'nontext_message_count': nontext, 'scope': 'Active accepted reservations and arrivals within seven days are refreshed from Hospitable every five minutes after each completed import. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Suggested fixes use rules and require human review.'}
+    snapshot['active_reservation_ids'] = active_ids
+    snapshot['upcoming_reservation_ids'] = upcoming_ids
     with connect() as db:
         for item in properties:
             db.execute('INSERT INTO rental_units VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name', (str(uuid.UUID(item['id'])), item['name']))

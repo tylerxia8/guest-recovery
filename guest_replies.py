@@ -22,14 +22,16 @@ def draft(db, issue, message):
         items = [label.lower() for label, pattern, _ in ITEMS.values() if re.search(pattern, text, re.I)]
         subject = items[0] if len(items) == 1 else 'the missing items'
         suggested = "I'm sorry for the inconvenience, and thank you for letting us know about " + subject + ". We're reviewing what is needed and will update you once a replacement and delivery time are confirmed."
-    elif issue['category'] == 'Instructions':
+    elif issue['category'] == 'Timing':
+        suggested = "Thanks for asking. We're checking the turnover schedule and will confirm whether we can accommodate your requested time."
+    elif issue['category'] in ('Instructions', 'Other'):
         suggested = "Thanks for reaching out. We're checking the details for your property so we can give you the correct information."
     else:
         suggested = "I'm sorry for the inconvenience, and thank you for letting us know. We're reviewing the issue and will follow up with the next steps."
     fingerprint = hashlib.sha256(json.dumps({'messages': issue['messages'], 'category': issue['category'], 'lane': issue['lane'], 'resolution_hint': issue['resolution_hint'], 'source_messages_fingerprint': issue['source_messages_fingerprint'], 'conversation_id': issue['conversation_id']}, sort_keys=True).encode()).hexdigest()
     saved = db.execute('SELECT * FROM guest_reply_drafts WHERE issue_id = ? AND message_id = ?', (issue['id'], message['id'])).fetchone()
     send = db.execute('SELECT id, state, body, reference, error, approved_at, updated_at FROM guest_reply_sends WHERE reservation_id = ? AND message_id = ?', (issue['reservation_id'], message['id'])).fetchone()
-    return {'send': dict(send) if send else None, 'message_id': message['id'], 'suggested': suggested, 'body': saved['body'] if saved else suggested, 'version': saved['version'] if saved else 0, 'source_fingerprint': fingerprint, 'draft_source_fingerprint': saved['source_fingerprint'] if saved else fingerprint, 'stale': bool(saved and saved['source_fingerprint'] != fingerprint), 'updated_at': saved['updated_at'] if saved else None, 'practice': issue['lane'] == 'practice', 'safety': bool(safety), 'sending_enabled': bool(os.environ.get('HOSPITABLE_TOKEN')) and issue['lane'] != 'practice' and len(issue['property_ids']) == 1 and bool(issue['conversation_id'] and issue['source_messages_fingerprint'])}
+    return {'send': dict(send) if send else None, 'message_id': message['id'], 'suggested': suggested, 'body': saved['body'] if saved else suggested, 'version': saved['version'] if saved else 0, 'source_fingerprint': fingerprint, 'draft_source_fingerprint': saved['source_fingerprint'] if saved else fingerprint, 'stale': bool(saved and saved['source_fingerprint'] != fingerprint), 'updated_at': saved['updated_at'] if saved else None, 'practice': issue['lane'] == 'practice', 'safety': bool(safety), 'sending_enabled': bool(os.environ.get('HOSPITABLE_TOKEN')) and issue['lane'] != 'practice' and not issue.get('upcoming') and len(issue['property_ids']) == 1 and bool(issue['conversation_id'] and issue['source_messages_fingerprint'])}
 
 
 def save(db, data, timestamp):

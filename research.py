@@ -4,13 +4,14 @@ import datetime as dt
 from catalog import ITEMS
 
 RULES = (
-    ('Safety', r'\b(smoke (?:coming|detected|filling)|smoke alarm (?:sounding|going off)|(?:smell|smelling) (?:of )?gas|gas leak|sparks|exposed wir\w*|carbon monoxide alarm|break.in)\b', 'Escalate to the property manager immediately. Confirm the situation and arrange an appropriate emergency or licensed response.', 'Manager intervention', 'Urgent'),
-    ('Maintenance', r'\b(broken|not working|stopped (?:working|connecting)|no longer (?:works?|working|connects?)|(?:isn.t|aren.t|wasn.t|weren.t) working|(?:doesn.t|won.t|can.t|cannot) (?:work|connect)|can.t.{0,35}\bconnect|neither.{0,60}\bconnect|no hot water|leak\w*|off the wall|clogged)\b', 'Ask the manager to inspect the reported fault and arrange a repair. Confirm the exact item before considering a replacement.', 'Maintenance visit', 'High'),
-    ('Cleaning', r'\b(dirty|unclean|stained|mold|mould|filthy|bedbugs?|cockroach\w*)\b', 'Review the photos or conversation, arrange a cleaner if needed, and add the issue to the turnover checklist.', 'Cleaning follow-up', 'Normal'),
+    ('Safety', r'\b(smoke (?:coming|detected|filling)|smoke alarm (?:sounding|going off)|(?:smell|smelling) (?:of )?gas|gas leak|sparks|exposed wir\w*|carbon monoxide alarm|break.in|(?:door|lock).{0,30}(?:won.t latch|can.t secure)|(?:loose (?:deck )?step|step.{0,30}loose))\b', 'Escalate to the property manager immediately. Confirm the situation and arrange an appropriate emergency or licensed response.', 'Manager intervention', 'Urgent'),
+    ('Maintenance', r'\b(broken|not working|stopped (?:working|connecting)|no longer (?:works?|working|connects?)|(?:isn.t|aren.t|wasn.t|weren.t) working|(?:doesn.t|won.t|can.t|cannot) (?:work|connect)|can.t.{0,35}\bconnect|neither.{0,60}\bconnect|no hot water|(?:water is )?pooling under|screen goes black|(?:bedroom|room) is still [7-9][0-9] degrees|leak\w*|off the wall|clogged)\b', 'Ask the manager to inspect the reported fault and arrange a repair. Confirm the exact item before considering a replacement.', 'Maintenance visit', 'High'),
+    ('Cleaning', r'\b(dirty|unclean|stained|mold|mould|filthy|(?:hair|crumbs).{0,35}(?:sheets|bedding)|trash was full|(?:dried food|food stuck).{0,35}(?:plates|dishes)|bedbugs?|cockroach\w*)\b', 'Review the photos or conversation, arrange a cleaner if needed, and add the issue to the turnover checklist.', 'Cleaning follow-up', 'Normal'),
     ('Supplies', r'\b(towels?|toilet paper|soap|shampoos?|(?<!air )conditioners?|salt|pepper|(?:cooking|olive) oil|blankets?|pillows?|batter(?:y|ies)|remotes?|laundry|trash bags?|garbage bags?|dish pods?|dishwasher pods?|dishwasher tablets?|detergent)\b', 'Check onsite stock and the full conversation. If still needed, propose a suitable replacement with an all-in budget and verified arrival before checkout.', 'Possible small purchase', 'Normal'),
+    ('Timing', r'\b(?:early check.?in|late check.?out|check in (?:early|around|at|before)|check out (?:late|around|at|after)|arriv\w* early)\b', 'Check the current turnover schedule and record the requested time in the property timezone before deciding. Update the reservation separately if approved.', 'Turnover review', 'Normal'),
     ('Instructions', r'\b(check.?out instructions|trash|garbage|wifi|wi-fi|parking|gaslog|fireplace)\b', 'Verify the property-specific instructions and prepare a clear answer for the manager to review. Add recurring questions to the guest guide.', 'Guest guide improvement', 'Normal'),
 )
-SIGNAL = re.compile(r'\b(no|not|missing|broken|stopped|dirty|cannot|can.t|don.t (?:have|see|find)|doesn.t|won.t|wasn.t|weren.t|isn.t|aren.t|neither|out of|please|need|bring|can we|could we|can you|could you|how|where|question|instructions|off the wall|permitted)\b', re.I)
+SIGNAL = re.compile(r'\b(no|not|missing|broken|stopped|dirty|cannot|can.t|don.t (?:have|see|find)|doesn.t|won.t|wasn.t|weren.t|isn.t|aren.t|neither|out of|please|need|bring|can we|could we|can you|could you|how|where|question|instructions|off the wall|permitted|request|could you resend|are there|which|is there|found|just checked in|stopped using|pooling|goes black|still|was full|dried food)\b', re.I)
 TOPICS = {key: value[1] for key, value in ITEMS.items()} | {
     'wifi': r'\b(?:wi-?fi|internet|network|hot ?spot)\b',
     'tv': r'\b(?:tv|television)\b',
@@ -29,6 +30,7 @@ def analyze(snapshot):
     issues = []
     current = dt.datetime.now(dt.timezone.utc)
     active = set(snapshot.get('active_reservation_ids', []))
+    upcoming = set(snapshot.get('upcoming_reservation_ids', []))
     for conversation in snapshot['conversations']:
         messages = sorted(conversation['messages'], key=lambda message: message['created_at'])
         grouped = {}
@@ -37,12 +39,21 @@ def analyze(snapshot):
             if message['sender_type'] != 'guest':
                 continue
             clauses = re.split(r'[.!?;\n]+|\bbut\b', text, flags=re.I)
-            for category, pattern, remedy, route, priority in RULES:
-                candidates = [clause for clause in clauses if re.search(pattern, clause, re.I) and (category == 'Safety' or SIGNAL.search(clause))]
+            matched_categories = set()
+            for category, pattern, remedy, route, priority in RULES + (
+                ('Other', r'\b(?:add (?:an?|one|another) (?:overnight )?guest|extend (?:our|my) stay|pet (?:fee|policy)|where can we|how do (?:i|we))\b',
+                 'Review the reservation and property policies before replying.', 'Manager review', 'Normal'),
+            ):
+                candidates = [clause for clause in clauses if re.search(pattern, clause, re.I) and (category == 'Safety' or SIGNAL.search(clause) or (category == 'Timing' and re.search(r'\bearly\b|\blate\b', clause, re.I)))]
+                if category == 'Instructions' and 'Cleaning' in matched_categories:
+                    candidates = [clause for clause in candidates if not re.search(r'\btrash was full\b', clause, re.I)]
                 if category == 'Supplies':
-                    candidates = [clause for clause in candidates if not re.search(r'\b((?:do not|don.t|no longer|never) need|not missing|have enough|no need)\b', clause, re.I) and re.search(r'\b(no|not|don.t (?:have|see|find)|missing|broken|weren.t|aren.t|out of|need|bring|can we|could we|can you|could you|please)\b', clause, re.I)]
+                    candidates = [clause for clause in candidates if not re.search(r'\b((?:do not|don.t|no longer|never) need|not missing|have enough|no need)\b', clause, re.I) and re.search(r'\b(no|not|don.t (?:have|see|find)|missing|broken|weren.t|aren.t|out of|need|bring|can we|could we|can you|could you|please|is there|are there|only)\b', clause, re.I)]
+                if category == 'Other' and matched_categories:
+                    continue
                 if not candidates:
                     continue
+                matched_categories.add(category)
                 issue = grouped.setdefault(category, {'id': conversation['reservation_id'] + ':' + category.lower(), 'category': category, 'priority': priority, 'route': route, 'recommendation': remedy, 'evidence': [], 'resolution_hint': None, 'hand_towel': False, 'item_types': [], 'topics': []})
                 issue['evidence'].append(message)
                 for topic, topic_pattern in TOPICS.items():
@@ -99,7 +110,10 @@ def analyze(snapshot):
             check_in = dt.datetime.fromisoformat(conversation['check_in'].replace('Z', '+00:00'))
             check_out = dt.datetime.fromisoformat(conversation['check_out'].replace('Z', '+00:00'))
             issue['lane'] = 'likely_resolved' if issue['resolution_hint'] else 'needs_attention'
-            if conversation['reservation_id'] not in active or not check_in <= current < check_out:
+            issue['upcoming'] = conversation['reservation_id'] in upcoming and current < check_in
+            if issue['upcoming'] and issue['category'] == 'Timing':
+                issue['lane'] = 'needs_attention'
+            elif conversation['reservation_id'] not in active or not check_in <= current < check_out:
                 issue['lane'] = 'practice'
             issues.append(issue)
     issues.sort(key=lambda issue: issue['latest_at'], reverse=True)

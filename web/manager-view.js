@@ -43,3 +43,75 @@ function managerSolutionCard(issue, message, controls) {
   if (request || plan?.lines.length) panel.append(node('p', 'Checkout is not connected. No automatic purchase will occur.', 'checkout-note'));
   return panel;
 }
+
+function issueWorkflow(issue, message) {
+  const section = node('section', '', 'purchase-panel');
+  const workflow = issue.workflow;
+  const actions = {
+    Timing: [['approved', 'Record approval'], ['declined', 'Record decline']],
+    Maintenance: [['handoff_recorded', 'Record repair handoff'], ['resolved', 'Mark resolved']],
+    Cleaning: [['handoff_recorded', 'Record cleaner handoff'], ['resolved', 'Mark resolved']],
+    Safety: [['acknowledged', 'Acknowledge safety report'], ['resolved', 'Mark resolved']],
+    Supplies: [['resolved', 'Mark resolved']],
+    Instructions: [['resolved', 'Mark resolved']],
+    Other: [['resolved', 'Mark resolved']],
+  }[issue.category];
+  const labels = {approved: 'Approved', declined: 'Declined', handoff_recorded: 'Handoff recorded', acknowledged: 'Acknowledged', resolved: 'Resolved'};
+  section.append(node('h3', 'Manager follow-up'));
+  if (issue.lane === 'practice') section.append(node('p', 'Practice record', 'help-text'));
+  if (issue.category === 'Timing') {
+    section.append(node('p', `Scheduled arrival ${date(issue.check_in)} · departure ${date(issue.check_out)}. Confirm cleaner availability separately. This decision does not change the reservation.`, 'help-text'));
+  }
+  if (['Maintenance', 'Cleaning', 'Timing'].includes(issue.category)) {
+    const label = issue.category === 'Maintenance' ? 'Repair request' : issue.category === 'Cleaning' ? 'Cleaning follow-up' : 'Turnover check';
+    const copy = node('button', `Copy ${label.toLowerCase()}`, 'secondary');
+    copy.type = 'button';
+    copy.onclick = async () => {
+      const context = [label, `Property: ${issue.property}`, `Reservation: ${issue.reservation_id}`,
+        `Scheduled arrival: ${issue.check_in}`, `Scheduled departure: ${issue.check_out}`, message.body].join('\n');
+      try {
+        await navigator.clipboard.writeText(context);
+        notice.textContent = 'Copied. Paste into the appropriate workspace.';
+      } catch {
+        notice.textContent = 'Clipboard unavailable. Copy the message from the conversation.';
+      }
+    };
+    section.append(copy);
+  }
+  if (workflow.decision) {
+    section.append(node('p', workflow.stale ? 'New information needs review. Previous decision: ' + labels[workflow.decision] : labels[workflow.decision], 'purchase-status'));
+    section.append(node('p', workflow.note, 'help-text'));
+  }
+  const form = node('form');
+  const label = node('label', issue.category === 'Timing' ? 'Requested time, timezone, and turnover check' : 'Follow-up note');
+  const note = node('textarea');
+  note.required = true;
+  note.maxLength = 1000;
+  note.rows = 2;
+  label.append(note);
+  form.append(label);
+  for (const [decision, text] of actions) {
+    if (issue.category === 'Safety' && decision === 'resolved' && (workflow.stale || workflow.decision !== 'acknowledged')) continue;
+    const button = node('button', text, 'secondary');
+    button.value = decision;
+    form.append(button);
+  }
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (!event.submitter) return;
+    const buttons = [...form.querySelectorAll('button')];
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+      await submitAction('/api/issue-workflow', {issue_id: issue.id, version: workflow.version,
+        fingerprint: workflow.fingerprint, decision: event.submitter.value, note: note.value});
+      document.activeElement?.blur();
+      await load();
+    } catch (error) {
+      notice.textContent = error.message;
+    } finally {
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  };
+  section.append(form);
+  return section;
+}
