@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Guest Recovery</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/login.js" defer></script>
+</head>
+<body>
+<header><span class="brand">Lucena <span>/ Guest Recovery</span></span></header>
+<main class="login-main"><section class="detail-card"><p class="eyebrow">Manager workspace</p><h1 id="login-title">Sign in</h1><p id="login-description">Use your manager username and password.</p><form id="login-form"><label>Username<input name="username" required minlength="3" maxlength="100" autocomplete="username" autocapitalize="none" spellcheck="false"></label><label>Password<input name="password" type="password" required minlength="12" maxlength="256" autocomplete="current-password"></label><label id="confirm-label" hidden>Confirm password<input name="confirm_password" type="password" maxlength="256" autocomplete="new-password"></label><button id="sign-in" disabled>Sign in</button><p id="login-feedback" role="status"></p></form></section></main>
+</body>
+</html>

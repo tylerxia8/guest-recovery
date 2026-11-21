@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guest Recovery</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/auth-client.js" defer></script>
+<script src="/catalog.js" defer></script>
+<script src="/local-supply.js" defer></script>
+<script src="/guest-replies.js" defer></script>
+<script src="/purchase-plans.js" defer></script>
+<script src="/manager-view.js" defer></script>
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header><a class="brand" href="/">Lucena <span>/ Guest Recovery</span></a><div class="account-controls"><button id="settings-toggle" type="button" class="secondary">Settings</button><span id="manager-name"></span><button id="logout" type="button" class="secondary">Sign out</button></div></header>
+<main>
+<div class="page-heading"><div><h1 id="page-title">Guest inbox</h1><p id="page-subtitle">Read the conversation. Review the solution.</p></div><button id="refresh" type="button" class="secondary">Refresh</button></div>
+<div id="connection" class="connection" role="status">Connecting to Hospitable…</div><p id="notice" role="status"></p>
+<details id="issue-summary" class="data-details"><summary>Issue breakdown</summary><div id="issue-counts"></div></details>
+<div class="workspace" id="inbox-workspace">
+<aside aria-label="Guest requests"><div class="inbox-heading"><h2>Guest texts</h2><span id="result-count"></span></div><label class="search-label"><span class="sr-only">Search requests</span><input id="search" type="search" placeholder="Search texts or properties…"></label><label><span class="sr-only">Request view</span><select id="request-view"><option value="needs_attention">Needs attention</option><option value="likely_resolved">Likely resolved</option><option value="practice">Practice</option></select></label><label>Problem type<select id="category"><option value="">All problems</option><option value="Timing">Early check-in / late checkout</option><option value="Other">Other</option><option value="Maintenance">Maintenance</option><option value="Supplies">Missing supplies</option><option value="Cleaning">Cleaning</option><option value="Instructions">Property instructions</option><option value="Safety">Safety</option></select></label><nav id="requests" aria-label="Choose a request"></nav></aside>
+<section id="issues" aria-label="Selected request"></section>
+</div>
+<section id="settings-workspace" hidden><details id="email-panel" class="catalog-panel" hidden><summary>Email delivery settings</summary><p>Use Gmail with a Google app password. Saving valid settings enables queued manager notices and cleaner inquiries.</p><form id="email-settings"><input type="hidden" name="provider" value="gmail"><div id="gmail-settings"><p class="help-text">Enable 2-Step Verification and create a <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">Google app password</a>. Use that app password here, not your normal Gmail password. Gmail confirms acceptance of outgoing mail; inbox delivery is not verified.</p><label>Google app password<input name="app_password" type="password" autocomplete="off" maxlength="100"></label></div><label id="sender-label">Sending email address<input name="sender" type="email" required maxlength="254"></label><label>Property manager email<input name="recipient" type="email" required maxlength="254"></label><p id="email-hosting" class="help-text"></p><button>Save email settings</button><p id="email-feedback" role="status"></p></form></details>
+<details class="catalog-panel"><summary>Hiddenbrook cleaner</summary><p>Cleaning supplies and toiletries. Exact home unit and daily availability are unknown. Select confirmed service coverage; no nearby properties are guessed.</p><div id="local-supplier-editor"></div></details>
+<details id="property-panel" class="catalog-panel"><summary>Property details</summary><p>Addresses, unit numbers, and delivery instructions from Hospitable.</p><div id="property-editor"></div></details>
+<details id="catalog-panel" class="catalog-panel"><summary>Delivery items</summary><p>Supplies are shared across all units. TV remotes are matched to each unit’s TV.</p><div id="catalog-editor"></div></details>
+<details class="data-details"><summary>About this data</summary><div id="stats"></div><p id="scope"></p><p id="updated"></p><p>Current-stay views require an accepted reservation in the latest completed Hospitable import. Timing requests also appear for accepted arrivals within seven days. Likely resolved is a guest-message hint requiring review. Historical or unverified stays remain practice cases. Original messages and dates are preserved.</p></details></section>
+</main>
+</body>
+</html>
