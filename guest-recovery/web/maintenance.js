@@ -81,7 +81,7 @@ document.querySelector('#maintenance-panel').addEventListener('toggle', event =>
   if (settings.dashboard_url) workspace.href = settings.dashboard_url + '/workspace';
   maintenanceForm.elements.url.value = dataset.maintenance?.url || '';
   maintenanceForm.elements.dashboard_url.value = dataset.maintenance?.dashboard_url || '';
-  maintenanceForm.elements.token.placeholder = dataset.maintenance?.configured ? 'Configured — leave blank to keep' : 'Create a Guest Recovery token in maintenance';
+  maintenanceForm.elements.token.placeholder = dataset.maintenance?.configured ? 'Configured — leave blank to keep' : 'Create a Guest Operations token in maintenance';
 });
 maintenanceForm.onsubmit = async event => {
   event.preventDefault();

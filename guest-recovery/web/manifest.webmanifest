@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Lucena Guest Recovery",
-  "short_name": "Guest Recovery",
+  "name": "Lucena Guest Operations",
+  "short_name": "Guest Ops",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

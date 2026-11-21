@@ -7,7 +7,7 @@ import styles from "./workspace.module.css";
 
 type Project = "guest_recovery" | "cleaner_scheduler";
 type Data = { mode: "demo" | "workspace"; apps: { project: Project; url: string }[]; properties: { external_property_id: string; unit_id: string; name: string; label: string }[]; units: { id: string; name: string; label: string }[] };
-const names = { guest_recovery: "Guest Recovery", cleaner_scheduler: "Cleaner Scheduling" };
+const names = { guest_recovery: "Guest Operations", cleaner_scheduler: "Cleaner Scheduling" };
 
 export default function Workspace() {
   const [data, setData] = useState<Data | null>(null);

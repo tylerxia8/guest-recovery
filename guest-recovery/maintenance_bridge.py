@@ -107,7 +107,7 @@ def prepare_configuration(data):
         raise ValueError('Provide a connection token when changing maintenance API')
     token = token or previous_token
     if not token:
-        raise ValueError('Create a Guest Recovery connection token in maintenance first')
+        raise ValueError('Create a Guest Operations connection token in maintenance first')
     metadata = request(url, token, 'GET', '/v1/maintenance-bridge')
     metadata = validate_metadata(metadata)
     organization = metadata['organization_id']
@@ -132,7 +132,7 @@ def validate_metadata(metadata):
         organization = str(uuid.UUID(metadata['organization_id']))
         expiry = dt.datetime.fromisoformat(metadata['expires_at'])
         if metadata['source'] != 'guest_recovery' or metadata['mode'] not in ('demo', 'workspace') or expiry.tzinfo is None or expiry <= dt.datetime.now(dt.UTC):
-            raise ValueError('Create a fresh Guest Recovery maintenance token')
+            raise ValueError('Create a fresh Guest Operations maintenance token')
         if not isinstance(metadata['properties'], list):
             raise TypeError('Maintenance returned invalid property links')
         properties = []
