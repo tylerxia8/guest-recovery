@@ -1,3 +1,3 @@
 """Alembic revision the running process expects."""
 
-EXPECTED_SCHEMA_REVISION = "0027_submitting_at"
+EXPECTED_SCHEMA_REVISION = "0028_guest_touchups"

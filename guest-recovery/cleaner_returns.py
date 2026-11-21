@@ -11,6 +11,8 @@ import urllib.request
 import uuid
 from urllib.parse import urlsplit
 
+import local_scheduler
+
 KINDS = {'linens': ('Fresh linens and bed remake', 30), 'targeted': ('Targeted cleaning', 45), 'turnover': ('Missed turnover', 120)}
 ESCALATE = re.compile(r'\b(mou?ld|bed\s?bugs?|cockroach\w*|roaches|fleas|gas|sewage|feces|faeces|blood|needles?)\b', re.IGNORECASE)
 
@@ -20,6 +22,10 @@ class SchedulerNotFound(ValueError):
 
 
 def configuration():
+    workspace = local_scheduler.workspace_id()
+    if workspace:
+        return {'url': local_scheduler.origin(workspace), 'dashboard_url': '', 'configured': True,
+                'stay_configured': True, 'workspace_id': workspace, 'expires_at': None, 'internal': True}
     origin = os.environ.get('CLEANER_SCHEDULER_URL', '').rstrip('/')
     token = os.environ.get('CLEANER_SCHEDULER_TOKEN', '')
     parsed = urlsplit(origin)
@@ -39,6 +45,8 @@ def configuration():
 
 def prepare_configuration(data):
     from settings import CONFIG_LOCK
+    if local_scheduler.workspace_id():
+        raise ValueError('This installation uses the internal scheduler.')
     origin = data.get('url')
     token = data.get('token', '')
     if not isinstance(origin, str) or len(origin) > 250 or not isinstance(token, str) or len(token) > 8000 or (token and not re.fullmatch(r'[A-Za-z0-9_.~-]+', token)):
@@ -246,6 +254,8 @@ def schedule_action(db, path, data, timestamp):
         raise ValueError('Refresh before reviewing this schedule proposal')
     issue, live = context(db, row['issue_id'], timestamp)
     plan = json.loads(row['body'])
+    if (plan.get('scheduler_url') or '').startswith('internal-scheduler:'):
+        raise ValueError('Manage this touch-up in Cleaner Scheduling.')
     fingerprint = guest_context_fingerprint(issue)
     if not live or data.get('source_fingerprint') != fingerprint:
         raise ValueError('The guest conversation or stay changed. Review entry permission before scheduling')
@@ -293,6 +303,9 @@ def schedule_action(db, path, data, timestamp):
 
 
 def request(origin, method, path, body=None, key=None):
+    workspace = local_scheduler.workspace_id()
+    if workspace and origin == local_scheduler.origin(workspace):
+        return local_scheduler.request(workspace, method, path, body)
     from settings import CONFIG_LOCK
     with CONFIG_LOCK:
         settings = configuration()

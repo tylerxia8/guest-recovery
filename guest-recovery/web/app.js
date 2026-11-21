@@ -520,6 +520,7 @@ async function load() {
     const nextIssues = JSON.stringify(next.issues.map(({worksheet, ...issue}) => issue));
     const changed = previousIssues !== nextIssues || renderedPreferences !== JSON.stringify(next.catalog) || renderedSupplier !== JSON.stringify(next.local_supplier) || JSON.stringify(dataset.cleaner_scheduler) !== JSON.stringify(next.cleaner_scheduler) || JSON.stringify(dataset.maintenance) !== JSON.stringify(next.maintenance) || !document.querySelector('#issues').firstChild;
     dataset = next;
+    renderInternalScheduler(dataset.cleaner_scheduler);
     const maintenanceLink = document.querySelector('#maintenance-workspace-link');
     maintenanceLink.hidden = !dataset.maintenance?.dashboard_url;
     if (dataset.maintenance?.dashboard_url) maintenanceLink.href = dataset.maintenance.dashboard_url + '/maintenance/review';

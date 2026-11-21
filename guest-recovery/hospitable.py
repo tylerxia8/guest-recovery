@@ -12,7 +12,7 @@ import urllib.request
 import uuid
 from contextlib import closing
 
-from app import DATABASE, ROOT, audit, connect, initialize, mutate
+from guest_app import DATABASE, ROOT, audit, connect, initialize, mutate
 
 
 def get(path, token):

@@ -30,7 +30,7 @@ function cleanerReturnPanel(issue, message) {
       panel.append(node('strong', proposal.cleaner_name || 'Proposed cleaner'), node('p', `${date(proposal.start_at)} – ${date(proposal.end_at)}`, 'purchase-summary'));
     }
     if (remote?.proposal_failure) panel.append(node('p', remote.proposal_failure, 'warning'));
-    if (visit.state === 'submitted' && ['awaiting_schedule', 'awaiting_approval', 'needs_manager'].includes(remote?.status) && !remote?.assignment) {
+    if (!scheduler.internal && visit.state === 'submitted' && ['awaiting_schedule', 'awaiting_approval', 'needs_manager'].includes(remote?.status) && !remote?.assignment) {
       const actions = node('div', '', 'primary-actions');
       const proposal = remote.proposal;
       const choices = [...(proposal ? [['approve-schedule', 'Approve proposed visit', {run_id: proposal.run_id, expected_version: proposal.version, expected_fingerprint: proposal.fingerprint, expected_day_revision: proposal.day_revision}]] : []), ['propose', 'Refresh proposal', {}]];
@@ -57,7 +57,7 @@ function cleanerReturnPanel(issue, message) {
       panel.append(node('p', notices[remote.notice.state] || 'Check cleaner notification status.', 'help-text'));
       if (remote.notice.acceptance_overdue) panel.append(node('p', 'The cleaner has not accepted in time. Follow up or review another option; no automatic reassignment has occurred.', 'warning'));
       else if (remote.notice.manager_action_required) panel.append(node('p', 'This visit needs manager follow-up.', 'warning'));
-      if (remote.status === 'scheduled' && ['none', 'disabled', 'failed'].includes(remote.notice.state)) {
+      if (remote.status === 'scheduled' && !scheduler.internal && ['none', 'disabled', 'failed'].includes(remote.notice.state)) {
         const notify = node('button', 'Retry cleaner notice', 'secondary');
         notify.type = 'button';
         notify.disabled = ['queued', 'uncertain'].includes(visit.plan.notice_retry?.state);
@@ -234,7 +234,11 @@ function cleanerReturnPanel(issue, message) {
 }
 
 const schedulerForm = document.querySelector('#cleaner-scheduler-settings');
-managerSession.then(session => { document.querySelector('#cleaner-scheduler-panel').hidden = session.role !== 'admin'; });
+managerSession.then(session => { document.querySelector('#cleaner-scheduler-panel').hidden = session.role !== 'admin' || Boolean(dataset.cleaner_scheduler?.internal); });
+function renderInternalScheduler(scheduler) {
+  if (!scheduler?.internal) return;
+  document.querySelector('#cleaner-scheduler-panel').hidden = true;
+}
 document.querySelector('#cleaner-scheduler-panel').addEventListener('toggle', event => {
   if (!event.target.open) return;
   schedulerForm.elements.url.value = dataset.cleaner_scheduler?.url || '';

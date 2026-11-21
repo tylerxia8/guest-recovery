@@ -210,7 +210,7 @@ def synchronize(connect, stop):
                     if not settings['stay_configured']:
                         raise ValueError('Connect the cleaning scheduler before confirming this change.')
                     try:
-                        remote = scheduler_request(origin, 'GET', '/v1/stay-adjustments/' + row['id'])
+                        remote = None if settings.get('internal') else scheduler_request(origin, 'GET', '/v1/stay-adjustments/' + row['id'])
                     except SchedulerNotFound:
                         remote = None
                     if remote is None or remote.get('decision') == 'pending':

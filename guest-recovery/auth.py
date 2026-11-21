@@ -123,7 +123,7 @@ def cookie(token, origin):
 
 
 if __name__ == '__main__':
-    from app import connect, initialize
+    from guest_app import connect, initialize
     parser = argparse.ArgumentParser()
     parser.add_argument('command', choices=('create-user', 'reset-password'))
     parser.add_argument('username')
