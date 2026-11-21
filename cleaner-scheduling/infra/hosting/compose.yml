@@ -1,0 +1,28 @@
+services:
+  hospitable-db:
+    restart: unless-stopped
+  hospitable-cache:
+    restart: unless-stopped
+  hospitable-api:
+    environment:
+      CLEANER_PORTAL_BASE_URL: https://${CLEANER_PORTAL_HOST:?}
+  hospitable-web:
+    environment:
+      CLEANER_PORTAL_BASE_URL: https://${CLEANER_PORTAL_HOST:?}
+  cleaner-https:
+    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
+    restart: unless-stopped
+    environment:
+      CLEANER_PORTAL_HOST: ${CLEANER_PORTAL_HOST:?}
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ../hosting/Caddyfile:/etc/caddy/Caddyfile:ro
+      - cleaner-certs:/data
+      - cleaner-caddy-config:/config
+    depends_on:
+      - hospitable-web
+volumes:
+  cleaner-certs:
+  cleaner-caddy-config:

@@ -1,0 +1,98 @@
+name: airbnb-hospitable-read
+services:
+  hospitable-db:
+    image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+    environment:
+      POSTGRES_USER: cleaning_migrator
+      POSTGRES_PASSWORD: ${LOCAL_DATABASE_PASSWORD:?}
+      POSTGRES_DB: cleaning_hospitable
+    volumes:
+      - hospitable-db:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U cleaning_migrator -d cleaning_hospitable"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  hospitable-cache:
+    image: redis:7@sha256:2e3eb11462c4e3759e6972678dd051d150ff54b1e60714b3c33b701260172a90
+    command: [redis-server, --save, "", --appendonly, "no"]
+  hospitable-api:
+    build:
+      context: ../..
+      dockerfile: infra/local/hospitable-backend.Dockerfile
+    restart: unless-stopped
+    user: "${LOCAL_UID:?}:${LOCAL_GID:?}"
+    environment:
+      APP_ENV: development
+      HOSPITABLE_READ_ONLY: "true"
+      WORKSPACE_SIGNUP_ENABLED: ${WORKSPACE_SIGNUP_ENABLED:-false}
+      WORKSPACE_INTERNAL_PAT_ENABLED: ${WORKSPACE_INTERNAL_PAT_ENABLED:-false}
+      LOCAL_FREE_ROUTING: "true"
+      LOCAL_SCHEDULING_ENABLED: "true"
+      LOCAL_EMAIL_AUTOMATION_ENABLED: ${LOCAL_EMAIL_AUTOMATION_ENABLED:-false}
+      DISPATCH_LOCAL_TIME: ${DISPATCH_LOCAL_TIME:-20:00}
+      CLEANER_PORTAL_BASE_URL: ${CLEANER_PORTAL_BASE_URL:-http://localhost:3011}
+      HOSPITABLE_TOKEN_FILE: /run/secrets/hospitable-token
+      FIELD_ENCRYPTION_KEY_FILE: /private/field-key
+      GMAIL_CREDENTIALS_FILE: /private/gmail.json
+      GMAIL_TEST_SEND_ENABLED: "true"
+      GMAIL_ASSIGNMENT_SEND_ENABLED: "true"
+      GMAIL_ONBOARDING_SEND_ENABLED: ${GMAIL_ONBOARDING_SEND_ENABLED:-false}
+      LOCAL_APP_TOKEN_FILE: /private/session/app-token
+      RESERVATION_PROVIDER: hospitable
+      SMS_PROVIDER: mock
+      ROUTING_PROVIDER: mock
+      AUTH_PROVIDER: mock
+      PRODUCTION_DISPATCH_ENABLED: "false"
+      PRODUCTION_INTEGRATIONS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://cleaning_app:${LOCAL_DATABASE_PASSWORD}@hospitable-db:5432/cleaning_hospitable
+      MIGRATION_DATABASE_URL: postgresql+psycopg://cleaning_migrator:${LOCAL_DATABASE_PASSWORD}@hospitable-db:5432/cleaning_hospitable
+      REDIS_URL: redis://hospitable-cache:6379/6
+      AUTH_ISSUER: http://localhost/hospitable-local
+      AUTH_AUDIENCE: hospitable-local
+      AUTH_MOCK_SECRET: ${LOCAL_AUTH_SECRET:?}
+      CORS_ORIGINS: http://localhost:3011,http://127.0.0.1:3011
+    volumes:
+      - ${HOME}/.hospitable-read-token:/run/secrets/hospitable-token:ro
+      - ../../private-data/hospitable:/private
+    ports:
+      - 127.0.0.1:3012:8000
+    depends_on:
+      hospitable-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health/ready', timeout=3).close()"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+  hospitable-routing:
+    image: ghcr.io/project-osrm/osrm-backend:v6.0.0@sha256:729461bcc9ae9e6aafa92c0f93db9b060a32e85d5e72092c01ae4a4a9f1eb564
+    command: [osrm-routed, --algorithm, mld, --threads, "2", --verbosity, WARNING, /data/current/charlotte.osrm]
+    volumes:
+      - ../../private-data/hospitable/routing:/data:ro
+    mem_limit: 1g
+    cpus: 2
+    restart: unless-stopped
+  hospitable-web:
+    build:
+      context: ../..
+      dockerfile: infra/local/hospitable-frontend.Dockerfile
+    restart: unless-stopped
+    user: "${LOCAL_UID:?}:${LOCAL_GID:?}"
+    environment:
+      HOSPITABLE_READ_ONLY: "true"
+      WORKSPACE_SIGNUP_ENABLED: ${WORKSPACE_SIGNUP_ENABLED:-false}
+      WORKSPACE_INTERNAL_PAT_ENABLED: ${WORKSPACE_INTERNAL_PAT_ENABLED:-false}
+      LOCAL_APP_TOKEN_FILE: /private/app-token
+      CLEANING_API_ORIGIN: http://hospitable-api:8000
+      CLEANER_PORTAL_BASE_URL: ${CLEANER_PORTAL_BASE_URL:-http://localhost:3011}
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - ../../private-data/hospitable/session:/private:ro
+    ports:
+      - 127.0.0.1:3011:3000
+    depends_on:
+      hospitable-api:
+        condition: service_healthy
+volumes:
+  hospitable-db:

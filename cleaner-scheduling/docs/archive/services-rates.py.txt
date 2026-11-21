@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+import uuid
+from datetime import date
+
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
+
+from app.domain.errors import AppError
+from app.models import CleanerRate
+
+
+def resolve_rate(session: Session, cleaner_id: uuid.UUID, property_id: uuid.UUID, service_date: date) -> CleanerRate:
+    rows = session.scalars(
+        select(CleanerRate).where(
+            CleanerRate.cleaner_id == cleaner_id,
+            or_(CleanerRate.property_id == property_id, CleanerRate.property_id.is_(None)),
+            CleanerRate.effective_from <= service_date,
+            or_(CleanerRate.effective_to.is_(None), CleanerRate.effective_to > service_date),
+        )
+    ).all()
+    specific = [row for row in rows if row.property_id == property_id]
+    candidates = specific or [row for row in rows if row.property_id is None]
+    if len(candidates) != 1:
+        raise AppError("missing_rate", "Exactly one effective rate is required for this cleaner and property.", 422)
+    return candidates[0]
+
+
+def rate_snapshot(rate: CleanerRate, property_id: uuid.UUID, service_date: date) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "rate_id": str(rate.id),
+        "rule_version": rate.rule_version,
+        "cleaner_id": str(rate.cleaner_id),
+        "property_id": str(property_id),
+        "scope": "property" if rate.property_id is not None else "cleaner_default",
+        "service_date": service_date.isoformat(),
+        "effective_from": rate.effective_from.isoformat(),
+        "effective_to": None if rate.effective_to is None else rate.effective_to.isoformat(),
+        "amount_cents": rate.flat_rate_cents,
+        "currency": rate.currency,
+    }

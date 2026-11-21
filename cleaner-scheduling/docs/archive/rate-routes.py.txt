@@ -1,0 +1,214 @@
+class RateWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    property_id: uuid.UUID | None = None
+    effective_from: date
+    effective_to: date | None = None
+    flat_rate_cents: int = Field(strict=True, ge=0, le=100_000_000)
+    currency: str
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class RateReplacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    effective_from: date
+    flat_rate_cents: int = Field(strict=True, ge=0, le=100_000_000)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@legacy_finance_router.post("/cleaners/{cleaner_id}/rates")
+def post_rate(
+    cleaner_id: uuid.UUID,
+    payload: RateWrite,
+    request: Request,
+    principal: Principal = Depends(require_owner),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    idempotency_key: str = Depends(require_idempotency_key),
+) -> JSONResponse:
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtext('cleaner-rate-writes-v1'))"))
+    route = f"/v1/cleaners/{cleaner_id}/rates"
+    return _idempotent(
+        request,
+        principal,
+        session,
+        settings,
+        clock,
+        idempotency_key,
+        route,
+        payload.model_dump(mode="json"),
+        lambda: _create_rate(session, clock, cleaner_id, payload, principal.subject),
+        201,
+    )
+
+
+@legacy_finance_router.get("/cleaners/{cleaner_id}/rates")
+def list_rates(
+    cleaner_id: uuid.UUID,
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    effective_on: date | None = None,
+) -> dict[str, object]:
+    if session.get(Cleaner, cleaner_id) is None:
+        raise AppError("not_found", "Cleaner was not found.", 404)
+    rows = session.scalars(
+        select(CleanerRate).where(CleanerRate.cleaner_id == cleaner_id).order_by(CleanerRate.rule_version)
+    ).all()
+    return {
+        "items": [
+            _rate_json(row)
+            for row in rows
+            if effective_on is None
+            or (row.effective_from <= effective_on and (row.effective_to is None or effective_on < row.effective_to))
+        ],
+        "next_cursor": None,
+    }
+
+
+@legacy_finance_router.post("/cleaners/{cleaner_id}/rates/{rate_id}/replace")
+def replace_rate(
+    cleaner_id: uuid.UUID,
+    rate_id: uuid.UUID,
+    payload: RateReplacement,
+    request: Request,
+    principal: Principal = Depends(require_owner),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    idempotency_key: str = Depends(require_idempotency_key),
+) -> JSONResponse:
+    expected = _if_match(request)
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtext('cleaner-rate-writes-v1'))"))
+
+    def action() -> dict[str, object]:
+        old = session.get(CleanerRate, rate_id)
+        if old is None or old.cleaner_id != cleaner_id:
+            raise AppError("not_found", "Cleaner rate was not found.", 404)
+        if old.rule_version != expected:
+            raise AppError("stale_version", "Rate version is stale.", 409)
+        boundary = payload.effective_from
+        if boundary <= old.effective_from or (old.effective_to is not None and boundary >= old.effective_to):
+            raise AppError("validation_error", "Replacement must split the existing rate period.", 422)
+        used = session.scalar(
+            select(Assignment.id).where(Assignment.rate_id == old.id, Assignment.service_date >= boundary).limit(1)
+        )
+        if used is not None:
+            raise AppError(
+                "rate_in_use", "This boundary would change published compensation. Choose a later date.", 409
+            )
+        previous_end = old.effective_to
+        old.effective_to = boundary
+        session.flush()
+        result = _create_rate(
+            session,
+            clock,
+            cleaner_id,
+            RateWrite(
+                property_id=old.property_id,
+                effective_from=boundary,
+                effective_to=previous_end,
+                flat_rate_cents=payload.flat_rate_cents,
+                currency="USD",
+                reason=payload.reason,
+            ),
+            principal.subject,
+        )
+        write_audit(
+            session,
+            clock=clock,
+            actor_type="operator",
+            actor_subject=principal.subject,
+            action="cleaner_rate.period_closed",
+            entity_type="cleaner_rate",
+            entity_id=old.id,
+            correlation_id=old.id,
+            reason=payload.reason,
+            redacted_changes={"effective_to": boundary.isoformat()},
+            request_id=request.state.request_id,
+        )
+        return result
+
+    return _idempotent(
+        request,
+        principal,
+        session,
+        settings,
+        clock,
+        idempotency_key,
+        request.url.path,
+        {**payload.model_dump(mode="json"), "if_match": expected},
+        action,
+        201,
+    )
+
+
+def _rate_json(row: CleanerRate) -> dict[str, object]:
+    return {
+        "id": str(row.id),
+        "cleaner_id": str(row.cleaner_id),
+        "property_id": None if row.property_id is None else str(row.property_id),
+        "effective_from": row.effective_from.isoformat(),
+        "effective_to": None if row.effective_to is None else row.effective_to.isoformat(),
+        "rule_version": row.rule_version,
+        "flat_rate_cents": row.flat_rate_cents,
+        "currency": row.currency,
+        "reason": row.reason,
+    }
+
+
+def _create_rate(
+    session: Session,
+    clock: Clock,
+    cleaner_id: uuid.UUID,
+    payload: RateWrite,
+    actor: str,
+) -> dict[str, object]:
+    if payload.currency != "USD":
+        raise AppError("validation_error", "Currency must be USD.", 422)
+    if payload.effective_to is not None and payload.effective_to <= payload.effective_from:
+        raise AppError("validation_error", "effective_to must be after effective_from.", 422)
+    if session.get(Cleaner, cleaner_id) is None:
+        raise AppError("not_found", "Cleaner was not found.", 404)
+    if not payload.reason.strip():
+        raise AppError("validation_error", "A rate reason is required.", 422)
+    if payload.property_id is not None and session.get(Property, payload.property_id) is None:
+        raise AppError("not_found", "Property was not found.", 404)
+    rows = session.scalars(select(CleanerRate).where(CleanerRate.cleaner_id == cleaner_id)).all()
+    for row in rows:
+        if row.property_id != payload.property_id:
+            continue
+        new_end = payload.effective_to or date.max
+        old_end = row.effective_to or date.max
+        if payload.effective_from < old_end and row.effective_from < new_end:
+            raise AppError("rate_overlap", "Rate ranges overlap.", 409)
+    now = clock.now()
+    row = CleanerRate(
+        id=uuid.uuid4(),
+        created_at=now,
+        cleaner_id=cleaner_id,
+        property_id=payload.property_id,
+        rule_version=len(rows) + 1,
+        effective_from=payload.effective_from,
+        effective_to=payload.effective_to,
+        flat_rate_cents=payload.flat_rate_cents,
+        currency="USD",
+        created_by=actor,
+        reason=payload.reason,
+    )
+    session.add(row)
+    write_audit(
+        session,
+        clock=clock,
+        actor_type="operator",
+        actor_subject=actor,
+        action="cleaner_rate.created",
+        entity_type="cleaner_rate",
+        entity_id=row.id,
+        correlation_id=row.id,
+        reason=payload.reason,
+        redacted_changes={"flat_rate_cents": payload.flat_rate_cents, "rule_version": row.rule_version},
+        request_id=None,
+    )
+    session.flush()
+    return _rate_json(row)

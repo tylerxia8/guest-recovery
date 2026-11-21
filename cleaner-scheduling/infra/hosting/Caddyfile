@@ -1,0 +1,19 @@
+{$CLEANER_PORTAL_HOST} {
+	request_body {
+		max_size 32KB
+	}
+	header Referrer-Policy no-referrer
+	header Strict-Transport-Security "max-age=31536000"
+	@cleaner path /cleaner /onboarding /api/cleaner-portal /api/cleaner-onboarding /_next/static/* /favicon.ico
+	handle @cleaner {
+		reverse_proxy hospitable-web:3000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 90s
+			}
+		}
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

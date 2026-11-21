@@ -1,0 +1,60 @@
+[project]
+name = "cleaning-coordination"
+version = "0.1.0"
+description = "M1 local foundation for single-business cleaning coordination"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic>=1.14",
+  "celery>=5.4",
+  "cryptography==50.0.2",
+  "fastapi>=0.115",
+  "httpx>=0.27",
+  "ortools>=9.12",
+  "psycopg[binary]>=3.2",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.6",
+  "pyjwt>=2.10",
+  "python-multipart>=0.0.33",
+  "redis>=5",
+  "sqlalchemy>=2.0.36",
+  "uvicorn>=0.32",
+]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.14",
+  "pytest>=8.3",
+  "ruff>=0.8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["app", "tests", "migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/api/**/*.py" = ["B008"]
+"tests/conftest.py" = ["E402"]
+"app/workers/celery_app.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["app"]
+warn_unused_ignores = true
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*", "ortools", "ortools.*"]
+ignore_missing_imports = true

@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+import csv
+import io
+import os
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+
+import pytest
+from app.clock import FrozenClock, SystemClock
+from app.db import get_engine
+from app.models import Assignment, CleanerRate
+from fastapi.testclient import TestClient
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import sessionmaker
+from tests.support import auth_headers
+from tests.test_scheduling import (
+    _approve,
+    _available,
+    _cleaner,
+    _preview,
+    _property_id,
+    _publish,
+    _stay,
+    _sync,
+    _turnover,
+)
+from tests.test_sms import _inbound, _opt_in
+
+
+def db():
+    return sessionmaker(bind=get_engine(os.environ["DATABASE_URL"]), expire_on_commit=False)()
+
+
+def headers(key: str = "prepare", version: int | None = None, viewer: bool = False) -> dict[str, str]:
+    result = auth_headers(
+        "synthetic-viewer" if viewer else "synthetic-manager", key=key, roles=("viewer",) if viewer else ("manager",)
+    )
+    if version is not None:
+        result["If-Match"] = f'"{version}"'
+    return result
+
+
+def create_rate(
+    client: TestClient,
+    cleaner: str,
+    *,
+    cents: int = 7500,
+    prop: str | None = None,
+    start: str = "2026-01-01",
+    end: str | None = None,
+    key: str = "rate",
+):
+    return client.post(
+        f"/v1/cleaners/{cleaner}/rates",
+        json={
+            "property_id": None if prop is None else _property_id(prop),
+            "effective_from": start,
+            "effective_to": end,
+            "flat_rate_cents": cents,
+            "currency": "USD",
+            "reason": "Synthetic rate fixture",
+        },
+        headers=auth_headers("synthetic-owner", key=key),
+    )
+
+
+def complete_fixture(client: TestClient, *, cents: int = 7500, two: bool = False) -> str:
+    _approve(client)
+    stays = _turnover("R-A", "P-A", "2026-11-10")
+    if two:
+        stays += _turnover("R-B", "P-B", "2026-11-10")
+    _sync(client, stays, "payment-sync")
+    cleaner = _cleaner(
+        client, name="=SYNTHETIC()", phone="+15555550401", properties=["P-A", "P-B"], key="payment-cleaner"
+    )
+    assert create_rate(client, cleaner, cents=cents).status_code == 201
+    if two:
+        assert create_rate(client, cleaner, cents=9000, prop="P-B", key="override-rate").status_code == 201
+    _opt_in(client, cleaner)
+    _available(client, cleaner, "2026-11-10", "synthetic:payment-origin", key="payment-available")
+    preview = _preview(client, "2026-11-10", "payment-preview")
+    _publish(client, preview, "payment-publish")
+    client.app.state.clock = FrozenClock(datetime(2026, 11, 10, 21, tzinfo=UTC))
+    with db() as session:
+        task_ids = [str(row.task_id) for row in session.scalars(select(Assignment)).all()]
+    for index, task_id in enumerate(task_ids):
+        _inbound(client, "+15555550401", f"SM-DONE-PAY-{index}", f"DONE {task_id}")
+    return cleaner
+
+
+def prepare(client: TestClient, key: str = "prepare"):
+    return client.post(
+        "/v1/payment-batches/prepare",
+        headers=headers(key),
+        json={"period_start": "2026-11-10", "period_end": "2026-11-11", "currency": "USD"},
+    )
+
+
+def approve(client: TestClient, batch: dict, key: str = "approve"):
+    return client.post(
+        f"/v1/payment-batches/{batch['id']}/approve",
+        headers=headers(key, batch["version"]),
+        json={"expected_total_cents": batch["total_cents"], "note": "Synthetic approval; no money sent"},
+    )
+
+
+def test_at20_property_precedence_snapshot_and_service_date(client: TestClient) -> None:
+    cleaner = complete_fixture(client, two=True)
+    # An unrelated property's override must never leak onto P-A.
+    response = prepare(client)
+    assert response.status_code == 201, response.text
+    batch = response.json()
+    assert batch["total_cents"] == 16500
+    assert sorted(line["amount_cents"] for line in batch["lines"]) == [7500, 9000]
+    assert all(line["service_date"] == "2026-11-10" for line in batch["lines"])
+    assert all("rule_version" in line["rate_snapshot"] for line in batch["lines"])
+    future = create_rate(client, cleaner, cents=8000, prop="P-A", start="2026-11-11", key="future-rate")
+    assert future.status_code == 201
+    current = client.get(f"/v1/payment-batches/{batch['id']}", headers=headers()).json()
+    assert current["total_cents"] == 16500
+
+
+def test_at21_idempotency_and_overlapping_concurrent_preparation(client: TestClient) -> None:
+    complete_fixture(client)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda key: prepare(client, key), ["concurrent-a", "concurrent-b"]))
+    assert sorted(result.status_code for result in results) == [201, 422]
+    winner = next(result for result in results if result.status_code == 201)
+    winner_key = "concurrent-a" if results[0].status_code == 201 else "concurrent-b"
+    replay = prepare(client, winner_key)
+    assert replay.json() == winner.json()
+    with db() as session:
+        assert session.execute(text("SELECT count(*) FROM payment_line_items")).scalar_one() == 1
+    conflict = client.post(
+        "/v1/payment-batches/prepare",
+        headers=headers(winner_key),
+        json={"period_start": "2026-11-09", "period_end": "2026-11-11", "currency": "USD"},
+    )
+    assert conflict.status_code == 409
+
+
+def test_at22_approval_csv_and_database_immutability(client: TestClient) -> None:
+    complete_fixture(client, two=True)
+    batch = prepare(client).json()
+    draft_export = client.get(f"/v1/payment-batches/{batch['id']}/export.csv", headers=headers())
+    assert draft_export.status_code == 409
+    approved = approve(client, batch)
+    assert approved.status_code == 200, approved.text
+    assert approve(client, batch).json() == approved.json()
+    exports = [client.get(f"/v1/payment-batches/{batch['id']}/export.csv", headers=headers()) for _ in range(2)]
+    assert exports[0].content == exports[1].content
+    assert exports[0].headers["x-content-sha256"] == exports[1].headers["x-content-sha256"]
+    rows = list(csv.DictReader(io.StringIO(exports[0].text)))
+    assert sum(int(row["amount_cents"]) for row in rows) == 16500
+    assert all(row["cleaner_name"].startswith("'=SYNTHETIC") for row in rows)
+    assert "phone" not in exports[0].text and "entry_code" not in exports[0].text
+    for statement in (
+        "UPDATE payment_line_items SET amount_cents = 1 WHERE batch_id = :id",
+        "UPDATE payment_batches SET total_cents = 1 WHERE id = :id",
+    ):
+        with pytest.raises(DBAPIError), get_engine(os.environ["DATABASE_URL"]).begin() as connection:
+            connection.execute(text(statement), {"id": batch["id"]})
+    with db() as session:
+        assert (
+            session.execute(text("SELECT count(*) FROM audit_logs WHERE action = 'payment.exported'")).scalar_one() == 2
+        )
+        assert (
+            session.execute(text("SELECT count(*) FROM outbox_events WHERE topic LIKE '%payment%'")).scalar_one() == 0
+        )
+
+
+def test_at36_void_reprepare_preserves_unique_lines_and_history(client: TestClient) -> None:
+    complete_fixture(client)
+    batch = prepare(client).json()
+    voided = client.post(
+        f"/v1/payment-batches/{batch['id']}/void",
+        headers=headers("void", batch["version"]),
+        json={"reason": "Replace synthetic draft"},
+    )
+    assert voided.status_code == 200, voided.text
+    replacement = prepare(client, "replacement")
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["lines"][0]["id"] == batch["lines"][0]["id"]
+    original = client.get(f"/v1/payment-batches/{batch['id']}", headers=headers()).json()
+    assert original["lines"] == batch["lines"]
+    assert original["status"] == "void"
+    with db() as session:
+        assert session.execute(text("SELECT count(*) FROM payment_line_items")).scalar_one() == 1
+
+
+def test_at23_payment_access_and_stale_approval(client: TestClient) -> None:
+    complete_fixture(client)
+    batch = prepare(client).json()
+    for suffix in ("", f"/{batch['id']}", f"/{batch['id']}/export.csv"):
+        assert client.get(f"/v1/payment-batches{suffix}", headers=headers(viewer=True)).status_code == 403
+    assert (
+        client.post(
+            "/v1/payment-batches/prepare",
+            headers=headers(viewer=True),
+            json={"period_start": "2026-11-10", "period_end": "2026-11-11"},
+        ).status_code
+        == 403
+    )
+    stale = dict(batch, version=999)
+    assert approve(client, stale).status_code == 409
+    wrong_total = dict(batch, total_cents=1)
+    assert approve(client, wrong_total, "wrong-total").status_code == 409
+    assert (
+        client.post(
+            f"/v1/payment-batches/{batch['id']}/approve",
+            headers=headers("no-version"),
+            json={"expected_total_cents": 7500, "note": "Synthetic"},
+        ).status_code
+        == 428
+    )
+
+
+def test_rate_boundary_zero_and_overlap_protection(client: TestClient) -> None:
+    cleaner = _cleaner(client, name="Synthetic C-Z", phone="+15555550402", properties=["P-A"], key="cleaner")
+    first = create_rate(client, cleaner, cents=0, end="2026-11-11", key="zero-rate")
+    assert first.status_code == 201
+    second = create_rate(client, cleaner, cents=8000, start="2026-11-11", key="boundary-rate")
+    assert second.status_code == 201
+    assert create_rate(client, cleaner, key="overlap").status_code == 409
+    listed = client.get(f"/v1/cleaners/{cleaner}/rates?effective_on=2026-11-11", headers=headers())
+    assert [row["flat_rate_cents"] for row in listed.json()["items"]] == [8000]
+    denied = client.get(f"/v1/cleaners/{cleaner}/rates", headers=headers(viewer=True))
+    assert denied.status_code == 403
+    # Application checks are backed by an exclusion constraint in PostgreSQL.
+    with pytest.raises(DBAPIError), db() as session:
+        row = session.get(CleanerRate, uuid.UUID(first.json()["id"]))
+        assert row is not None
+        row.effective_to = None
+        session.commit()
+
+
+def test_invalid_snapshots_are_excluded_and_never_zeroed(client: TestClient) -> None:
+    complete_fixture(client)
+    with db() as session:
+        assignment = session.scalar(select(Assignment))
+        assert assignment is not None
+        assignment.compensation_snapshot = {}
+        session.commit()
+    response = prepare(client)
+    assert response.status_code == 422
+    assert response.json()["error"]["details"]["exclusions"][0]["reason"] == "MISSING_COMPENSATION_SNAPSHOT"
+    with db() as session:
+        assert session.execute(text("SELECT count(*) FROM payment_batches")).scalar_one() == 0
+        assert (
+            session.execute(
+                text("SELECT count(*) FROM exceptions WHERE code = 'MISSING_COMPENSATION_SNAPSHOT'")
+            ).scalar_one()
+            == 1
+        )
+
+
+def test_zero_rate_is_payable_and_no_work_is_not_a_batch(client: TestClient) -> None:
+    assert prepare(client).status_code == 422
+    complete_fixture(client, cents=0)
+    batch = prepare(client, "zero-prepare").json()
+    assert batch["total_cents"] == 0
+    assert approve(client, batch).status_code == 200
+
+
+def test_dispute_after_preparation_blocks_approval(client: TestClient) -> None:
+    complete_fixture(client)
+    batch = prepare(client).json()
+    with get_engine(os.environ["DATABASE_URL"]).begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO exceptions (id,created_at,updated_at,version,code,severity,dedupe_key,status,
+                task_id,details,opened_at) VALUES (:id,now(),now(),1,'PAYMENT_DISPUTE','warning',
+                'synthetic-dispute','open',:task,'{}',now())
+        """),
+            {"id": uuid.uuid4(), "task": batch["lines"][0]["task_id"]},
+        )
+    assert approve(client, batch).status_code == 409
+
+
+def test_dashboard_counts_drafts_and_no_monetary_viewer_data(client: TestClient) -> None:
+    complete_fixture(client)
+    prepare(client)
+    manager = client.get("/v1/dashboard?service_date=2026-11-10", headers=headers()).json()
+    assert manager["payment_queue_count"] == 1
+    viewer = client.get("/v1/dashboard?service_date=2026-11-10", headers=headers(viewer=True)).json()
+    assert "payment_queue_count" not in viewer
+    assert "total_cents" not in str(viewer)
+
+
+def test_period_validation_and_strict_money(client: TestClient) -> None:
+    response = client.post(
+        "/v1/payment-batches/prepare",
+        headers=headers(),
+        json={"period_start": "2026-11-10", "period_end": "2026-11-10"},
+    )
+    assert response.status_code == 422
+    assert (
+        client.post(
+            "/v1/payment-batches/prepare",
+            headers=headers(),
+            json={"period_start": "2026-11-10", "period_end": "2026-11-11", "currency": "EUR"},
+        ).status_code
+        == 422
+    )
+
+
+def test_signed_corrections_require_original_approval_and_keep_history(client: TestClient) -> None:
+    cleaner = complete_fixture(client)
+    original = prepare(client).json()
+    assert approve(client, original).status_code == 200
+    client.app.state.clock = SystemClock()
+    _sync(client, [_stay("R-A-LATER", "P-A", "2026-11-11T16:00:00-05:00", "2026-11-12T10:00:00-05:00")], "sync-later")
+    _available(client, cleaner, "2026-11-11", "synthetic:payment-origin", key="available-later")
+    _publish(client, _preview(client, "2026-11-11", "preview-later"), "publish-later")
+    client.app.state.clock = FrozenClock(datetime(2026, 11, 11, 21, tzinfo=UTC))
+    with db() as session:
+        task = session.scalar(select(Assignment).where(Assignment.status == "published"))
+        assert task is not None
+        task_id = str(task.task_id)
+    _inbound(client, "+15555550401", "SM-DONE-LATER", f"DONE {task_id}")
+    later_response = client.post(
+        "/v1/payment-batches/prepare",
+        headers=headers("prepare-later"),
+        json={"period_start": "2026-11-11", "period_end": "2026-11-12"},
+    )
+    assert later_response.status_code == 201, later_response.text
+    later = later_response.json()
+    payload = {
+        "original_line_id": original["lines"][0]["id"],
+        "amount_cents": -1000,
+        "adjustment_key": "synthetic-correction-1",
+        "reason": "Synthetic documented correction",
+    }
+    adjusted = client.post(
+        f"/v1/payment-batches/{later['id']}/adjustments", headers=headers("adjust", later["version"]), json=payload
+    )
+    assert adjusted.status_code == 200, adjusted.text
+    assert adjusted.json()["total_cents"] == 6500
+    changed = adjusted.json()
+    voided = client.post(
+        f"/v1/payment-batches/{changed['id']}/void",
+        headers=headers("void-correction", changed["version"]),
+        json={"reason": "Synthetic correction batch replacement"},
+    )
+    assert voided.status_code == 200
+    replaced = client.post(
+        "/v1/payment-batches/prepare",
+        headers=headers("replace-correction"),
+        json={"period_start": "2026-11-11", "period_end": "2026-11-12"},
+    )
+    assert replaced.status_code == 201, replaced.text
+    assert replaced.json()["total_cents"] == 6500
+    assert {line["id"] for line in replaced.json()["lines"]} == {line["id"] for line in changed["lines"]}
+    assert approve(client, replaced.json(), "approve-corrected").status_code == 200
+    old = client.get(f"/v1/payment-batches/{original['id']}", headers=headers()).json()
+    assert old["total_cents"] == 7500
+    assert len(old["lines"]) == 1
+
+
+def test_rate_replacement_cannot_rewrite_published_compensation(client: TestClient) -> None:
+    cleaner = complete_fixture(client)
+    old = client.get(f"/v1/cleaners/{cleaner}/rates", headers=headers()).json()["items"][0]
+    path = f"/v1/cleaners/{cleaner}/rates/{old['id']}/replace"
+    owner = {**auth_headers("synthetic-owner", key="replace-blocked"), "If-Match": '"1"'}
+    blocked = client.post(
+        path,
+        headers=owner,
+        json={"effective_from": "2026-11-10", "flat_rate_cents": 8000, "reason": "Synthetic replacement"},
+    )
+    assert blocked.status_code == 409
+    replaced = client.post(
+        path,
+        headers={**owner, "Idempotency-Key": "replace-future"},
+        json={"effective_from": "2026-11-11", "flat_rate_cents": 8000, "reason": "Synthetic future replacement"},
+    )
+    assert replaced.status_code == 201, replaced.text
+    assert replaced.json()["rule_version"] == 2
+    batch = prepare(client).json()
+    assert batch["total_cents"] == 7500
+
+
+def test_reassignment_snapshots_the_replacement_cleaners_rate(client: TestClient) -> None:
+    _approve(client)
+    _sync(client, _turnover("R-OVERRIDE", "P-A", "2026-11-10"), "override-sync")
+    first = _cleaner(client, name="Synthetic First", phone="+15555550411", properties=["P-A"], key="first")
+    assert create_rate(client, first, key="first-rate").status_code == 201
+    _available(client, first, "2026-11-10", "synthetic:origin-first", key="first-available")
+    _publish(client, _preview(client, "2026-11-10", "first-preview"), "first-publish")
+    second = _cleaner(client, name="Synthetic Second", phone="+15555550412", properties=["P-A"], key="second")
+    assert create_rate(client, second, cents=8500, key="second-rate").status_code == 201
+    _available(client, second, "2026-11-10", "synthetic:origin-second", key="second-available")
+    with db() as session:
+        assignment = session.scalar(select(Assignment).where(Assignment.status == "published"))
+        assert assignment is not None
+        old_id = str(assignment.id)
+        version = assignment.version
+    response = client.post(
+        f"/v1/assignments/{old_id}/override",
+        headers=headers("rate-override", version),
+        json={
+            "cleaner_id": second,
+            "planned_start": "2026-11-10T10:00:00-05:00",
+            "is_locked": False,
+            "reason": "Synthetic feasible reassignment",
+        },
+    )
+    assert response.status_code == 200, response.text
+    with db() as session:
+        replacement = session.scalar(select(Assignment).where(Assignment.status == "published"))
+        assert replacement is not None
+        assert replacement.amount_cents == 8500
+        assert replacement.compensation_snapshot["cleaner_id"] == second
+        old = session.get(Assignment, uuid.UUID(old_id))
+        assert old is not None and old.amount_cents == 7500 and old.status == "superseded"

@@ -1,0 +1,326 @@
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from datetime import date
+
+from app.api.deps import (
+    get_clock,
+    get_db,
+    get_settings,
+    require_manager,
+    require_manager_idempotency_key,
+)
+from app.clock import Clock
+from app.config import Settings
+from app.domain.errors import AppError
+from app.domain.principal import Principal
+from app.models import PaymentBatch
+from app.services import payments
+from app.services.idempotency import request_digest, resolve_idempotency, store_idempotency
+from app.services.schedules import assert_synthetic_publication
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+router = APIRouter(prefix="/v1/payment-batches", tags=["payments"])
+
+
+class PrepareBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    period_start: date
+    period_end: date
+    currency: str = "USD"
+
+
+class ReasonBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("A reason is required")
+        return value.strip()
+
+
+class ApproveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_total_cents: int = Field(strict=True)
+    note: str = Field(min_length=1, max_length=500)
+
+    @field_validator("note")
+    @classmethod
+    def note_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("An approval note is required")
+        return value.strip()
+
+
+class AdjustmentBody(ReasonBody):
+    original_line_id: uuid.UUID
+    amount_cents: int = Field(strict=True, ge=-100_000_000, le=100_000_000)
+    adjustment_key: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+
+    @field_validator("amount_cents")
+    @classmethod
+    def nonzero(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("An adjustment must be nonzero")
+        return value
+
+
+def _version(request: Request) -> int:
+    raw = request.headers.get("if-match", "")
+    if not raw or raw.startswith("W/"):
+        raise AppError("if_match_required", "A strong If-Match version is required.", 428)
+    value = raw.strip().strip('"')
+    if not value.isdigit() or int(value) < 1:
+        raise AppError("if_match_invalid", "If-Match must be a positive integer version.", 428)
+    return int(value)
+
+
+def _write(
+    request: Request,
+    session: Session,
+    settings: Settings,
+    clock: Clock,
+    principal: Principal,
+    key: str,
+    body: dict[str, object],
+    status: int,
+    action: Callable[[], PaymentBatch],
+) -> JSONResponse:
+    assert_synthetic_publication(settings)
+    payments.lock_payments(session)
+    route = request.url.path
+    digest = request_digest(body)
+    resolution = resolve_idempotency(
+        session, principal_subject=principal.subject, route=route, key=key, digest=digest, clock=clock
+    )
+    if resolution.outcome == "replay" and resolution.body is not None and resolution.status is not None:
+        return JSONResponse(status_code=resolution.status, content=resolution.body)
+    if resolution.outcome == "conflict":
+        raise AppError("idempotency_conflict", "Idempotency-Key was reused with a different request.", 409)
+    try:
+        batch = action()
+    except AppError as exc:
+        if exc.code == "no_eligible_work":
+            # No financial rows have been created; retain excluded-work exceptions.
+            session.commit()
+        raise
+    session.flush()
+    response = payments.batch_json(session, batch)
+    store_idempotency(
+        session,
+        settings=settings,
+        clock=clock,
+        principal_subject=principal.subject,
+        route=route,
+        key=key,
+        digest=digest,
+        status=status,
+        body=response,
+        resource_id=batch.id,
+    )
+    session.commit()
+    return JSONResponse(status_code=status, content=response)
+
+
+@router.post("/prepare")
+def prepare_batch(
+    payload: PrepareBody,
+    request: Request,
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    key: str = Depends(require_manager_idempotency_key),
+) -> JSONResponse:
+    if payload.currency != "USD":
+        raise AppError("validation_error", "Only USD compensation is supported.", 422)
+    return _write(
+        request,
+        session,
+        settings,
+        clock,
+        principal,
+        key,
+        payload.model_dump(mode="json"),
+        201,
+        lambda: payments.prepare(
+            session,
+            clock=clock,
+            actor=principal.subject,
+            period_start=payload.period_start,
+            period_end=payload.period_end,
+            request_key=request_digest({"actor": principal.subject, "key": key}),
+        ),
+    )
+
+
+@router.get("")
+def list_batches(
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    status: str | None = None,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+) -> dict[str, object]:
+    if limit < 1 or limit > 100 or (status is not None and status not in {"draft", "approved", "void"}):
+        raise AppError("validation_error", "Invalid status or page limit.", 422)
+    query = select(PaymentBatch).order_by(PaymentBatch.id)
+    if status is not None:
+        query = query.where(PaymentBatch.status == status)
+    if cursor is not None:
+        query = query.where(PaymentBatch.id > cursor)
+    rows = session.scalars(query.limit(limit + 1)).all()
+    return {
+        "items": [payments.batch_json(session, row) for row in rows[:limit]],
+        "next_cursor": str(rows[limit - 1].id) if len(rows) > limit else None,
+    }
+
+
+@router.get("/{batch_id}")
+def read_batch(
+    batch_id: uuid.UUID, principal: Principal = Depends(require_manager), session: Session = Depends(get_db)
+) -> dict[str, object]:
+    return payments.batch_json(session, payments.get_batch(session, batch_id))
+
+
+@router.post("/{batch_id}/approve")
+def approve_batch(
+    batch_id: uuid.UUID,
+    payload: ApproveBody,
+    request: Request,
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    key: str = Depends(require_manager_idempotency_key),
+) -> JSONResponse:
+    expected = _version(request)
+
+    def action() -> PaymentBatch:
+        batch = payments.get_batch(session, batch_id)
+        payments.approve(
+            session,
+            clock=clock,
+            actor=principal.subject,
+            batch=batch,
+            expected_version=expected,
+            expected_total=payload.expected_total_cents,
+            note=payload.note,
+        )
+        return batch
+
+    return _write(
+        request,
+        session,
+        settings,
+        clock,
+        principal,
+        key,
+        {**payload.model_dump(mode="json"), "if_match": expected},
+        200,
+        action,
+    )
+
+
+@router.post("/{batch_id}/void")
+def void_batch(
+    batch_id: uuid.UUID,
+    payload: ReasonBody,
+    request: Request,
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    key: str = Depends(require_manager_idempotency_key),
+) -> JSONResponse:
+    expected = _version(request)
+
+    def action() -> PaymentBatch:
+        batch = payments.get_batch(session, batch_id)
+        payments.void(
+            session, clock=clock, actor=principal.subject, batch=batch, expected_version=expected, reason=payload.reason
+        )
+        return batch
+
+    return _write(
+        request,
+        session,
+        settings,
+        clock,
+        principal,
+        key,
+        {**payload.model_dump(mode="json"), "if_match": expected},
+        200,
+        action,
+    )
+
+
+@router.post("/{batch_id}/adjustments")
+def adjust_batch(
+    batch_id: uuid.UUID,
+    payload: AdjustmentBody,
+    request: Request,
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    key: str = Depends(require_manager_idempotency_key),
+) -> JSONResponse:
+    expected = _version(request)
+
+    def action() -> PaymentBatch:
+        batch = payments.get_batch(session, batch_id)
+        payments.add_adjustment(
+            session,
+            clock=clock,
+            actor=principal.subject,
+            batch=batch,
+            expected_version=expected,
+            original_line_id=payload.original_line_id,
+            amount_cents=payload.amount_cents,
+            adjustment_key=payload.adjustment_key,
+            reason=payload.reason,
+        )
+        return batch
+
+    return _write(
+        request,
+        session,
+        settings,
+        clock,
+        principal,
+        key,
+        {**payload.model_dump(mode="json"), "if_match": expected},
+        200,
+        action,
+    )
+
+
+@router.get("/{batch_id}/export.csv")
+def export_batch(
+    batch_id: uuid.UUID,
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    clock: Clock = Depends(get_clock),
+) -> Response:
+    payments.lock_payments(session)
+    content, digest = payments.export_csv(
+        session, clock=clock, actor=principal.subject, batch=payments.get_batch(session, batch_id)
+    )
+    session.commit()
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="payment-batch-{batch_id}.csv"',
+            "X-Content-SHA256": digest,
+        },
+    )

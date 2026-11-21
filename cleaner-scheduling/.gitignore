@@ -1,0 +1,37 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# Frontend
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+# Local data and editor state
+*.log
+dump.rdb
+*.sqlite*
+backups/
+exports/
+private-data/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.local-demo/

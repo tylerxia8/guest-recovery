@@ -1,0 +1,499 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import uuid
+from collections import defaultdict
+from datetime import date
+
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
+
+from app.clock import Clock
+from app.domain.errors import AppError
+from app.models import (
+    Assignment,
+    Cleaner,
+    CleanerRate,
+    CleaningTask,
+    OperationalException,
+    PaymentBatch,
+    PaymentLineItem,
+    Property,
+)
+from app.services.audit import write_audit
+
+DISPUTES = ("PAYMENT_DISPUTE", "COMPLETION_DISPUTE", "STALE_COMPLETION")
+
+
+def lock_payments(session: Session) -> None:
+    # One business and <=100 properties: serialize financial actions, including
+    # idempotency resolution. PostgreSQL uniqueness is a second line of defense.
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtext('payment-preparation-v1'))"))
+
+
+def audit(
+    session: Session,
+    clock: Clock,
+    actor: str,
+    action: str,
+    entity_id: uuid.UUID,
+    changes: dict[str, object],
+    reason: str | None = None,
+) -> None:
+    write_audit(
+        session,
+        clock=clock,
+        actor_type="operator",
+        actor_subject=actor,
+        action=action,
+        entity_type="payment_batch",
+        entity_id=entity_id,
+        correlation_id=entity_id,
+        reason=reason,
+        redacted_changes=changes,
+        request_id=None,
+    )
+
+
+def lines_for(session: Session, batch: PaymentBatch) -> list[PaymentLineItem]:
+    return list(
+        session.scalars(
+            select(PaymentLineItem)
+            .where(PaymentLineItem.batch_id == batch.id)
+            .order_by(
+                PaymentLineItem.cleaner_id, PaymentLineItem.service_date, PaymentLineItem.task_id, PaymentLineItem.id
+            )
+        ).all()
+    )
+
+
+def line_json(line: PaymentLineItem) -> dict[str, object]:
+    return {
+        "id": str(line.id),
+        "assignment_id": str(line.assignment_id),
+        "task_id": str(line.task_id),
+        "cleaner_id": str(line.cleaner_id),
+        "cleaner_name": line.cleaner_name,
+        "property_alias": line.property_alias,
+        "service_date": line.service_date.isoformat(),
+        "amount_cents": line.amount_cents,
+        "currency": line.currency,
+        "rate_snapshot": line.rate_snapshot,
+        "line_type": line.line_type,
+        "adjusts_line_id": None if line.adjusts_line_id is None else str(line.adjusts_line_id),
+        "adjustment_reason": line.adjustment_reason,
+    }
+
+
+def batch_json(session: Session, batch: PaymentBatch) -> dict[str, object]:
+    lines = (
+        batch.frozen_lines if batch.frozen_lines is not None else [line_json(row) for row in lines_for(session, batch)]
+    )
+    totals: dict[str, int] = defaultdict(int)
+    for line in lines:
+        totals[str(line["cleaner_id"])] += int(str(line["amount_cents"]))
+    return {
+        "id": str(batch.id),
+        "version": batch.version,
+        "created_at": batch.created_at.isoformat(),
+        "updated_at": batch.updated_at.isoformat(),
+        "period_start": batch.period_start.isoformat(),
+        "period_end": batch.period_end.isoformat(),
+        "status": batch.status,
+        "currency": batch.currency,
+        "total_cents": batch.total_cents,
+        "lines": lines,
+        "cleaner_totals": dict(totals),
+        "exclusions": batch.exclusions,
+        "approved_by": batch.approved_by,
+        "approved_at": None if batch.approved_at is None else batch.approved_at.isoformat(),
+        "approval_note": batch.approval_note,
+    }
+
+
+def get_batch(session: Session, batch_id: uuid.UUID) -> PaymentBatch:
+    batch = session.scalar(select(PaymentBatch).where(PaymentBatch.id == batch_id).with_for_update())
+    if batch is None:
+        raise AppError("not_found", "Payment batch was not found.", 404)
+    return batch
+
+
+def _disputed(session: Session, task_id: uuid.UUID) -> bool:
+    return (
+        session.scalar(
+            select(OperationalException.id)
+            .where(
+                OperationalException.task_id == task_id,
+                OperationalException.code.in_(DISPUTES),
+                OperationalException.status.in_(("open", "acknowledged")),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _snapshot_valid(session: Session, assignment: Assignment, task: CleaningTask) -> bool:
+    if assignment.rate_id is None or assignment.amount_cents is None:
+        return False
+    rate = session.get(CleanerRate, assignment.rate_id)
+    snapshot = assignment.compensation_snapshot
+    return bool(
+        rate is not None
+        and rate.cleaner_id == assignment.cleaner_id
+        and rate.property_id in (None, task.property_id)
+        and rate.effective_from <= assignment.service_date
+        and (rate.effective_to is None or assignment.service_date < rate.effective_to)
+        and snapshot.get("rate_id") == str(rate.id)
+        and snapshot.get("amount_cents") == assignment.amount_cents
+        and snapshot.get("currency") == assignment.currency == "USD"
+        and assignment.amount_cents == rate.flat_rate_cents
+    )
+
+
+def _payment_exception(session: Session, clock: Clock, task: CleaningTask, code: str, actor: str) -> None:
+    key = f"payment:{task.id}:{code}"
+    if (
+        session.scalar(
+            select(OperationalException.id).where(
+                OperationalException.dedupe_key == key, OperationalException.status.in_(("open", "acknowledged"))
+            )
+        )
+        is not None
+    ):
+        return
+    now = clock.now()
+    session.add(
+        OperationalException(
+            id=uuid.uuid4(),
+            created_at=now,
+            updated_at=now,
+            version=1,
+            code=code,
+            severity="warning",
+            dedupe_key=key,
+            status="open",
+            task_id=task.id,
+            assignment_id=None,
+            sync_run_id=None,
+            owner_subject=None,
+            details={"reason": code},
+            opened_at=now,
+            resolved_at=None,
+            resolution_reason=None,
+        )
+    )
+    write_audit(
+        session,
+        clock=clock,
+        actor_type="operator",
+        actor_subject=actor,
+        action="payment.excluded",
+        entity_type="cleaning_task",
+        entity_id=task.id,
+        correlation_id=task.id,
+        reason=code,
+        redacted_changes={"code": code},
+        request_id=None,
+    )
+
+
+def prepare(
+    session: Session, *, clock: Clock, actor: str, period_start: date, period_end: date, request_key: str
+) -> PaymentBatch:
+    if not 0 < (period_end - period_start).days <= 93:
+        raise AppError("validation_error", "Period must be positive and at most 93 days (end exclusive).", 422)
+    assignments = session.scalars(
+        select(Assignment)
+        .where(
+            Assignment.status == "completed",
+            Assignment.completed_at.is_not(None),
+            Assignment.service_date >= period_start,
+            Assignment.service_date < period_end,
+        )
+        .order_by(Assignment.task_id)
+        .with_for_update()
+    ).all()
+    eligible: list[tuple[Assignment, CleaningTask, PaymentLineItem | None]] = []
+    exclusions: list[dict[str, object]] = []
+    for assignment in assignments:
+        task = session.get(CleaningTask, assignment.task_id)
+        if task is None:
+            continue
+        line = session.scalar(select(PaymentLineItem).where(PaymentLineItem.earned_work_key == f"cleaning:{task.id}"))
+        if line is not None and get_batch(session, line.batch_id).status != "void":
+            continue
+        reason = None
+        if task.status != "completed" or task.completed_at is None or _disputed(session, task.id):
+            reason = "PAYMENT_REVIEW_REQUIRED"
+        elif not _snapshot_valid(session, assignment, task):
+            reason = "MISSING_COMPENSATION_SNAPSHOT"
+        if reason is not None:
+            exclusions.append({"task_id": str(task.id), "reason": reason})
+            _payment_exception(session, clock, task, reason, actor)
+            continue
+        eligible.append((assignment, task, line))
+    corrections = list(
+        session.scalars(
+            select(PaymentLineItem)
+            .join(PaymentBatch, PaymentBatch.id == PaymentLineItem.batch_id)
+            .where(
+                PaymentLineItem.line_type == "adjustment",
+                PaymentBatch.status == "void",
+                PaymentBatch.period_start == period_start,
+                PaymentBatch.period_end == period_end,
+            )
+            .order_by(PaymentLineItem.id)
+        ).all()
+    )
+    if not eligible and not corrections:
+        raise AppError(
+            "no_eligible_work", "No eligible, unbatched completed work in this period.", 422, {"exclusions": exclusions}
+        )
+    now = clock.now()
+    batch = PaymentBatch(
+        id=uuid.uuid4(),
+        created_at=now,
+        updated_at=now,
+        version=1,
+        period_start=period_start,
+        period_end=period_end,
+        status="draft",
+        currency="USD",
+        total_cents=0,
+        prepared_by=actor,
+        approved_by=None,
+        approved_at=None,
+        approval_note=None,
+        idempotency_key=request_key,
+        exclusions=exclusions,
+        frozen_lines=None,
+    )
+    session.add(batch)
+    session.flush()
+    for assignment, task, existing in eligible:
+        if existing is not None:
+            existing.batch_id = batch.id
+            existing.updated_at = now
+            batch.total_cents += existing.amount_cents
+            continue
+        cleaner = session.get(Cleaner, assignment.cleaner_id)
+        prop = session.get(Property, task.property_id)
+        assert cleaner is not None and prop is not None
+        assert assignment.amount_cents is not None and assignment.rate_id is not None
+        snapshot = dict(assignment.compensation_snapshot)
+        rate = session.get(CleanerRate, assignment.rate_id)
+        assert rate is not None
+        # Enrich legacy M4 snapshots from their referenced immutable rate, never
+        # from whichever rate happens to be current at payment preparation time.
+        snapshot.setdefault("rule_version", rate.rule_version)
+        snapshot.setdefault("service_date", assignment.service_date.isoformat())
+        session.add(
+            PaymentLineItem(
+                id=uuid.uuid4(),
+                created_at=now,
+                updated_at=now,
+                batch_id=batch.id,
+                assignment_id=assignment.id,
+                task_id=task.id,
+                cleaner_id=cleaner.id,
+                earned_work_key=f"cleaning:{task.id}",
+                rate_snapshot=snapshot,
+                amount_cents=assignment.amount_cents,
+                currency="USD",
+                service_date=assignment.service_date,
+                line_type="cleaning",
+                adjusts_line_id=None,
+                adjustment_reason=None,
+                cleaner_name=cleaner.display_name,
+                property_alias=prop.name,
+            )
+        )
+        batch.total_cents += assignment.amount_cents
+    for correction in corrections:
+        correction.batch_id = batch.id
+        correction.updated_at = now
+        batch.total_cents += correction.amount_cents
+    session.flush()
+    audit(
+        session,
+        clock,
+        actor,
+        "payment.prepared",
+        batch.id,
+        {
+            "total_cents": batch.total_cents,
+            "line_count": len(eligible) + len(corrections),
+            "excluded_count": len(exclusions),
+        },
+    )
+    return batch
+
+
+def check_draft(batch: PaymentBatch, expected_version: int) -> None:
+    if batch.version != expected_version:
+        raise AppError("stale_version", "Batch changed. Reload and review before retrying.", 409)
+    if batch.status != "draft":
+        raise AppError("batch_finalized", "Only a draft batch may be changed.", 409)
+
+
+def approve(
+    session: Session,
+    *,
+    clock: Clock,
+    actor: str,
+    batch: PaymentBatch,
+    expected_version: int,
+    expected_total: int,
+    note: str,
+) -> None:
+    check_draft(batch, expected_version)
+    lines = lines_for(session, batch)
+    total = sum(line.amount_cents for line in lines)
+    if total != expected_total or total != batch.total_cents:
+        raise AppError("total_changed", "Batch total changed. Review the current contents.", 409)
+    totals: dict[uuid.UUID, int] = defaultdict(int)
+    for line in lines:
+        task = session.get(CleaningTask, line.task_id)
+        assignment = session.get(Assignment, line.assignment_id)
+        if task is None or assignment is None or task.status != "completed" or assignment.status != "completed":
+            raise AppError("payment_review_required", "Completion state changed before approval.", 409)
+        if _disputed(session, task.id):
+            raise AppError("payment_review_required", "Resolve completion/payment disputes before approval.", 409)
+        totals[line.cleaner_id] += line.amount_cents
+    if not lines or any(amount < 0 for amount in totals.values()):
+        raise AppError("negative_payment", "A batch cannot approve a negative cleaner subtotal or be empty.", 422)
+    batch.frozen_lines = [line_json(line) for line in lines]
+    batch.status = "approved"
+    batch.approved_by = actor
+    batch.approved_at = clock.now()
+    batch.approval_note = note
+    batch.updated_at = clock.now()
+    batch.version += 1
+    audit(session, clock, actor, "payment.approved", batch.id, {"total_cents": total}, note)
+
+
+def void(
+    session: Session, *, clock: Clock, actor: str, batch: PaymentBatch, expected_version: int, reason: str
+) -> None:
+    check_draft(batch, expected_version)
+    batch.frozen_lines = [line_json(line) for line in lines_for(session, batch)]
+    batch.status = "void"
+    batch.approval_note = reason
+    batch.updated_at = clock.now()
+    batch.version += 1
+    audit(session, clock, actor, "payment.voided", batch.id, {}, reason)
+
+
+def add_adjustment(
+    session: Session,
+    *,
+    clock: Clock,
+    actor: str,
+    batch: PaymentBatch,
+    expected_version: int,
+    original_line_id: uuid.UUID,
+    amount_cents: int,
+    adjustment_key: str,
+    reason: str,
+) -> None:
+    check_draft(batch, expected_version)
+    original = session.get(PaymentLineItem, original_line_id)
+    if original is None:
+        raise AppError("not_found", "Original payment line was not found.", 404)
+    if original.line_type != "cleaning" or get_batch(session, original.batch_id).status != "approved":
+        raise AppError("adjustment_invalid", "Corrections must reference an approved cleaning line.", 422)
+    key = f"adjustment:{adjustment_key}"
+    if session.scalar(select(PaymentLineItem.id).where(PaymentLineItem.earned_work_key == key)) is not None:
+        raise AppError("duplicate_adjustment", "This correction key has already been used.", 409)
+    corrections = session.scalars(select(PaymentLineItem).where(PaymentLineItem.adjusts_line_id == original.id)).all()
+    # Include voided corrections conservatively: a canceled correction needs explicit
+    # accounting review rather than freeing a key for an accidental repeat.
+    if original.amount_cents + sum(row.amount_cents for row in corrections) + amount_cents < 0:
+        raise AppError("adjustment_invalid", "Corrections cannot reverse more than the original earning.", 422)
+    now = clock.now()
+    session.add(
+        PaymentLineItem(
+            id=uuid.uuid4(),
+            created_at=now,
+            updated_at=now,
+            batch_id=batch.id,
+            assignment_id=original.assignment_id,
+            task_id=original.task_id,
+            cleaner_id=original.cleaner_id,
+            earned_work_key=key,
+            rate_snapshot=dict(original.rate_snapshot),
+            amount_cents=amount_cents,
+            currency=original.currency,
+            service_date=original.service_date,
+            line_type="adjustment",
+            adjusts_line_id=original.id,
+            adjustment_reason=reason,
+            cleaner_name=original.cleaner_name,
+            property_alias=original.property_alias,
+        )
+    )
+    session.flush()
+    batch.total_cents += amount_cents
+    batch.version += 1
+    batch.updated_at = now
+    audit(
+        session,
+        clock,
+        actor,
+        "payment.adjustment_added",
+        batch.id,
+        {"original_line_id": str(original.id), "amount_cents": amount_cents},
+        reason,
+    )
+
+
+def export_csv(session: Session, *, clock: Clock, actor: str, batch: PaymentBatch) -> tuple[str, str]:
+    if batch.status != "approved" or batch.frozen_lines is None:
+        raise AppError("batch_not_approved", "Only approved batches may be exported.", 409)
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream)
+    writer.writerow(
+        [
+            "batch_id",
+            "line_id",
+            "cleaner_id",
+            "cleaner_name",
+            "task_id",
+            "property_alias",
+            "service_date",
+            "rate_version",
+            "amount_cents",
+            "currency",
+        ]
+    )
+    for line in batch.frozen_lines:
+        snapshot = line["rate_snapshot"]
+        assert isinstance(snapshot, dict)
+        writer.writerow(
+            [
+                str(batch.id),
+                line["id"],
+                line["cleaner_id"],
+                _safe(str(line["cleaner_name"])),
+                line["task_id"],
+                _safe(str(line["property_alias"])),
+                line["service_date"],
+                snapshot.get("rule_version", ""),
+                line["amount_cents"],
+                line["currency"],
+            ]
+        )
+    content = stream.getvalue()
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    audit(session, clock, actor, "payment.exported", batch.id, {"sha256": digest})
+    return content, digest
+
+
+def _safe(value: str) -> str:
+    stripped = value.lstrip(" \t\r\n")
+    if value.startswith(("\t", "\r", "\n")) or stripped.startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value

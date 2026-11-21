@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "description": "Block secret-file and unrelated server probes",
+      "priority": 10,
+      "enabled": true,
+      "if": {
+        "or": [
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/.env*"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/.git*"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/wp-*"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/xmlrpc.php"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/phpmyadmin*"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/api/health*"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/openapi.json"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/redoc"
+          },
+          {
+            "attr": "http.path",
+            "op": "matches",
+            "value": "/docs"
+          }
+        ]
+      },
+      "then": {
+        "action": "block",
+        "params": {
+          "status": 403,
+          "body": "Forbidden"
+        }
+      }
+    },
+    {
+      "description": "Never cache application responses at the edge",
+      "priority": 20,
+      "enabled": true,
+      "if": {
+        "attr": "http.path",
+        "op": "matches",
+        "value": "/*"
+      },
+      "then": {
+        "action": "cache_override",
+        "params": {
+          "bypass": true
+        }
+      }
+    }
+  ]
+}
