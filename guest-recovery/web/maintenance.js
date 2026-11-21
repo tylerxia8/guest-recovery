@@ -11,6 +11,9 @@ function maintenancePanel(issue, message) {
     if (link.remote.source_fingerprint !== fingerprint && !issue.maintenance_synced_messages?.includes(message.id)) {
       panel.append(node('p', 'This guest message is available in the inbox. Check the repair for the details already shared.', 'help-text'));
     }
+    if (link.remote.next_question) {
+      panel.append(node('p', 'Maintenance intake question', 'help-text'), node('blockquote', link.remote.next_question.body));
+    }
     if (settings.dashboard_url) {
       const open = node('a', 'Open repair', 'button');
       const repairUrl = new URL('/maintenance/review', settings.dashboard_url);
@@ -24,7 +27,7 @@ function maintenancePanel(issue, message) {
   }
   if (!link && settings.configured && settings.mode === 'workspace' && issue.lane === 'needs_attention'
       && issue.property_ids?.some(id => settings.properties?.some(property => property.external_property_id === id))) {
-    panel.append(node('p', 'Eligible maintenance reports are sent to the repair queue automatically.', 'help-text'));
+    panel.append(node('p', 'Eligible maintenance reports start intake automatically.', 'help-text'));
   }
   if (!settings.configured) {
     panel.append(node('p', 'Maintenance is not connected.', 'help-text'));
@@ -40,7 +43,7 @@ function maintenancePanel(issue, message) {
     panel.append(settingsButton);
     return panel;
   }
-  panel.append(node('p', 'Creating a repair does not dispatch a contractor or send a guest reply. Review dispatch in maintenance and approve guest replies separately.', 'help-text'));
+  panel.append(node('p', 'Maintenance asks intake questions in the guest conversation. Review contractor dispatch and any further guest replies separately.', 'help-text'));
   let summary;
   if (!link) {
     const label = node('label', 'Repair summary for Maintenance');

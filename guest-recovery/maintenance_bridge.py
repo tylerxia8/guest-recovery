@@ -283,7 +283,14 @@ def save_change(db, prepared, remote, timestamp):
             raise ValueError('Maintenance returned invalid repair status')
     except (KeyError, TypeError, AttributeError):
         raise ValueError('Maintenance returned incomplete repair details') from None
+    question = remote.get('next_question')
+    if question is not None and (not isinstance(question, dict)
+            or not all(isinstance(question.get(key), str) and 0 < len(question[key]) <= 1000
+                       for key in ('field_key', 'body'))):
+        raise ValueError('Maintenance returned an invalid intake question')
     remote = {field: remote[field] for field in ('issue_id', 'source_fingerprint', 'ticket_id', 'ticket_number', 'status', 'priority', 'updated_at')}
+    if question:
+        remote['next_question'] = {key: question[key] for key in ('field_key', 'body')}
     row = db.execute('SELECT * FROM maintenance_links WHERE issue_id = ?', (prepared['key'],)).fetchone()
     if row and (row['ticket_id'] != remote['ticket_id'] or row['source_fingerprint'] != remote['source_fingerprint']):
         raise ValueError('The maintenance link changed. Review the connected workspace.')
@@ -316,6 +323,32 @@ def repair_note(message):
     return ' '.join(concise)[:5000]
 
 
+def _intake_answer(db, issue, question, synced):
+    from reply_library import CREDENTIALS
+    from safety import detect
+
+    outgoing = db.execute(
+        "SELECT body, approved_at FROM guest_reply_sends WHERE issue_id = ? AND state = 'accepted' "
+        "AND json_extract(context, '$.maintenance_question.field_key') = ? ORDER BY approved_at DESC LIMIT 1",
+        (issue['id'], question['field_key']),
+    ).fetchone()
+    if not outgoing:
+        return None
+    messages = sorted(issue['messages'], key=lambda item: (item['created_at'], item['id']))
+    sent = next((item for item in messages if item['sender_type'] == 'host'
+                 and item['created_at'] >= outgoing['approved_at'] and item['body'].strip() == outgoing['body']), None)
+    if not sent:
+        return None
+    answer = next((item for item in messages if item['created_at'] > sent['created_at']), None)
+    if not answer or answer['sender_type'] != 'guest' or answer['id'] in synced:
+        return None
+    text = answer['body'].strip()
+    if not text or '?' in text or detect(text) or CREDENTIALS.search(text):
+        return None
+    text = re.sub(r'https?://\S+|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b|(?<!\w)\+?\d[\d ().-]{6,}\d|\b\d{4,}\b', '[redacted]', text, flags=re.I)
+    return answer, {'body': text[:5000], 'field_key': question['field_key']}
+
+
 def _automatic_change(db, issue, timestamp):
     key = issue['id']
     if db.execute('SELECT 1 FROM maintenance_links WHERE substr(issue_id,1,?) = ?',
@@ -324,6 +357,12 @@ def _automatic_change(db, issue, timestamp):
         return None
     existing = db.execute('SELECT * FROM maintenance_links WHERE issue_id = ?', (key,)).fetchone()
     synced = {row[0] for row in db.execute('SELECT message_id FROM maintenance_synced_messages WHERE issue_id = ?', (key,))}
+    question = json.loads(existing['remote']).get('next_question') if existing else None
+    answer = _intake_answer(db, issue, question, synced) if question else None
+    if answer:
+        message, note = answer
+        prepared = prepare_change(db, '/api/maintenance/refresh', {'issue_id': key}, timestamp)
+        return prepared, message['id'], note
     candidates = sorted(issue['evidence'], key=lambda item: (item['created_at'], item['id']))
     for message in candidates:
         if message['id'] in synced or (existing and not synced and message['created_at'] <= existing['checked_at']):
@@ -346,7 +385,7 @@ def _automatic_change(db, issue, timestamp):
         if not current or fingerprint(current) != fingerprint(issue):
             return None
         prepared = prepare_change(db, '/api/maintenance/refresh', {'issue_id': key}, timestamp)
-        return prepared, message['id'], note
+        return prepared, message['id'], {'body': note}
     if existing and dt.datetime.fromisoformat(timestamp) - dt.datetime.fromisoformat(existing['checked_at']) >= dt.timedelta(minutes=5):
         return prepare_change(db, '/api/maintenance/refresh', {'issue_id': key}, timestamp), None, None
     return None
@@ -361,7 +400,7 @@ def _forward_message(prepared, message_id, note):
         raise ValueError('The Maintenance workspace changed.')
     digest = hashlib.sha256(json.dumps(['guest-message', prepared['key'], message_id]).encode()).hexdigest()
     remote = request(settings['url'], token, 'POST',
-                     '/v1/maintenance-bridge/messages/' + quote(prepared['key'], safe=''), {'body': note}, digest)
+                     '/v1/maintenance-bridge/messages/' + quote(prepared['key'], safe=''), note, digest)
     validate_prepared(None, prepared)
     return remote
 
@@ -395,9 +434,17 @@ def synchronize_pass(connect, timestamp, offset=0):
             remote = _forward_message(prepared, message_id, note) if note else perform_change(prepared)
             with connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                save_change(db, prepared, remote, timestamp)
+                saved_link = save_change(db, prepared, remote, timestamp)
                 if message_id:
                     db.execute('INSERT OR IGNORE INTO maintenance_synced_messages VALUES (?, ?)', (issue['id'], message_id))
+                question = saved_link['remote'].get('next_question')
+                if question:
+                    from guest_replies import queue_maintenance_question
+                    latest = max((item for item in issue['messages'] if item['sender_type'] == 'guest'),
+                                 key=lambda item: (item['created_at'], item['id']), default=None)
+                    if latest and db.execute('SELECT 1 FROM maintenance_synced_messages WHERE issue_id = ? AND message_id = ?',
+                                             (issue['id'], latest['id'])).fetchone():
+                        queue_maintenance_question(db, issue, latest, question, timestamp)
         except (ValueError, KeyError, sqlite3.Error) as error:
             logging.getLogger(__name__).warning(json.dumps({
                 'event': 'maintenance_inbox_sync_deferred', 'error_type': type(error).__name__,

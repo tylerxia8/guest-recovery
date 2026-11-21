@@ -3,10 +3,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+import os
 from unittest.mock import patch
 
 import guest_app
-from maintenance_bridge import repair_note, synchronize_pass
+from maintenance_bridge import _intake_answer, repair_note, synchronize_pass
 
 
 class MaintenanceRoutingTest(unittest.TestCase):
@@ -53,7 +54,7 @@ class MaintenanceRoutingTest(unittest.TestCase):
         create.assert_called_once()
         self.assertEqual(create.call_args.args[0]['payload']['description'], 'The kitchen sink is broken.')
         append.assert_called_once()
-        self.assertEqual(append.call_args.args[1:], ('1', 'The kitchen sink still is not working.'))
+        self.assertEqual(append.call_args.args[1:], ('1', {'body': 'The kitchen sink still is not working.'}))
         with guest_app.connect() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM maintenance_links').fetchone()[0], 1)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM maintenance_synced_messages').fetchone()[0], 2)
@@ -70,3 +71,47 @@ class MaintenanceRoutingTest(unittest.TestCase):
         message = {'sender_type': 'guest', 'body': 'The sink is broken. The entry code is 1234.'}
         self.assertEqual(repair_note(message), 'The sink is broken.')
         self.assertEqual(repair_note(message | {'body': 'The stove is broken and I smell gas.'}), '')
+
+
+    def test_unclassified_answer_is_linked_to_the_sent_question(self):
+        question = {'field_key': 'exact_location', 'body': 'Which room and fixture is leaking?'}
+        before = (self.now - dt.timedelta(minutes=3)).isoformat()
+        sent = (self.now - dt.timedelta(minutes=2)).isoformat()
+        issue = {'id': self.issue_id, 'messages': [
+            {'id': 'host', 'sender_type': 'host', 'created_at': sent, 'body': question['body']},
+            {'id': 'guest-answer', 'sender_type': 'guest', 'created_at': self.now.isoformat(),
+             'body': 'Under the kitchen sink.'},
+        ]}
+        with guest_app.connect() as db:
+            self.assertIsNone(_intake_answer(db, issue, question, set()))
+            db.execute("INSERT INTO guest_reply_sends VALUES (?, ?, ?, ?, ?, ?, 'accepted', NULL, NULL, ?, NULL, ?)",
+                       ('send', 'reservation', 'first', self.issue_id, question['body'],
+                        json.dumps({'maintenance_question': question}), before, sent))
+            message, payload = _intake_answer(db, issue, question, set())
+            self.assertEqual(message['id'], 'guest-answer')
+            self.assertEqual(payload, {'field_key': 'exact_location', 'body': 'Under the kitchen sink.'})
+            self.assertIsNone(_intake_answer(db, issue, question, {'guest-answer'}))
+
+
+    def test_existing_playbook_question_is_queued_for_the_original_thread(self):
+        self.insert_messages('The kitchen sink is broken.')
+        question = {'field_key': 'exact_location', 'body': 'Which room and fixture is leaking?'}
+        ticket = {'issue_id': self.issue_id, 'ticket_id': '22222222-2222-4222-8222-222222222222',
+                  'ticket_number': 3, 'status': 'INTAKE_OPEN', 'priority': 'ROUTINE',
+                  'source_fingerprint': 'a' * 64, 'updated_at': self.now.isoformat(),
+                  'next_question': question}
+        with guest_app.connect() as db:
+            saved = json.loads(db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()['body'])
+            saved['conversations'][0]['source_messages_fingerprint'] = 'c' * 64
+            db.execute('UPDATE research_snapshot SET body = ? WHERE id = 1', (json.dumps(saved),))
+        with patch.dict(os.environ, {'HOSPITABLE_TOKEN': 'synthetic-test-token'}), \
+                patch('maintenance_bridge.configuration', return_value=self.settings), \
+                patch('maintenance_bridge.perform_change', return_value=ticket):
+            synchronize_pass(guest_app.connect, self.now.isoformat())
+            synchronize_pass(guest_app.connect, self.now.isoformat())
+        with guest_app.connect() as db:
+            sends = db.execute('SELECT reservation_id, body, context FROM guest_reply_sends').fetchall()
+            self.assertEqual(len(sends), 1)
+            self.assertEqual(sends[0]['reservation_id'], 'reservation')
+            self.assertEqual(sends[0]['body'], question['body'])
+            self.assertEqual(json.loads(sends[0]['context'])['maintenance_question'], question)
