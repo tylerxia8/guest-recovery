@@ -230,7 +230,7 @@ def policy_reply(proposal, remote=None):
             if ready > timestamp(proposal.get('booked_checkin_at', proposal['current_checkin_at'])):
                 raise ValueError('Scheduler early arrival is outside the requested window')
             ready = max(ready, timestamp(proposal['target_at']))
-            if ready <= timestamp(proposal['evaluated_at']):
+            if not proposal.get('schedule_based') and ready <= timestamp(proposal['evaluated_at']):
                 return 'The home has been cleaned and is ready. You may check in now.'
             return 'The home has been cleaned, and your early check-in is confirmed for ' + ready.strftime('%-I:%M %p') + ' Eastern Time.'
         checkout = timestamp(remote.get('target_at') or proposal['target_at'])

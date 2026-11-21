@@ -122,7 +122,7 @@ def verify_connection(origin, token):
         time.sleep(0.25 * 2 ** attempt)
 
 
-def context(db, issue_id, timestamp):
+def context(db, issue_id, timestamp, *, reviewing_automatic=False):
     from research import analyze
     if not isinstance(issue_id, str) or len(issue_id) > 200:
         raise ValueError('Choose a cleaning complaint')
@@ -133,11 +133,12 @@ def context(db, issue_id, timestamp):
     issue = next((item for item in analyze(snapshot, db)['issues'] if item['id'] == issue_id and item['category'] == 'Cleaning'), None)
     if not issue or len(issue['property_ids']) != 1:
         raise ValueError('Choose a cleaning complaint mapped to one property')
-    if any(ESCALATE.search(item['body']) for item in issue['evidence']):
+    if not reviewing_automatic and any(ESCALATE.search(item['body']) for item in issue['evidence']):
         raise ValueError('This complaint needs manager inspection before a routine cleaner return')
     current = dt.datetime.fromisoformat(timestamp)
     age = current - dt.datetime.fromisoformat(snapshot['synced_at'])
-    live = issue['lane'] == 'needs_attention' and dt.timedelta(0) <= age <= dt.timedelta(minutes=10)
+    eligible_lanes = ('needs_attention', 'likely_resolved') if reviewing_automatic else ('needs_attention',)
+    live = issue['lane'] in eligible_lanes and dt.timedelta(0) <= age <= dt.timedelta(minutes=10)
     return issue, live
 
 
@@ -153,7 +154,7 @@ def describe(row):
     return result
 
 
-def change(db, data, timestamp):
+def change(db, data, timestamp, *, automatic=False):
     issue, live = context(db, data.get('issue_id'), timestamp)
     kind = data.get('kind')
     scope = data.get('scope')
@@ -196,10 +197,80 @@ def change(db, data, timestamp):
     identifier = old['id'] if old and not repeat else str(uuid.uuid4())
     plan = {'external_request_id': identifier, 'property_external_id': issue['property_ids'][0], 'reservation_external_id': issue['reservation_id'], 'scope': scope.strip(), 'release_at': start.isoformat(), 'deadline_at': end.isoformat(), 'duration_minutes': duration, 'guest_access_confirmed': data.get('guest_access_confirmed') is True}
     body = {'kind': kind, 'request': plan, 'source_fingerprint': fingerprint, 'scheduler_url': configuration()['url'] if submit else None}
+    if automatic:
+        body['automatic'] = True
     state = 'queued' if submit else 'draft'
     db.execute('INSERT INTO cleaner_returns (id, issue_id, body, state, version, created_at, updated_at, next_poll) VALUES (?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body, state = excluded.state, error = NULL, version = cleaner_returns.version + 1, updated_at = excluded.updated_at, next_poll = excluded.next_poll', (identifier, issue['id'], json.dumps(body), state, timestamp, timestamp, timestamp))
-    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'cleaner_return_queued' if submit else 'cleaner_return_drafted', timestamp, json.dumps({'request_id': identifier, 'kind': kind, 'duration_minutes': duration})))
+    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'cleaner_return_queued_automatically' if automatic else 'cleaner_return_queued' if submit else 'cleaner_return_drafted', timestamp, json.dumps({'request_id': identifier, 'kind': kind, 'duration_minutes': duration})))
     return {'id': identifier, 'state': state}
+
+
+def queue_ready_visits(db, snapshot, timestamp):
+    from cleaning_proposal import propose
+    from fulfillment import profile
+    from research import analyze
+    from safety import detect
+
+    if not configuration().get('internal'):
+        return
+    for issue in analyze(snapshot, db)['issues']:
+        if issue['category'] != 'Cleaning' or issue['lane'] != 'needs_attention' or len(issue['property_ids']) != 1:
+            continue
+        first_report = issue['evidence'][0]['created_at']
+        if any((ESCALATE.search(item['body']) or detect(item['body']))
+               and item['sender_type'] == 'guest' and item['created_at'] >= first_report
+               for item in issue['messages']):
+            continue
+        if db.execute('SELECT 1 FROM cleaner_returns WHERE issue_id = ?', (issue['id'],)).fetchone():
+            continue
+        destination = profile(db, issue['property_ids'][0]) or {}
+        proposal = propose(issue, (destination.get('address') or {}).get('timezone'), timestamp)
+        if proposal['status'] != 'ready' or proposal['scope'] == 'Reclean the areas reported by the guest':
+            continue
+        evidence = set(proposal['evidence'])
+        current = dt.datetime.fromisoformat(timestamp)
+        if not any(item['id'] in evidence and item['sender_type'] == 'guest'
+                   and dt.timedelta(0) <= current - dt.datetime.fromisoformat(item['created_at']) <= dt.timedelta(minutes=15)
+                   for item in issue['messages']):
+            continue
+        try:
+            change(db, {**proposal, 'issue_id': issue['id'], 'version': 0,
+                        'source_fingerprint': guest_context_fingerprint(issue), 'submit': True},
+                   timestamp, automatic=True)
+        except ValueError:
+            continue
+
+
+def withdraw_changed_automatic_visit(db, row, plan, timestamp):
+    from cleaning_proposal import propose
+    from fulfillment import profile
+
+    if not plan.get('automatic'):
+        return False
+    original = plan['request']
+    start = dt.datetime.fromisoformat(original['release_at'])
+    current = dt.datetime.fromisoformat(timestamp)
+    if current >= start:
+        return False
+    try:
+        issue, live = context(db, row['issue_id'], timestamp, reviewing_automatic=True)
+    except ValueError:
+        return False
+    if not live or guest_context_fingerprint(issue) == plan['source_fingerprint']:
+        return False
+    from safety import detect
+    if issue['lane'] == 'likely_resolved' or any(
+        (ESCALATE.search(item['body']) or detect(item['body']))
+        and item['sender_type'] == 'guest' and item['created_at'] >= issue['evidence'][0]['created_at']
+        for item in issue['messages']
+    ):
+        return True
+    destination = profile(db, issue['property_ids'][0]) or {}
+    updated = propose(issue, (destination.get('address') or {}).get('timezone'), timestamp)
+    return (updated['status'] != 'ready' or updated['scope'] != original['scope']
+            or updated['duration_minutes'] > original['duration_minutes']
+            or dt.datetime.fromisoformat(updated['release_at']) > start
+            or dt.datetime.fromisoformat(updated['deadline_at']) < dt.datetime.fromisoformat(original['deadline_at']))
 
 
 def confirm(db, data, timestamp):
@@ -374,6 +445,11 @@ def synchronize(connect, stop):
                         result = request(plan['scheduler_url'], 'POST', '/v1/cleaner-returns', plan['request'], row['id'])
                 else:
                     result = request(plan['scheduler_url'], 'GET', '/v1/cleaner-returns/' + row['id'])
+                if result.get('status') not in ('completed', 'cancelled'):
+                    with connect() as db:
+                        withdraw = withdraw_changed_automatic_visit(db, row, plan, timestamp)
+                    if withdraw:
+                        result = request(plan['scheduler_url'], 'POST', '/v1/cleaner-returns/' + row['id'] + '/withdraw', {})
                 approval = plan.get('approval')
                 if approval and approval['state'] in ('queued', 'uncertain'):
                     if result.get('status') in ('scheduled', 'accepted', 'completed'):

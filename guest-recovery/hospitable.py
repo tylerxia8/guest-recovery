@@ -173,7 +173,7 @@ def research():
             matches = [item['id'] for item in properties if item['name'] == conversation['property']]
             if len(matches) == 1:
                 conversation['property_ids'] = [str(uuid.UUID(matches[0]))]
-    snapshot = {'synced_at': dt.datetime.now(dt.UTC).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': sum(dt.datetime.fromisoformat(item['effective_check_in']) <= current < dt.datetime.fromisoformat(item['effective_check_out']) for item in conversations), 'nontext_message_count': nontext, 'scope': 'Accepted current stays and arrivals within 48 hours are refreshed from Hospitable every five minutes after each completed import. Approved stay times are coordinated with the cleaning scheduler. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Guest replies require review except emergency safety guidance; stay-policy changes require scheduler confirmation.'}
+    snapshot = {'synced_at': dt.datetime.now(dt.UTC).isoformat(), 'property_count': len(properties), 'conversations': list(retained.values()), 'active_reservation_count': sum(dt.datetime.fromisoformat(item['effective_check_in']) <= current < dt.datetime.fromisoformat(item['effective_check_out']) for item in conversations), 'nontext_message_count': nontext, 'scope': 'Accepted current stays and arrivals within 48 hours are refreshed from Hospitable every five minutes after each completed import. Approved stay times are coordinated with the cleaning scheduler. Earlier imported conversations are retained as practice scenarios. Full returned conversations; text only. Rule-confirmed stay replies and qualifying emergency guidance are automatic. Other guest replies require review.'}
     snapshot['active_reservation_ids'] = [item['reservation_id'] for item in conversations if dt.datetime.fromisoformat(item['effective_check_in']) <= current < dt.datetime.fromisoformat(item['effective_check_out'])]
     snapshot['upcoming_reservation_ids'] = [item['reservation_id'] for item in conversations if current < dt.datetime.fromisoformat(item['effective_check_in'])]
     with connect() as db:
@@ -209,6 +209,15 @@ def research():
             imported_address['home'] = home
             db.execute('INSERT INTO fulfillment_profiles VALUES (?, ?, NULL, 0) ON CONFLICT(property_id) DO UPDATE SET imported_address = excluded.imported_address, version = fulfillment_profiles.version + 1 WHERE fulfillment_profiles.imported_address != excluded.imported_address', (str(uuid.UUID(item['id'])), json.dumps(imported_address, sort_keys=True)))
         db.execute('INSERT INTO research_snapshot VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body', (json.dumps(snapshot),))
+    from cleaner_returns import queue_ready_visits
+    try:
+        with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            queue_ready_visits(db, snapshot, dt.datetime.now(dt.UTC).isoformat())
+    except (sqlite3.Error, ValueError) as error:
+        logging.getLogger(__name__).warning(json.dumps({
+            'event': 'automatic_cleaning_visit_not_queued', 'error_type': type(error).__name__,
+        }))
     from reply_library import learn
     with connect() as db:
         learn(db, conversations)

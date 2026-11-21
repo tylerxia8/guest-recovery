@@ -7,8 +7,11 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clock import SystemClock
 from app.models.tables import Assignment, Cleaner, CleaningTask, Property, Reservation
 from app.services.guest_stay_policy import assess
+from app.services.instructions import latest_instruction
+from app.services.task_generation import _revise
 from app.services.workspace_lock import SCHEDULE_PUBLICATION_LOCK, acquire_workspace_lock, get_workspace_id
 
 
@@ -124,8 +127,32 @@ def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]
     return _touchup_status(session, identifier)
 
 
+def _withdraw_touchup(session: Session, identifier: str) -> dict[str, object]:
+    acquire_workspace_lock(session, get_workspace_id(session), SCHEDULE_PUBLICATION_LOCK)
+    task = session.get(CleaningTask, _touchup_id(session, identifier), with_for_update=True)
+    if task is None or task.kind != "guest_touchup":
+        raise LookupError(identifier)
+    if task.status not in {"completed", "canceled"}:
+        clock = SystemClock()
+        task.status = "canceled"
+        task.updated_at = clock.now()
+        task.version += 1
+        _revise(
+            session,
+            clock,
+            task,
+            latest_instruction(session, task.property_id),
+            "Guest entry permission changed",
+            "reservation-sync",
+        )
+        session.flush()
+    return _touchup_status(session, identifier)
+
+
 def handle(session: Session, method: str, path: str, body: dict[str, Any] | None) -> dict[str, object]:
     if method == "POST" and body is not None:
+        if path.startswith("/v1/cleaner-returns/") and path.endswith("/withdraw"):
+            return _withdraw_touchup(session, path.split("/")[-2])
         if path == "/v1/cleaner-returns":
             return _create_touchup(session, body)
         if path == "/v1/stay-adjustments":

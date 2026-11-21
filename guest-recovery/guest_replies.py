@@ -102,15 +102,51 @@ def approve(db, data, timestamp):
     existing = db.execute('SELECT * FROM guest_reply_sends WHERE reservation_id = ? AND message_id = ?', (issue['reservation_id'], message['id'])).fetchone()
     if existing and existing['state'] not in ('blocked', 'failed'):
         raise ValueError('A send already exists for this guest text. Check its status in Hospitable before replying again.')
+    return _queue_reply(db, issue, message, current, timestamp, existing)
+
+
+def _queue_reply(db, issue, message, current, timestamp, existing=None, *, automatic_stay=False):
     context = {'property_id': issue['property_ids'][0], 'conversation_id': issue['conversation_id'], 'source_messages_fingerprint': issue['source_messages_fingerprint'], 'source_fingerprint': current['source_fingerprint'], 'draft_version': current['version'], 'check_in': issue['check_in'], 'check_out': issue['check_out']}
     context['instruction_versions'] = current['instruction_versions']
     context['instruction_context'] = current['instruction_context']
     context['stay_adjustment_ids'] = list(dict.fromkeys([*issue.get('stay_adjustment_ids', []), *current['stay_policy_approvals']]))
     context['prearrival_reply'] = issue.get('stay_phase') == 'upcoming' and issue['category'] == 'Instructions'
+    if automatic_stay:
+        context['automatic_stay'] = True
     identifier = existing['id'] if existing else str(uuid.uuid4())
     db.execute("INSERT INTO guest_reply_sends VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, NULL, ?) ON CONFLICT(reservation_id, message_id) DO UPDATE SET issue_id = excluded.issue_id, body = excluded.body, context = excluded.context, state = 'queued', reference = NULL, error = NULL, approved_at = excluded.approved_at, attempted_at = NULL, updated_at = excluded.updated_at", (identifier, issue['reservation_id'], message['id'], issue['id'], current['body'], json.dumps(context), timestamp, timestamp))
-    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'guest_reply_approved', timestamp, json.dumps({'send_id': identifier, 'message_id': message['id'], 'draft_version': current['version']})))
+    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'stay_reply_queued_automatically' if automatic_stay else 'guest_reply_approved', timestamp, json.dumps({'send_id': identifier, 'message_id': message['id'], 'draft_version': current['version']})))
     return {'id': identifier, 'state': 'queued'}
+
+
+def queue_stay_reply(db, request_row, timestamp):
+    from research import analyze
+    from stay_policy import policy_reply
+
+    if not request_row['scheduler_url'].startswith('internal-scheduler:') or request_row['state'] != 'approved':
+        return
+    if db.execute('SELECT 1 FROM guest_reply_sends WHERE reservation_id = ? AND message_id = ?',
+                  (request_row['reservation_id'], request_row['message_id'])).fetchone():
+        return
+    snapshot_row = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
+    if not snapshot_row:
+        return
+    snapshot = json.loads(snapshot_row['body'])
+    if not dt.timedelta(0) <= dt.datetime.fromisoformat(timestamp) - dt.datetime.fromisoformat(snapshot['synced_at']) <= dt.timedelta(minutes=10):
+        return
+    issue_id = request_row['reservation_id'] + ':instructions'
+    issue = next((item for item in analyze(snapshot, db)['issues'] if item['id'] == issue_id), None)
+    message = next((item for item in issue['evidence'] if item['id'] == request_row['message_id']), None) if issue else None
+    if not message or any(item['created_at'] > message['created_at'] for item in issue['messages']):
+        return
+    prepared = draft(db, issue, message)
+    approved_body = policy_reply(json.loads(request_row['plan']), json.loads(request_row['remote']))
+    if (not prepared['sending_enabled'] or prepared['send'] or prepared['updated_at']
+            or prepared['safety'] or prepared['needs_manager']
+            or prepared['stay_policy_approvals'] != [request_row['id']]
+            or prepared['suggested'] != approved_body):
+        return
+    _queue_reply(db, issue, message, prepared, timestamp, automatic_stay=True)
 
 
 def emergency_reply_exists(messages, reported_at):
@@ -128,7 +164,7 @@ def emergency_reply_exists(messages, reported_at):
 
 
 def automatic_safety_replies_enabled():
-    return os.environ.get('AUTOMATIC_SAFETY_REPLIES') == '1'
+    return os.environ.get('AUTOMATIC_SAFETY_REPLIES', '1') == '1'
 
 
 def queue_safety_replies(db, alerts, snapshot, timestamp):
@@ -238,7 +274,7 @@ def deliver_pending(connect, stop, queue='standard'):
                     saved = db.execute('SELECT * FROM guest_reply_drafts WHERE issue_id = ? AND message_id = ?', (row['issue_id'], row['message_id'])).fetchone()
                     if live['state'] != 'queued' or live['context'] != row['context']:
                         continue
-                    if not context.get('automatic_safety') and (not saved or saved['version'] != context['draft_version'] or saved['body'] != row['body'] or saved['source_fingerprint'] != context['source_fingerprint']):
+                    if not (context.get('automatic_safety') or context.get('automatic_stay')) and (not saved or saved['version'] != context['draft_version'] or saved['body'] != row['body'] or saved['source_fingerprint'] != context['source_fingerprint']):
                         raise ValueError('The draft changed after approval. Review and approve again.')
                     if context.get('automatic_safety') and not db.execute('SELECT 1 FROM safety_alerts WHERE reservation_id = ? AND message_id = ?', (row['reservation_id'], row['message_id'])).fetchone():
                         raise ValueError('The recorded safety alert is missing; manager review is required.')
@@ -246,13 +282,21 @@ def deliver_pending(connect, stop, queue='standard'):
                         answer = db.execute('SELECT version FROM property_answers WHERE property_id = ? AND intent = ?', (expected['property_id'], expected['intent'])).fetchone()
                         if not answer or answer['version'] != expected['version']:
                             raise ValueError('Property instructions changed after approval. Review the latest answer before sending.')
+                    if context.get('automatic_stay') and saved:
+                        raise ValueError('A manager draft now exists. Review it before sending.')
                     if context.get('instruction_context'):
                         from research import analyze
                         snapshot = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
                         issue = next((item for item in analyze(json.loads(snapshot['body']), db)['issues'] if item['id'] == row['issue_id']), None) if snapshot else None
                         question = next((item for item in issue['evidence'] if item['id'] == row['message_id']), None) if issue else None
-                        if not question or draft(db, issue, question)['instruction_context'] != context['instruction_context']:
-                            raise ValueError('The instruction answer changed. Review and approve the current answer before sending.')
+                        fresh = draft(db, issue, question) if question else None
+                        if not fresh or fresh['instruction_context'] != context['instruction_context']:
+                            raise ValueError('The instruction answer changed. Review the current answer before sending.')
+                        if context.get('automatic_stay') and (
+                            fresh['needs_manager'] or fresh['suggested'] != row['body']
+                            or not fresh['stay_policy_approvals']
+                        ):
+                            raise ValueError('The stay reply no longer qualifies for automatic sending.')
                     db.execute("UPDATE guest_reply_sends SET state = 'attempting', attempted_at = ?, updated_at = ? WHERE id = ?", (timestamp, timestamp, row['id']))
                     db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['issue_id'], 'guest_reply_send_attempted', timestamp, json.dumps({'send_id': row['id'], 'reservation_id': row['reservation_id'], 'automatic_safety': context.get('automatic_safety')})))
                 state = 'unknown'

@@ -51,6 +51,11 @@ class ReconciledWorkflowTest(unittest.TestCase):
         with app.connect() as db:
             self.assertIn('Eastern Time', solution(db, issue, self.message)['body'])
 
-    def test_automatic_guest_safety_queue_is_disabled_by_default(self):
-        with patch.dict(os.environ, {'AUTOMATIC_SAFETY_REPLIES': ''}):
+    def test_automatic_guest_safety_queue_is_enabled_unless_disabled(self):
+        from guest_replies import automatic_safety_replies_enabled
+
+        with patch.dict(os.environ):
+            os.environ.pop('AUTOMATIC_SAFETY_REPLIES', None)
+            self.assertTrue(automatic_safety_replies_enabled())
+        with patch.dict(os.environ, {'AUTOMATIC_SAFETY_REPLIES': '0'}):
             self.assertIsNone(queue_safety_replies(None, None, None, None))
