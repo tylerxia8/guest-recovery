@@ -239,6 +239,19 @@ def synchronize(connect, stop):
                     refresh_snapshot(db)
                     if row['state'] != result['decision']:
                         db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (row['reservation_id'] + ':instructions', 'stay_request_' + result['decision'], checked, json.dumps({'request_id': row['id'], 'kind': row['kind'], 'reason': result.get('reason')})))
+                if result['decision'] == 'approved' and settings.get('internal'):
+                    try:
+                        from guest_replies import queue_stay_reply
+                        with connect() as db:
+                            db.execute('BEGIN IMMEDIATE')
+                            saved = db.execute('SELECT * FROM stay_requests WHERE id = ?', (row['id'],)).fetchone()
+                            if saved:
+                                queue_stay_reply(db, saved, checked)
+                    except Exception as error:
+                        logging.getLogger(__name__).warning(json.dumps({
+                            'event': 'automatic_stay_reply_not_queued', 'error_type': type(error).__name__,
+                        }))
+
         except sqlite3.Error as error:
             logging.getLogger(__name__).error(json.dumps({'event': 'stay_request_worker_failed', 'error_type': type(error).__name__}))
 

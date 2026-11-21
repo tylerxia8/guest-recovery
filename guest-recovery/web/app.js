@@ -475,7 +475,7 @@ function render() {
     }
     card.append(alternatives);
   }
-  card.append(node('p', 'Purchases are off. Review guest replies and follow up on safety alerts.', 'automation-note'));
+  card.append(node('p', 'Follow up on safety alerts and review guest replies that need your input.', 'automation-note'));
   const advanced = node('details', '', 'manager-advanced');
   advanced.append(node('summary', 'More controls'));
   while (card.firstChild) advanced.append(card.firstChild);

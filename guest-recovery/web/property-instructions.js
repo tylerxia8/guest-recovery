@@ -89,6 +89,6 @@ function propertyInstructionPanel(issue, message) {
     details.open = true;
     details.scrollIntoView({behavior: 'smooth', block: 'center'});
   };
-  panel.append(reply, node('p', locked ? 'A reply is already queued or sent. Continue the conversation in Hospitable.' : 'Review the answer before sending. Nothing is sent automatically.', 'help-text'));
+  panel.append(reply, node('p', locked ? 'A reply is already queued or sent. Continue the conversation in Hospitable.' : 'Review this answer before sending. Rule-confirmed stay changes may be sent automatically.', 'help-text'));
   return panel;
 }
