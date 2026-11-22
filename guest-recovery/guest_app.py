@@ -84,6 +84,8 @@ def initialize():
         db.execute("CREATE TABLE IF NOT EXISTS guest_reply_sends (id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL, message_id TEXT NOT NULL, issue_id TEXT NOT NULL, body TEXT NOT NULL, context TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('queued','attempting','accepted','blocked','failed','unknown')), reference TEXT, error TEXT, approved_at TEXT NOT NULL, attempted_at TEXT, updated_at TEXT NOT NULL, UNIQUE(reservation_id, message_id))")
         db.execute('CREATE TABLE IF NOT EXISTS shared_products (id TEXT PRIMARY KEY, item_type TEXT NOT NULL, title TEXT NOT NULL, asin TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)')
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS active_shared_product ON shared_products(item_type) WHERE active = 1')
+        from manual_orders import initialize as initialize_manual_orders
+        initialize_manual_orders(db)
         db.execute('CREATE TABLE IF NOT EXISTS purchase_plans (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS guest_reply_drafts (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
@@ -366,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
             assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/purchase-plans.js': ('purchase-plans.js', 'text/javascript'), '/manager-view.js': ('manager-view.js', 'text/javascript'), '/maintenance.js': ('maintenance.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if self.command == 'GET' and self.path == '/':
                 if not actor:
-                    target = requested if re.fullmatch(r'/\?purchase=[a-f0-9-]{36}', requested) else '/'
+                    target = requested if re.fullmatch(r'/\?(?:purchase=[a-f0-9-]{36}|supply=[A-Za-z0-9_.~%+-]{1,512})', requested) else '/'
                     self.respond(303, b'', 'text/plain', {'Location': '/login?next=' + quote(target, safe='')})
                     return
                 self.respond(200, (ROOT / 'web' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
@@ -514,14 +516,15 @@ class Handler(BaseHTTPRequestHandler):
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
                     from mailer import email_ready
                     from purchases import (
-                        AUTO_LIMIT_CENTS,
-                        VETO_SECONDS,
                         describe,
                         email_settings,
                     )
                     settings = email_settings()
-                    result['purchase_policy'] = {'auto_limit_cents': AUTO_LIMIT_CENTS, 'veto_seconds': VETO_SECONDS, 'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
+                    result['purchase_policy'] = {'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
                     for issue in result['issues']:
+                        handoff = db.execute('SELECT status, order_lines FROM manual_order_notices WHERE issue_id = ?', (issue['id'],)).fetchone()
+                        issue['manual_order_status'] = handoff['status'] if handoff else None
+                        issue['manual_order_lines'] = json.loads(handoff['order_lines']) if handoff else []
                         issue['purchases'] = [describe(row) for row in db.execute('SELECT * FROM purchase_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     result['integration'] = dict(state) if state else {'status': 'starting', 'last_attempt': None, 'last_success': None, 'error': None}
                     for issue in result['issues']:

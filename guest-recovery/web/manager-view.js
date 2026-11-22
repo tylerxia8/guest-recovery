@@ -29,11 +29,6 @@ function managerSolutionCard(issue, message, controls) {
     panel.append(node('p', request.summary, 'purchase-summary'), node('strong', `$${(request.total_cents / 100).toFixed(2)} total`, 'purchase-total'));
     if (request.offer) panel.append(node('p', `Arrival: ${request.offer.arrival_date} · ${request.offer.delivery_window}`, 'help-text'));
     panel.append(node('p', request.status, 'purchase-status'));
-    if (request.eligible_at) {
-      const clock = node('p', '', 'countdown');
-      clock.dataset.deadline = request.eligible_at;
-      panel.append(clock);
-    } else panel.append(node('p', request.approval_required ? (request.decision === 'approved' ? 'Manager approval recorded.' : 'Your approval is required before any purchase.') : '10-minute window starts after the manager notice is sent successfully.', 'help-text'));
     const actions = node('div', '', 'primary-actions');
     for (const [action, label] of [['approve', request.decision === 'approved' ? 'Confirmed' : 'Confirm'], ['veto', 'Deny']]) {
       const button = node('button', label, action === 'veto' ? 'secondary' : '');
@@ -48,6 +43,14 @@ function managerSolutionCard(issue, message, controls) {
       actions.append(button);
     }
     panel.append(actions);
+  } else if (issue.manual_order_status) {
+    panel.append(node('p', issue.manual_order_status === 'sent' ? 'Order checklist emailed to the manager.' : 'Email outcome unconfirmed. Check the manager inbox before placing an order.', 'purchase-status'));
+    for (const item of issue.manual_order_lines || []) {
+      if (!item.asin) continue;
+      const link = node('a', `${item.packs} pack(s) · ${item.title}`, 'amazon-link');
+      link.href = 'https://www.amazon.com/dp/' + item.asin;
+      panel.append(link, node('br'));
+    }
   } else {
     if (plan?.lines.length) {
       for (const item of plan.order_lines) panel.append(node('p', `${item.packs || '?'} pack(s) · ${item.title}`, 'purchase-summary'));
@@ -60,6 +63,6 @@ function managerSolutionCard(issue, message, controls) {
     } else panel.append(node('p', issue.recommendation || 'Review the conversation to choose the next step.', 'help-text'));
     if (issue.purchases[0]?.decision === 'vetoed') panel.append(node('p', 'Previous proposal denied.', 'help-text'));
   }
-  if (request || plan?.lines.length) panel.append(node('p', 'Checkout is not connected. No automatic purchase will occur.', 'checkout-note'));
+  if (request || plan?.lines.length) panel.append(node('p', 'Place the order manually in Amazon Business.', 'checkout-note'));
   return panel;
 }
