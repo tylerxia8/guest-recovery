@@ -50,7 +50,7 @@ class ManualOrderTest(unittest.TestCase):
         mail.assert_called_once()
         payload = mail.call_args.args[1]
         self.assertEqual(payload['to'], ['manager@example.com'])
-        self.assertIn('Please place this order', payload['text'])
+        self.assertIn('Review and approve', payload['text'])
         self.assertIn('https://www.amazon.com/dp/B011DX5G92', payload['text'])
         self.assertIn('https://www.amazon.com/dp/B01DM5EZ50', payload['text'])
         self.assertIn('1 pack(s)', payload['text'])
@@ -86,3 +86,26 @@ class ManualOrderTest(unittest.TestCase):
                                'email_id': 'email', 'notified_at': guest_app.now(), 'offer': None, 'email_payload': None})
             self.assertEqual(result['status'], 'Manager to place Amazon order')
             self.assertIsNone(result['eligible_at'])
+
+    def test_manager_can_approve_selected_items_once(self):
+        from manual_orders import approve
+        with patch('manual_orders.send_email', return_value={'id': 'email-reference'}):
+            send_ready(guest_app.connect, self.settings)
+        with guest_app.connect() as db:
+            notice = db.execute('SELECT * FROM manual_order_notices').fetchone()
+            request = {'issue_id': notice['issue_id'], 'fingerprint': notice['fingerprint']}
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                approve(db, {**request, 'fingerprint': 'old-quote'}, guest_app.now())
+            self.assertEqual(approve(db, request, guest_app.now()), {'approved': True})
+            self.assertEqual(approve(db, request, guest_app.now()), {'approved': True})
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM audit WHERE action = 'manual_amazon_order_approved'").fetchone()[0], 1)
+
+    def test_manager_cannot_approve_after_delivery_details_change(self):
+        from manual_orders import approve
+        with patch('manual_orders.send_email', return_value={'id': 'email-reference'}):
+            send_ready(guest_app.connect, self.settings)
+        with guest_app.connect() as db:
+            notice = db.execute('SELECT * FROM manual_order_notices').fetchone()
+            db.execute("UPDATE fulfillment_profiles SET imported_address = '{}'")
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                approve(db, {'issue_id': notice['issue_id'], 'fingerprint': notice['fingerprint']}, guest_app.now())

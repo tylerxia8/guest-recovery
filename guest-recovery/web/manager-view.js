@@ -44,12 +44,25 @@ function managerSolutionCard(issue, message, controls) {
     }
     panel.append(actions);
   } else if (issue.manual_order_status) {
-    panel.append(node('p', issue.manual_order_status === 'sent' ? 'Order checklist emailed to the manager.' : 'Email outcome unconfirmed. Check the manager inbox before placing an order.', 'purchase-status'));
+    panel.append(node('p', issue.manual_order_approved_at ? 'Products approved · manual checkout pending' : 'Review the selected products and pack quantities.', 'purchase-status'));
     for (const item of issue.manual_order_lines || []) {
       if (!item.asin) continue;
       const link = node('a', `${item.packs} pack(s) · ${item.title}`, 'amazon-link');
       link.href = 'https://www.amazon.com/dp/' + item.asin;
       panel.append(link, node('br'));
+    }
+    if (!issue.manual_order_approved_at && issue.lane === 'needs_attention') {
+      const approve = node('button', 'Approve selected products');
+      approve.type = 'button';
+      approve.onclick = async () => {
+        approve.disabled = true;
+        try {
+          await submitAction('/api/manual-order/approve', {issue_id: issue.id, fingerprint: issue.manual_order_fingerprint});
+          await load();
+        } catch (error) { notice.textContent = error.message; }
+        finally { approve.disabled = false; }
+      };
+      panel.append(approve);
     }
   } else {
     if (plan?.lines.length) {
@@ -63,6 +76,6 @@ function managerSolutionCard(issue, message, controls) {
     } else panel.append(node('p', issue.recommendation || 'Review the conversation to choose the next step.', 'help-text'));
     if (issue.purchases[0]?.decision === 'vetoed') panel.append(node('p', 'Previous proposal denied.', 'help-text'));
   }
-  if (request || plan?.lines.length) panel.append(node('p', 'Place the order manually in Amazon Business.', 'checkout-note'));
+  if (request || issue.manual_order_approved_at || (!issue.manual_order_status && plan?.lines.length)) panel.append(node('p', 'Place the order manually in Amazon Business.', 'checkout-note'));
   return panel;
 }

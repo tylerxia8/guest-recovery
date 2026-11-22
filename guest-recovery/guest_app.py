@@ -171,6 +171,9 @@ def mutate(db, path, data):
             raise ValueError('Product changed; reload before removing it')
         audit(db, identifier, 'preferred_product_archived', {})
         return {'id': identifier}
+    if path == '/api/manual-order/approve':
+        from manual_orders import approve
+        return approve(db, data, now())
     if path == '/api/purchases' or path.startswith('/api/purchases/'):
         from purchases import change
         return change(db, path, data, now())
@@ -522,8 +525,10 @@ class Handler(BaseHTTPRequestHandler):
                     settings = email_settings()
                     result['purchase_policy'] = {'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
                     for issue in result['issues']:
-                        handoff = db.execute('SELECT status, order_lines FROM manual_order_notices WHERE issue_id = ?', (issue['id'],)).fetchone()
+                        handoff = db.execute('SELECT status, order_lines, fingerprint, approved_at FROM manual_order_notices WHERE issue_id = ?', (issue['id'],)).fetchone()
                         issue['manual_order_status'] = handoff['status'] if handoff else None
+                        issue['manual_order_fingerprint'] = handoff['fingerprint'] if handoff else None
+                        issue['manual_order_approved_at'] = handoff['approved_at'] if handoff else None
                         issue['manual_order_lines'] = json.loads(handoff['order_lines']) if handoff else []
                         issue['purchases'] = [describe(row) for row in db.execute('SELECT * FROM purchase_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     result['integration'] = dict(state) if state else {'status': 'starting', 'last_attempt': None, 'last_success': None, 'error': None}
@@ -544,7 +549,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/settings/maintenance', '/api/maintenance/import', '/api/maintenance/refresh', '/api/property-instructions', '/api/cleaner-returns/notify', '/api/cleaner-returns/propose', '/api/cleaner-returns/approve-schedule', '/api/cleaner-returns', '/api/cleaner-returns/decline', '/api/cleaner-returns/retry', '/api/cleaner-returns/confirm', '/api/settings/cleaner-scheduler', '/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
+            if self.path not in ('/api/settings/maintenance', '/api/maintenance/import', '/api/maintenance/refresh', '/api/property-instructions', '/api/cleaner-returns/notify', '/api/cleaner-returns/propose', '/api/cleaner-returns/approve-schedule', '/api/cleaner-returns', '/api/cleaner-returns/decline', '/api/cleaner-returns/retry', '/api/cleaner-returns/confirm', '/api/settings/cleaner-scheduler', '/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/manual-order/approve', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
