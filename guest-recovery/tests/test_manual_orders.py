@@ -109,3 +109,33 @@ class ManualOrderTest(unittest.TestCase):
             db.execute("UPDATE fulfillment_profiles SET imported_address = '{}'")
             with self.assertRaisesRegex(ValueError, 'changed'):
                 approve(db, {'issue_id': notice['issue_id'], 'fingerprint': notice['fingerprint']}, guest_app.now())
+
+    def test_guest_acknowledgment_is_queued_once_without_promising_delivery(self):
+        self.conversation['source_messages_fingerprint'] = 'a' * 64
+        self.save_snapshot()
+        with patch.dict('os.environ', {'HOSPITABLE_TOKEN': 'test-token'}), patch(
+            'manual_orders.send_email', return_value={'id': 'email-reference'}
+        ):
+            send_ready(guest_app.connect, self.settings)
+            send_ready(guest_app.connect, self.settings)
+        with guest_app.connect() as db:
+            sends = db.execute('SELECT state, body, context FROM guest_reply_sends').fetchall()
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0]['state'], 'queued')
+        self.assertTrue(json.loads(sends[0]['context'])['automatic_supply'])
+        self.assertIn('once we have confirmed details', sends[0]['body'])
+        self.assertNotIn('Amazon', sends[0]['body'])
+
+    def test_guest_acknowledgment_skips_conversations_staff_answered(self):
+        self.conversation['source_messages_fingerprint'] = 'a' * 64
+        self.conversation['messages'].append({
+            'id': 'staff-reply', 'sender_type': 'host',
+            'body': 'I am checking for spare supplies.', 'created_at': guest_app.now(),
+        })
+        self.save_snapshot()
+        with patch.dict('os.environ', {'HOSPITABLE_TOKEN': 'test-token'}), patch(
+            'manual_orders.send_email', return_value={'id': 'email-reference'}
+        ):
+            send_ready(guest_app.connect, self.settings)
+        with guest_app.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM guest_reply_sends').fetchone()[0], 0)

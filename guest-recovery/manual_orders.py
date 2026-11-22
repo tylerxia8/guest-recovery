@@ -59,6 +59,7 @@ def approve(db, data, timestamp):
 
 
 def send_ready(connect, settings):
+    from guest_replies import queue_supply_acknowledgment
     from research import analyze
     from settings import manager_url
 
@@ -106,6 +107,7 @@ def send_ready(connect, settings):
             }
             db.execute("INSERT INTO manual_order_notices (issue_id, message_id, fingerprint, order_lines, status, reference, updated_at) VALUES (?, ?, ?, ?, 'attempting', NULL, ?)",
                        (issue['id'], message['id'], plan['source_fingerprint'], json.dumps(plan['order_lines']), now.isoformat()))
+            queue_supply_acknowledgment(db, issue, message, now.isoformat())
         status, reference = 'unknown', None
         try:
             result = send_email(settings, payload, 'manual-order/' + plan['source_fingerprint'])
