@@ -28,10 +28,10 @@ export default function WorkspaceShell({ children, demo }: { children: ReactNode
       setBusy(false);
     }
   }
-  const views = [{ label: "Tenant view", href: "/maintenance", role: "tenant" }, { label: "Manager view", href: "/maintenance/review", role: "property_manager" }, { label: "Repairman view", href: "/maintenance/jobs", role: "contractor" }];
+  const views = [{ label: "Guest view", href: "/maintenance", role: "tenant" }, { label: "Manager view", href: "/maintenance/review", role: "property_manager" }, { label: "Repairman view", href: "/maintenance/jobs", role: "contractor" }];
   return <div className={styles.app}>
     <header className={styles.bar}>
-      <Link className={styles.home} href="/" aria-label="Home"><Icon name="house" /></Link>
+      <Link className={styles.home} href="/" aria-label="Home"><Icon name="repair" /></Link>
       <nav className={styles.views} aria-label="Maintenance views">{views.map(view => demo
         ? <button key={view.href} type="button" disabled={busy} aria-current={pathname === view.href ? "page" : undefined} onClick={() => void open(view.role)}>{view.label}</button>
         : <Link key={view.href} href={view.href} onClick={event => {

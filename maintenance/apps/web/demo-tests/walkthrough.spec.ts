@@ -3,8 +3,7 @@ import { expect, test } from "@playwright/test";
 test("the packaged sample supports all five guided role screens", async ({ page }) => {
   async function enter(role: string, path: string) {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Maintenance", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /I’m the tenant/ })).toBeVisible();
+    await expect(page.getByLabel("Describe the problem", { exact: true })).toBeVisible();
     await page.evaluate(async role => {
       const response = await fetch("/v1/demo/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }), signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw new Error("The demo role could not be opened.");

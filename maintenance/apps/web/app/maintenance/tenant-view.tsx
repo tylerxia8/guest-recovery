@@ -242,10 +242,10 @@ export default function TenantView() {
   </div>;
   if (!ready) return <section className={styles.page}><p role="status">Loading your repairs…</p></section>;
   return <section className={styles.page}>
-    <header className={styles.header}><div><p className={styles.eyebrow}>YOUR HOME</p><h1>Repairs</h1><p>Tell us what’s wrong. We’ll help with the next step.</p></div>{(ticket || showPast) && <button type="button" disabled={busy || attachments.length > 0} onClick={newRequest}>New request</button>}</header>
+    <header className={styles.header}><div><p className={styles.eyebrow}>REPAIR CHAT</p><h1>Lucena Repairs</h1><p>Tell us what’s wrong. We’ll help with the next step.</p></div>{(ticket || showPast) && <button type="button" disabled={busy || attachments.length > 0} onClick={newRequest}>New request</button>}</header>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
-    {manager && !homes.length ? <section className={styles.card}><h2>You’re signed in as a manager</h2><p>Use the repair queue to help residents, or switch to a tenant account to report a problem with your own home.</p><Link href="/maintenance/manage">Open repair queue →</Link></section> : !ticket ? showPast ? null : <section className={styles.card}><h2>What needs fixing?</h2><form onSubmit={send}>
+    {manager && !homes.length ? <section className={styles.card}><h2>You’re signed in as a manager</h2><p>Use the repair queue to help residents, or switch to a tenant account to report a problem with your own home.</p><Link href="/maintenance/manage">Open repair queue →</Link></section> : !ticket ? showPast ? null : <section className={`${styles.card} ${styles.composer}`}><h2>What needs fixing?</h2><form onSubmit={send}>
       {homes.length > 1 && <label>Which home?<select value={home} onChange={event => setHome(event.target.value)} disabled={busy}>{homes.map(item => <option key={item.lease_id} value={item.lease_id}>{item.property_name} · {item.unit_label}</option>)}</select></label>}
       {homes.length === 1 && <p className={styles.home}>{homes[0].property_name} · {homes[0].unit_label}</p>}
       <label htmlFor="repair-description">Describe the problem<textarea id="repair-description" required maxLength={5000} rows={4} value={description} disabled={busy} onChange={event => setDescription(event.target.value)} placeholder="For example: the shower has no hot water, even after running it for a few minutes." /></label>

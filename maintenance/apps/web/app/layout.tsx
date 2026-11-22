@@ -3,7 +3,7 @@ import "./globals.css";
 import WorkspaceShell from "./workspace-shell";
 
 export const metadata = {
-  title: "Maintenance",
+  title: "Lucena Repairs",
   description:
     "Report a problem and follow the repair.",
 };

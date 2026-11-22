@@ -11,7 +11,6 @@ test("maintenance photo and manager updates persist for the resident", async ({
 }) => {
   const description = `Bathroom tap drips / browser ${Date.now()}`;
   await page.goto("/");
-  await page.getByRole("button", { name: /I’m the tenant/ }).click();
   await page.getByLabel("Describe the problem", { exact: true }).fill(description);
   await page.getByLabel("Photos or videos", { exact: false }).setInputFiles({
     name: "fixture-tap.png", mimeType: "image/png", buffer: photo,
@@ -33,7 +32,7 @@ test("maintenance photo and manager updates persist for the resident", async ({
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("log")).toContainText("Plumber is inspecting the tap. No entry without coordination.");
   await expectAccessible();
-  await page.getByRole("button", { name: "Tenant view", exact: true }).click();
+  await page.getByRole("button", { name: "Guest view", exact: true }).click();
   await expect(page).toHaveURL(residentUrl);
   await expect(page.getByRole("log")).toContainText("Plumber is inspecting the tap. No entry without coordination.");
   await page.getByText("Request photos & videos", { exact: true }).click();
@@ -63,7 +62,6 @@ test("maintenance photo and manager updates persist for the resident", async ({
 test("lost report response retries safely, rejected photos keep the request, and emergencies stop questions", async ({ page }) => {
   const description = `Kitchen sink leaks / retry ${Date.now()}`;
   await page.goto("/");
-  await page.getByRole("button", { name: /I’m the tenant/ }).click();
   await page.getByLabel("Describe the problem", { exact: true }).fill(description);
   let loseResponse = true;
   await page.route("**/v1/maintenance-tickets", async route => {
@@ -102,7 +100,6 @@ test("tenant video upload is downloadable after refresh and visible to the manag
   await page.waitForTimeout(60_000);
   const description = `Tap noise / video ${Date.now()}`;
   await page.goto("/");
-  await page.getByRole("button", { name: /I’m the tenant/ }).click();
   await page.getByLabel("Describe the problem", { exact: true }).fill(description);
   const uploadInput = page.getByLabel("Photos or videos", { exact: false });
   await expect(uploadInput).toBeEnabled();
