@@ -1,0 +1,19 @@
+{
+    admin off
+    auto_https off
+}
+
+:{$PORT:8080} {
+    header {
+        -Server
+        Content-Security-Policy "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        X-Robots-Tag "noindex, nofollow"
+    }
+    respond /health "ok" 200
+    root * /srv
+    file_server
+}

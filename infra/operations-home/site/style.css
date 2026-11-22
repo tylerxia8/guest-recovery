@@ -1,0 +1,24 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+  color: #163b31;
+  background: #f0f5f1;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 960px; margin: 0 auto; padding: clamp(16px, 5vw, 52px); }
+.hero { border-radius: 24px; background: #123c31; color: #fff; padding: clamp(24px, 6vw, 56px); }
+.hero p { margin: 0; color: #d6e9e0; }
+.brand { font-weight: 700; }
+h1 { font-size: clamp(2.3rem, 7vw, 4rem); line-height: 1.02; letter-spacing: -.05em; margin: 10px 0 14px; }
+h2 { font-size: 1.15rem; margin: 27px 0 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 12px; }
+.card { position: relative; border: 1px solid #cedbd4; border-radius: 16px; padding: 18px; background: #fff; }
+.card:hover { border-color: #558675; background: #f9fcfa; }
+.monogram { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 11px; background: #e0f0e7; color: #175740; font-weight: 750; }
+h3 { margin: 12px 0 3px; font-size: 1.1rem; }
+.card a { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; color: #164e3b; text-underline-offset: 4px; }
+.card a::after { content: ""; position: absolute; inset: 0; border-radius: 16px; }
+.card a:focus-visible { outline: 0; }
+.card a:focus-visible::after { outline: 3px solid #17634d; outline-offset: 3px; }
+.card p { margin: 0; color: #41594e; line-height: 1.55; }
