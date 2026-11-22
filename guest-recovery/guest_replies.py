@@ -105,7 +105,7 @@ def approve(db, data, timestamp):
     return _queue_reply(db, issue, message, current, timestamp, existing)
 
 
-def _queue_reply(db, issue, message, current, timestamp, existing=None, *, automatic_stay=False, maintenance_question=None):
+def _queue_reply(db, issue, message, current, timestamp, existing=None, *, automatic_stay=False, maintenance_question=None, automatic_supply=False):
     context = {'property_id': issue['property_ids'][0], 'conversation_id': issue['conversation_id'], 'source_messages_fingerprint': issue['source_messages_fingerprint'], 'source_fingerprint': current['source_fingerprint'], 'draft_version': current['version'], 'check_in': issue['check_in'], 'check_out': issue['check_out']}
     context['instruction_versions'] = current['instruction_versions']
     context['instruction_context'] = current['instruction_context']
@@ -113,12 +113,34 @@ def _queue_reply(db, issue, message, current, timestamp, existing=None, *, autom
     context['prearrival_reply'] = issue.get('stay_phase') == 'upcoming' and issue['category'] == 'Instructions'
     if automatic_stay:
         context['automatic_stay'] = True
+    if automatic_supply:
+        context['automatic_supply'] = True
     if maintenance_question:
         context['maintenance_question'] = maintenance_question
     identifier = existing['id'] if existing else str(uuid.uuid4())
     db.execute("INSERT INTO guest_reply_sends VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, NULL, ?) ON CONFLICT(reservation_id, message_id) DO UPDATE SET issue_id = excluded.issue_id, body = excluded.body, context = excluded.context, state = 'queued', reference = NULL, error = NULL, approved_at = excluded.approved_at, attempted_at = NULL, updated_at = excluded.updated_at", (identifier, issue['reservation_id'], message['id'], issue['id'], current['body'], json.dumps(context), timestamp, timestamp))
-    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'maintenance_question_queued' if maintenance_question else 'stay_reply_queued_automatically' if automatic_stay else 'guest_reply_approved', timestamp, json.dumps({'send_id': identifier, 'message_id': message['id'], 'draft_version': current['version']})))
+    db.execute('INSERT INTO audit (incident_id, action, at, details) VALUES (?, ?, ?, ?)', (issue['id'], 'maintenance_question_queued' if maintenance_question else 'stay_reply_queued_automatically' if automatic_stay else 'supply_acknowledgment_queued' if automatic_supply else 'guest_reply_approved', timestamp, json.dumps({'send_id': identifier, 'message_id': message['id'], 'draft_version': current['version']})))
     return {'id': identifier, 'state': 'queued'}
+
+
+SUPPLY_ACKNOWLEDGMENT = "Thanks for letting us know. We're working on your request and will share an update once we have confirmed details."
+
+
+def queue_supply_acknowledgment(db, issue, message, timestamp):
+    current = draft(db, issue, message)
+    if (issue['category'] != 'Supplies' or issue['lane'] != 'needs_attention'
+            or not current['sending_enabled'] or current['safety'] or current['updated_at'] or current['send']):
+        return False
+    reported_at = dt.datetime.fromisoformat(message['created_at'])
+    if any(item['sender_type'] != 'guest' and dt.datetime.fromisoformat(item['created_at']) >= reported_at
+           for item in issue['messages']):
+        return False
+    # A mixed emergency report is handled by the safety workflow.
+    from safety import detect
+    if any(detect(item['body']) for item in issue['evidence'] if item['sender_type'] == 'guest'):
+        return False
+    _queue_reply(db, issue, message, {**current, 'body': SUPPLY_ACKNOWLEDGMENT}, timestamp, automatic_supply=True)
+    return True
 
 
 def queue_stay_reply(db, request_row, timestamp):
@@ -295,7 +317,7 @@ def deliver_pending(connect, stop, queue='standard'):
                     saved = db.execute('SELECT * FROM guest_reply_drafts WHERE issue_id = ? AND message_id = ?', (row['issue_id'], row['message_id'])).fetchone()
                     if live['state'] != 'queued' or live['context'] != row['context']:
                         continue
-                    if not (context.get('automatic_safety') or context.get('automatic_stay') or context.get('maintenance_question')) and (not saved or saved['version'] != context['draft_version'] or saved['body'] != row['body'] or saved['source_fingerprint'] != context['source_fingerprint']):
+                    if not (context.get('automatic_safety') or context.get('automatic_stay') or context.get('maintenance_question') or context.get('automatic_supply')) and (not saved or saved['version'] != context['draft_version'] or saved['body'] != row['body'] or saved['source_fingerprint'] != context['source_fingerprint']):
                         raise ValueError('The draft changed after approval. Review and approve again.')
                     if context.get('automatic_safety') and not db.execute('SELECT 1 FROM safety_alerts WHERE reservation_id = ? AND message_id = ?', (row['reservation_id'], row['message_id'])).fetchone():
                         raise ValueError('The recorded safety alert is missing; manager review is required.')
@@ -308,6 +330,10 @@ def deliver_pending(connect, stop, queue='standard'):
                         question = context['maintenance_question']
                         if saved or not link or json.loads(link['remote']).get('next_question') != question or row['body'] != question['body']:
                             raise ValueError('The maintenance intake question changed. Review the current repair.')
+                    if context.get('automatic_supply'):
+                        order = db.execute('SELECT message_id FROM manual_order_notices WHERE issue_id = ?', (row['issue_id'],)).fetchone()
+                        if saved or not order or order['message_id'] != row['message_id'] or row['body'] != SUPPLY_ACKNOWLEDGMENT:
+                            raise ValueError('The supply handoff changed or the manager prepared a reply.')
                     if context.get('automatic_stay') and saved:
                         raise ValueError('A manager draft now exists. Review it before sending.')
                     if context.get('instruction_context'):
