@@ -285,6 +285,8 @@ def mutate(db, path, data):
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 10
+    server_version = "GuestRecovery"
+    sys_version = ""
 
     def log_message(self, format, *args):
         pass
@@ -296,6 +298,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+        if getattr(self, 'verified_https', False):
+            self.send_header('Strict-Transport-Security', 'max-age=31536000')
         self.send_header('X-Frame-Options', 'DENY')
         for name, value in (headers or {}).items():
             self.send_header(name, value)
@@ -316,6 +321,7 @@ class Handler(BaseHTTPRequestHandler):
             require_csrf,
             session,
         )
+        self.verified_https = False
         requested = self.path
         try:
             self.path = urlsplit(self.path).path
@@ -334,6 +340,7 @@ class Handler(BaseHTTPRequestHandler):
             if not local_request and not remote_request and not health_request:
                 self.respond(403, {'error': 'Use the configured HTTPS dashboard or local address'})
                 return
+            self.verified_https = remote_request
             origin = configured_origin if remote_request else 'http://' + host
             if self.command == 'POST' and self.headers.get('Origin') != origin:
                 self.respond(403, {'error': 'Same-origin access required'})

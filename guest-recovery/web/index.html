@@ -20,8 +20,9 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
 <header><a class="brand" href="/"><span class="brand-symbol" aria-hidden="true">L</span><span class="brand-wordmark">Lucena<small>Guest Recovery</small></span></a><div class="account-controls"><a id="maintenance-workspace-link" class="button secondary" hidden target="_blank" rel="noopener noreferrer">Maintenance</a><button id="settings-toggle" type="button" class="secondary">Settings</button><span id="manager-name"></span><button id="logout" type="button" class="secondary">Sign out</button></div></header>
-<main>
+<main id="main-content" tabindex="-1">
 <div class="page-heading"><div><h1 id="page-title">Guest inbox</h1><p id="page-subtitle">Read the conversation. Review the solution.</p></div><button id="refresh" type="button" class="secondary">Refresh</button></div>
 <div id="connection" class="connection" role="status">Connecting to Hospitable…</div><p id="notice" role="status"></p>
 <details id="issue-summary" class="data-details"><summary>Issue breakdown</summary><div id="issue-counts"></div></details>
