@@ -183,3 +183,16 @@ details>p{font-size:13px}
   .primary-actions button, .purchase-actions button { min-width: min(100%, 110px); }
   .login-main .detail-card { padding: 18px; }
 }
+
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  transform: translateY(calc(-100% - 16px));
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+.skip-link:focus { transform: none; }
