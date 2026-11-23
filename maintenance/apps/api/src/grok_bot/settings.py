@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     app_env: str = "production"
     database_url: str
     migration_database_url: str
+    operations_repair_handoff_enabled: bool = False
+    operations_workspace_provisioning: bool = False
+    operations_turnover_origin: str = ""
+    operations_workspace_id: UUID | None = None
+    operations_account_id: UUID | None = None
+    operations_organization_id: UUID | None = None
+    operations_maintenance_user_id: UUID | None = None
     session_secret: str
     contact_encryption_key: str
     cors_origins: str = "http://127.0.0.1:3000"

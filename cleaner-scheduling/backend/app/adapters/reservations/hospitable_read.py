@@ -35,7 +35,14 @@ class SourceProperty:
 
 
 class HospitableReadClient:
-    def __init__(self, token_file: str, *, access_token: str | None = None) -> None:
+    def __init__(
+        self,
+        token_file: str,
+        *,
+        access_token: str | None = None,
+        attempts: int = 3,
+        budget_seconds: float = 600,
+    ) -> None:
         if access_token is None:
             path = Path(token_file).expanduser()
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -51,11 +58,12 @@ class HospitableReadClient:
         self._client = httpx.Client(
             base_url="https://public.api.hospitable.com/v2/",
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-            timeout=httpx.Timeout(20, connect=5),
+            timeout=httpx.Timeout(min(20, budget_seconds), connect=min(5, budget_seconds)),
             follow_redirects=False,
             trust_env=False,
         )
-        self._deadline = time.monotonic() + 600
+        self._deadline = time.monotonic() + budget_seconds
+        self._attempts = attempts
         self._message_reads: dict[str, float] = {}
 
     def close(self) -> None:
@@ -68,7 +76,7 @@ class HospitableReadClient:
             identity = path.removeprefix("reservations/").removesuffix("/messages")
             if path not in {f"reservations/{uuid.UUID(identity)}", f"reservations/{uuid.UUID(identity)}/messages"}:
                 raise AdapterError("Unsupported read endpoint.")
-        for attempt in range(3):
+        for attempt in range(self._attempts):
             if time.monotonic() >= self._deadline:
                 raise ProviderUnavailable("Hospitable read exceeded its time budget.")
             if path.endswith("/messages"):
@@ -81,7 +89,7 @@ class HospitableReadClient:
             try:
                 with self._client.stream("GET", path, params=tuple(params)) as response:
                     if response.status_code == 429 or response.status_code >= 500:
-                        if attempt == 2:
+                        if attempt == self._attempts - 1:
                             raise ProviderUnavailable("Hospitable is temporarily unavailable.")
                         retry = response.headers.get("Retry-After", "")
                         if retry.isdigit() and int(retry) > 10:
@@ -105,7 +113,7 @@ class HospitableReadClient:
                             raise AdapterError("Hospitable response is not an object.")
                         return cast(dict[str, object], result)
             except httpx.TransportError:
-                if attempt == 2:
+                if attempt == self._attempts - 1:
                     raise ProviderUnavailable("Hospitable connection failed.") from None
                 delay = 2**attempt
             time.sleep(delay)

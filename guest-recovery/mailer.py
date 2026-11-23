@@ -70,4 +70,4 @@ def send_email(settings, payload, key):
             raise ValueError('Gmail refused a recipient')
     finally:
         client.close()
-    return {'id': 'smtp:' + identifier, 'accepted_at': dt.datetime.now(dt.timezone.utc).isoformat()}
+    return {'id': 'smtp:' + identifier, 'accepted_at': dt.datetime.now(dt.UTC).isoformat()}
