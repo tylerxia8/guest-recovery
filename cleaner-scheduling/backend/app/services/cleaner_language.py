@@ -130,10 +130,10 @@ COPY = {
 }
 
 
-def email_language(cleaner: Cleaner) -> str | None:
+def email_language(cleaner: Cleaner) -> str:
     if cleaner.preferred_language is not None:
         return cleaner.preferred_language
-    return next((language for language in ("en", "es", "pt") if language in cleaner.reading_languages), None)
+    return next((language for language in ("en", "es", "pt") if language in cleaner.reading_languages), "en")
 
 
 def local_date(value: date | datetime) -> str:
@@ -153,27 +153,18 @@ def localized_email(
     language = email_language(cleaner)
     if language == "en":
         return subject, body
-    languages = (language,) if language is not None else ("es", "pt")
-    subjects = [subject] if language is None else []
-    bodies = [body] if language is None else []
-    for selected in languages:
-        copy = COPY[selected]
-        values = {**fields, "name": cleaner.display_name}
-        values["portal"] = copy["portal"].format(**values) if values.get("url") else ""
-        if jobs is not None:
-            values["jobs"] = "\n\n".join(copy["job"].format(**job) for job in jobs)
-        content = copy["greeting"].format(**values)
-        if kind == "change":
-            content += copy[values["change"]].format(**values)
-            schedule = values.get("schedule_body", "")
-            if language is None and schedule:
-                sections = schedule.split("\n\n──────────\n\n")
-                schedule = sections[1 if selected == "es" else 2] if len(sections) == 3 else schedule
-            content += copy["replacement"] + schedule if schedule else copy["unconfirmed"].format(**values)
-        else:
-            content += copy[kind].format(**values)
-        if values.get("local"):
-            content += "\n" + copy["local"]
-        subjects.append(copy[kind + "_subject"].format(**values))
-        bodies.append(content)
-    return " / ".join(subjects), "\n\n──────────\n\n".join(bodies)
+    copy = COPY[language]
+    values = {**fields, "name": cleaner.display_name}
+    values["portal"] = copy["portal"].format(**values) if values.get("url") else ""
+    if jobs is not None:
+        values["jobs"] = "\n\n".join(copy["job"].format(**job) for job in jobs)
+    content = copy["greeting"].format(**values)
+    if kind == "change":
+        content += copy[values["change"]].format(**values)
+        schedule = values.get("schedule_body", "")
+        content += copy["replacement"] + schedule if schedule else copy["unconfirmed"].format(**values)
+    else:
+        content += copy[kind].format(**values)
+    if values.get("local"):
+        content += "\n" + copy["local"]
+    return copy[kind + "_subject"].format(**values), content
