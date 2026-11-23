@@ -252,7 +252,7 @@ def operations_grant_key(client: str, code: str, challenge: str) -> str:
     return f"operations-login:{client}:{token_digest(code)}:{challenge}"
 
 
-@router.post("/operations/grants")
+@router.post("/operations/grants", include_in_schema=False)
 def issue_operations_grant(
     payload: OperationsGrantWrite,
     request: Request,
@@ -281,7 +281,7 @@ def issue_operations_grant(
     return JSONResponse(content={"code": code}, headers={"Cache-Control": "no-store"})
 
 
-@router.post("/operations/redeem")
+@router.post("/operations/redeem", include_in_schema=False)
 def redeem_operations_grant(
     payload: OperationsRedeemWrite,
     session: Session = Depends(account_database),

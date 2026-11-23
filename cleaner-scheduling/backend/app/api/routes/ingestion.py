@@ -132,7 +132,7 @@ def _property_json(prop: Property, *, include_coordinates: bool) -> dict[str, ob
     return body
 
 
-@router.get(STAYS_PATH.removeprefix("/v1"))
+@router.get(STAYS_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_stays(
     _principal: Principal = Depends(require_manager),
     session: Session = Depends(get_db),
@@ -176,7 +176,7 @@ def operations_stays(
     )
 
 
-@router.get(STAY_CONTEXT_PATH.removeprefix("/v1"))
+@router.get(STAY_CONTEXT_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_stay_context(
     property_external_id: str = Query(min_length=1, max_length=120),
     reservation_external_id: str = Query(min_length=1, max_length=120),
@@ -245,7 +245,7 @@ def _operations_stay(
     return result[0], result[1]
 
 
-@router.get(MESSAGES_PATH.removeprefix("/v1"))
+@router.get(MESSAGES_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_guest_messages(
     property_external_id: str = Query(min_length=1, max_length=120),
     reservation_external_id: str = Query(min_length=1, max_length=120),
@@ -344,7 +344,7 @@ def _repair_home(prop: Property, settings: Settings) -> dict[str, str] | None:
     }
 
 
-@router.get(REPAIR_CONTEXT_PATH.removeprefix("/v1"))
+@router.get(REPAIR_CONTEXT_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_repair_context(
     property_external_id: str = Query(min_length=1, max_length=120),
     reservation_external_id: str = Query(min_length=1, max_length=120),
@@ -389,7 +389,7 @@ class OperationsTouchupWrite(BaseModel):
     guest_access_confirmed: bool = Field(strict=True)
 
 
-@router.post(TOUCHUP_PATH.removeprefix("/v1"))
+@router.post(TOUCHUP_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_cleaning_touchup(
     payload: OperationsTouchupWrite,
     _principal: Principal = Depends(require_manager),
