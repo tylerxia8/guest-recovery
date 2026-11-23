@@ -100,7 +100,7 @@ def _confirm_checkout(
         raise AppError("not_found", "Cleaning task was not found.", 404)
     if task.version != expected_version:
         raise AppError("stale_version", "Task changed. Refresh before confirming departure.", 409)
-    if task.status in {"completed", "canceled"} or task.confirmed_checkout_at is not None:
+    if task.kind != "departure" or task.status in {"completed", "canceled"} or task.confirmed_checkout_at is not None:
         raise AppError("checkout_unavailable", "This task cannot receive another departure confirmation.", 409)
     if publication_blocked(session, clock=clock, settings=settings):
         raise AppError("stale_source", "Refresh reservation imports before confirming departure.", 409)

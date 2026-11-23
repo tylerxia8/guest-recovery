@@ -1082,6 +1082,17 @@ def _inputs(
     extra: list[dict[str, str]] = []
     now = clock.now()
     for task in tasks:
+        if task.kind == "guest_touchup" and task.status != "completed":
+            reservation = session.get(Reservation, task.source_reservation_id)
+            if (
+                reservation is None
+                or reservation.status != "active"
+                or reservation.property_id != task.property_id
+                or task.deadline_at is None
+                or not reservation.checkin_at <= task.release_at < task.deadline_at <= reservation.checkout_at
+            ):
+                extra.append({"task_id": str(task.id), "reason": "GUEST_TOUCHUP_WINDOW_CHANGED"})
+                continue
         if task.status != "completed" and departure_requires_review(session, task.id):
             extra.append({"task_id": str(task.id), "reason": "GUEST_DEPARTURE_REVIEW"})
             continue
@@ -1337,7 +1348,12 @@ def _fingerprint(
             {"id": str(row.id), "version": row.version, "checkin_at": row.checkin_at.isoformat()}
             for row in session.scalars(
                 select(Reservation)
-                .where(Reservation.id.in_([task.next_reservation_id for task in tasks if task.next_reservation_id]))
+                .where(
+                    Reservation.id.in_(
+                        [task.next_reservation_id for task in tasks if task.next_reservation_id]
+                        + [task.source_reservation_id for task in tasks if task.kind == "guest_touchup"]
+                    )
+                )
                 .order_by(Reservation.id)
             )
         ],

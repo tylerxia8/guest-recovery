@@ -134,7 +134,22 @@ def board(session, principal, now, view=None, before=None):
             next_step = "start_work"
         if role == "tenant" and next_step == "availability":
             next_step = "Waiting for the repair proposal"
-        items.append({**data["ticket"], "job_status": data["assignment"]["status"] if data["assignment"] else "UNASSIGNED", "next_step": next_step, "due_flags": data["follow_up_flags"]})
+        job_status = data["assignment"]["status"] if data["assignment"] else "UNASSIGNED"
+        if role == "manager" and data["ticket"]["status"] not in {"COMPLETED", "CLOSED", "CANCELED"}:
+            if data["ticket"]["status"] == "ASSIGNMENT_PENDING" and (not data["assignment"] or job_status == "DECLINED"):
+                latest_status = session.execute(text(
+                    "SELECT status FROM assignments WHERE organization_id=:org AND ticket_id=:ticket "
+                    "ORDER BY created_at DESC,id DESC LIMIT 1"
+                ), {"org": principal.organization_id, "ticket": row["id"]}).scalar()
+                if latest_status == "DECLINED":
+                    job_status = "DECLINED"
+                    next_step = "Repair worker declined. Assign someone else."
+            elif data["assignment"] and not visits and data["ticket"]["status"] == "SCHEDULING":
+                latest_visit = next((visit for visit in data["appointments"] if visit["assignment_id"] == data["assignment"]["id"]), None)
+                if latest_visit and latest_visit["status"] == "CANCELED" and latest_visit["entry_permission"] == "DENIED":
+                    job_status = "ENTRY_DENIED"
+                    next_step = "Guest declined entry. Arrange another visit."
+        items.append({**data["ticket"], "job_status": job_status, "next_step": next_step, "due_flags": data["follow_up_flags"]})
     return jsonable_encoder({"role": role, "items": items, "next_cursor": f"{rows[199]['priority_order']}:{rows[199]['ticket_number']}" if len(rows) > 200 else None, "contractors": _contractors(session, principal.organization_id, role)})
 
 

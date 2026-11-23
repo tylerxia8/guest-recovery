@@ -1,8 +1,16 @@
+import json
+from urllib.error import URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from grok_bot.api.deps import get_principal, get_session, request_id_of
+from grok_bot.api.deps import get_principal, get_session, principal_from_request, request_id_of
 from grok_bot.api.schemas import LoginBody
 from grok_bot.auth.constants import LOCAL_DEV_ISSUER
 from grok_bot.auth.permissions import Principal
@@ -72,3 +80,82 @@ def local_step_up(body: LoginBody, request: Request, principal: Principal = Depe
     result = record_step_up(session, principal.organization_id, principal.user_id, request.app.state.clock.now())
     result["request_id"] = request_id_of(request)
     return result
+
+
+class OperationsLoginBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$", repr=False)
+    verifier: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$", repr=False)
+
+
+class NoOperationsRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+@router.post("/auth/operations/redeem", include_in_schema=False, response_model=LoginOut)
+def operations_login(
+    body: OperationsLoginBody, request: Request, session: Session = Depends(get_session, scope="function")
+) -> dict:
+    settings = request.app.state.settings
+    issuer = urlsplit(settings.operations_turnover_origin)
+    workspace = settings.operations_workspace_id
+    account = settings.operations_account_id
+    organization = settings.operations_organization_id
+    user = settings.operations_maintenance_user_id
+    if (
+        not settings.allows_local_auth
+        or (not settings.operations_workspace_provisioning and not all((workspace, account, organization, user)))
+        or issuer.scheme != "https"
+        or not issuer.hostname
+        or any((issuer.username, issuer.password, issuer.path, issuer.query, issuer.fragment))
+    ):
+        problem(404, "NOT_FOUND", "Shared sign-in is unavailable.")
+    payload = json.dumps({"client": "maintenance", "code": body.code, "verifier": body.verifier}).encode()
+    upstream = UrlRequest(
+        issuer.geturl() + "/auth/operations/redeem", data=payload, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with build_opener(NoOperationsRedirect()).open(upstream, timeout=8) as response:
+            identity = json.loads(response.read(4096))
+    except (URLError, OSError, ValueError):
+        problem(401, "UNAUTHENTICATED", "Shared sign-in could not be completed.")
+    if not isinstance(identity, dict):
+        problem(401, "UNAUTHENTICATED", "Shared sign-in could not be completed.")
+    if settings.operations_workspace_provisioning:
+        try:
+            organization = UUID(str(identity.get("workspace_id")))
+            user = UUID(str(identity.get("account_id")))
+        except ValueError:
+            problem(401, "UNAUTHENTICATED", "Shared sign-in did not return a workspace.")
+        provisioned = session.scalar(
+            text("SELECT public.app_provision_operations_workspace(:workspace, :account, :grant_id)"),
+            {"workspace": organization, "account": user, "grant_id": uuid4()},
+        )
+        if not provisioned:
+            problem(403, "FORBIDDEN", "This Lucena account is not linked to Maintenance.")
+    elif identity.get("workspace_id") != str(workspace) or identity.get("account_id") != str(account):
+        problem(403, "FORBIDDEN", "This Lucena account is not linked to Maintenance.")
+
+    token = mint_local_token(
+        secret=settings.session_secret,
+        user_id=user,
+        organization_id=organization,
+        environment=settings.app_env,
+        ttl_seconds=settings.local_token_ttl_seconds,
+    )
+    # Resolve the existing user and current grants through the same checks as a normal session.
+    scope = {**request.scope, "headers": [(b"authorization", ("Bearer " + token).encode("ascii"))]}
+    principal = principal_from_request(Request(scope), session)
+    if "property_manager" not in principal.roles:
+        problem(403, "FORBIDDEN", "Maintenance manager access is required.")
+    return {
+        "token": token,
+        "token_type": "bearer",
+        "auth_method": "local_dev",
+        "production_oidc": False,
+        "user_id": str(principal.user_id),
+        "organization_id": str(principal.organization_id),
+        "display_name": principal.display_name,
+        "request_id": request_id_of(request),
+    }
