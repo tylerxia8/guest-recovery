@@ -460,15 +460,33 @@ def test_mnt_08_completion_creates_no_financial_records(client, migrator_engine,
     staff = _staff(client, migrator_engine)
     ticket = _report(client, staff["tenant"], "Sink leaks")
     assigned = _workflow_assignment(client, staff, ticket["id"])
-    photo = _upload_and_complete(client, staff["contractor0"], ticket["id"], _jpeg_bytes(), "image/jpeg", "completed.jpg")
+    photos = [_upload_and_complete(client, staff["contractor0"], ticket["id"], _jpeg_bytes(), "image/jpeg", "completed.jpeg")]
+    for image_format, extension, content_type in (
+        ("PNG", "png", "image/png"),
+        ("HEIF", "heif", "image/heif"),
+        ("WEBP", "webp", "image/webp"),
+        ("GIF", "gif", "image/gif"),
+        ("BMP", "bmp", "image/bmp"),
+        ("TIFF", "tiff", "image/tiff"),
+        ("AVIF", "avif", "image/avif"),
+    ):
+        buffer = BytesIO()
+        image = Image.new("RGB", (24, 16), "blue")
+        if image_format == "HEIF":
+            from_pillow(image).save(buffer)
+        else:
+            image.save(buffer, format=image_format)
+        photos.append(_upload_and_complete(client, staff["contractor0"], ticket["id"], buffer.getvalue(), content_type, f"completed.{extension}"))
+    assert all(photo["status"] == "READY" for photo in photos), photos
+    media_ids = [photo["id"] for photo in photos]
     before = _journal_count(migrator_engine, staff["org_id"])
-    command = {"action": "complete", "notes": "Replaced the trap and checked for leaks.", "media_ids": [photo["id"]]}
+    command = {"action": "complete", "notes": "Replaced the trap and checked for leaks.", "media_ids": media_ids}
     headers = {**staff["contractor0"], "Idempotency-Key": f"complete-{ticket['id']}"}
     completed = client.post(f"/v1/maintenance-tickets/{ticket['id']}/workflow", headers=headers, json=command)
     assert completed.status_code == 200, completed.text
     assert completed.json()["ticket"]["status"] == "COMPLETION_REVIEW"
     assert completed.json()["work_order"]["completed_at"]
-    assert completed.json()["work_order"]["completion_media_ids"] == [photo["id"]]
+    assert completed.json()["work_order"]["completion_media_ids"] == media_ids
     replay = client.post(f"/v1/maintenance-tickets/{ticket['id']}/workflow", headers=headers, json=command)
     assert replay.status_code == 200, replay.text
     assert replay.json() == completed.json()
