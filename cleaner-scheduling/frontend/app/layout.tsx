@@ -7,7 +7,7 @@ import { AppFrame } from "../components/AppFrame";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Turnover · Cleaning coordination",
+  title: "Cleaner · Cleaning coordination",
   description: "Cleaning schedules and cleaner coordination for short-term rentals",
   manifest: "/manifest.webmanifest",
   icons: {

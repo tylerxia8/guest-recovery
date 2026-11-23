@@ -456,6 +456,35 @@ def test_mnt_07_windows_do_not_authorize_entry(client, migrator_engine):
     assert estimate.json()["spending_limit"] is None
 
 
+def test_manager_board_flags_declined_work_and_denied_entry(client, app, migrator_engine):
+    staff = _staff(client, migrator_engine)
+    ticket = _report(client, staff["tenant"], "Sink leaks")
+    _workflow_assignment(client, staff, ticket["id"])
+    endpoint = f"/v1/maintenance-tickets/{ticket['id']}/workflow"
+
+    def action(role, **command):
+        response = client.post(endpoint, headers={**staff[role], "Idempotency-Key": str(uuid4())}, json=command)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def job(role):
+        response = client.get("/v1/maintenance-workflow?view=active", headers=staff[role])
+        assert response.status_code == 200, response.text
+        return next(item for item in response.json()["items"] if item["id"] == ticket["id"])
+
+    starts = app.state.clock.now() + timedelta(days=2)
+    proposed = action("contractor0", action="arrange_repair", scope="Fix the sink", starts_at=starts.isoformat(),
+                      ends_at=(starts + timedelta(hours=1)).isoformat(), timezone="America/New_York")
+    action("tenant", action="confirm_visit", appointment_id=proposed["appointments"][0]["id"], entry_permission="DENIED")
+    assert job("manager")["job_status"] == "ENTRY_DENIED"
+    assert job("tenant")["job_status"] != "ENTRY_DENIED"
+
+    action("contractor0", action="decline", reason="Unavailable")
+    assert job("manager")["job_status"] == "DECLINED"
+    assert "Assign someone else" in job("manager")["next_step"]
+    assert job("tenant")["job_status"] != "DECLINED"
+
+
 def test_repairman_can_coordinate_in_chat_without_stevie_questioning_visit_details(client, app, migrator_engine):
     staff = _staff(client, migrator_engine)
     ticket = _report(client, staff["tenant"], "Sink leaks")

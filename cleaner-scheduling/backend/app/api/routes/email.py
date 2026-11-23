@@ -176,11 +176,11 @@ def _sample_assignment(session: Session, settings: Settings, clock: Clock) -> di
         raise AppError("sample_email_missing", "Save an email for Benito Johnson (Demo) first.", 409)
     recipient = reveal_text(cleaner.email_ciphertext, settings.field_encryption_secret)
     day = clock.now().astimezone(ZoneInfo("America/New_York")).date() + timedelta(days=1)
-    subject = "SAMPLE ONLY — Turnover cleaning assignment"
+    subject = "SAMPLE ONLY — Cleaner cleaning assignment"
     body = (
         "SAMPLE ONLY — NOT REAL WORK\n\n"
         "Hi Benito,\n\n"
-        "This is a sample cleaning assignment to preview your Turnover emails.\n\n"
+        "This is a sample cleaning assignment to preview your Cleaner emails.\n\n"
         "House: Sample apartment\n"
         "Address: 123 Example Lane (fictional address)\n"
         f"Date: {day.strftime('%A, %B %d, %Y')}\n"
@@ -270,11 +270,11 @@ def send_portal_link(
         body += "View your houses, accept work, mark cleaning done, or release a house you cannot clean.\n"
         body += "Available houses can be claimed if they fit your hours and driving time. Keep this link private.\n"
         if local:
-            body += "\nThis demo link opens on the computer running Turnover. Public hosting is not enabled yet.\n"
+            body += "\nThis demo link opens on the computer running Cleaner. Public hosting is not enabled yet.\n"
         subject, body = localized_email(
             cleaner,
             "portal_welcome",
-            "Your Turnover cleaner portal",
+            "Your Cleaner cleaner portal",
             body,
             {"url": url, "local": "yes" if local else ""},
         )
@@ -309,8 +309,8 @@ def email_test(
         address, _ = read_credentials(settings.gmail_credentials_file)
         return (
             address,
-            "Turnover email connection",
-            "Your Turnover Gmail connection works. No cleaner assignments were sent.",
+            "Cleaner email connection",
+            "Your Cleaner Gmail connection works. No cleaner assignments were sent.",
         )
 
     return _deliver(

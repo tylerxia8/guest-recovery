@@ -21,7 +21,7 @@ function CleanerPageContent() {
   const {language} = useCleanerLanguage();
   const text = copy[language];
   const valid = /^(?:[0-9a-f]{32}\.)?[0-9a-f]{32}\.[0-9a-f]{64}$/.test(token);
-  return <main className="cleaner-portal"><header className="cleaner-portal-heading"><div className="onboarding-wordmark"><Image src="/brand/turnover-mark.svg" alt="" width={32} height={32} aria-hidden="true" />Turnover</div><p className="eyebrow">{text[0]}</p><h1>{text[1]}</h1><p>{text[2]}</p></header>
+  return <main className="cleaner-portal"><header className="cleaner-portal-heading"><div className="onboarding-wordmark"><Image src="/brand/turnover-mark.svg" alt="" width={32} height={32} aria-hidden="true" />Cleaner</div><p className="eyebrow">{text[0]}</p><h1>{text[1]}</h1><p>{text[2]}</p></header>
     {valid ? <CleanerPortal key={token} token={token} /> : <><LanguageSelector /><section className="cleaner-portal-message"><h2>{text[3]}</h2><p>{text[4]}</p></section></>}
     <p className="cleaner-portal-privacy">{text[5]}</p>
   </main>;

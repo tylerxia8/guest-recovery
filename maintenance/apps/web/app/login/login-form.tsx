@@ -50,7 +50,7 @@ export function LoginForm({sharedLogin}: {sharedLogin: boolean}) {
       <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required /></label>
       <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
     </form>}
-    {sharedLogin && <p><a href="/auth/operations/start">Sign in with Turnover</a></p>}
+    {sharedLogin && <p><a href="/auth/operations/start">Sign in with Cleaner</a></p>}
     {error && <p className={styles.error} role="alert">{error}</p>}
   </section>;
 }
