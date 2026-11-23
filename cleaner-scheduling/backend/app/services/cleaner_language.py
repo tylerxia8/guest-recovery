@@ -6,17 +6,17 @@ from app.models import Cleaner
 COPY = {
     "es": {
         "greeting": "Hola {name},\n\n",
-        "sample_subject": "SOLO EJEMPLO — Trabajo de limpieza de Turnover",
+        "sample_subject": "SOLO EJEMPLO — Trabajo de limpieza de Cleaner",
         "sample": (
             "SOLO EJEMPLO — NO ES UN TRABAJO REAL\n\n"
-            "Esta limpieza es una demostración de los correos de Turnover.\n"
+            "Esta limpieza es una demostración de los correos de Cleaner.\n"
             "Casa: Sample apartment\nDirección: 123 Example Lane (dirección ficticia)\n"
             "Fecha: {day}\nHorario de limpieza: 11:00–13:00 (hora del Este)\n"
             "Tiempo estimado: 2 horas\n\nNo vayas a esta dirección. No se creó ningún trabajo real.\n"
         ),
-        "onboarding_subject": "Tu enlace de registro en Turnover",
+        "onboarding_subject": "Tu enlace de registro en Cleaner",
         "onboarding": (
-            "Tu administrador te invitó a Turnover. Elige tu idioma y configura tus horarios, "
+            "Tu administrador te invitó a Cleaner. Elige tu idioma y configura tus horarios, "
             "descansos y dirección de salida:\n\n{url}\n\nEste enlace privado vence el {expires} (hora"
             " del Este). No lo compartas.\n"
         ),
@@ -34,14 +34,14 @@ COPY = {
             "Abre tu horario: {url}\nUsa el portal para aceptar trabajos, marcar una limpieza como "
             "terminada o dejar un trabajo para otro limpiador. Mantén este enlace privado.\n"
         ),
-        "portal_welcome_subject": "Tu portal de limpieza de Turnover",
+        "portal_welcome_subject": "Tu portal de limpieza de Cleaner",
         "portal_welcome": (
             "Consulta tus casas, acepta trabajos, marca limpiezas como terminadas o deja una casa "
             "para otro limpiador. Puedes solicitar trabajos disponibles si encajan con tus "
             "horarios y tiempo de viaje.\n{portal}"
         ),
         "local": (
-            "Este enlace de demostración se abre en la computadora que ejecuta Turnover. Aún no "
+            "Este enlace de demostración se abre en la computadora que ejecuta Cleaner. Aún no "
             "está disponible públicamente.\n"
         ),
         "offer_subject": "Limpieza disponible — {day}",
@@ -67,17 +67,17 @@ COPY = {
     },
     "pt": {
         "greeting": "Olá {name},\n\n",
-        "sample_subject": "APENAS EXEMPLO — Trabalho de limpeza do Turnover",
+        "sample_subject": "APENAS EXEMPLO — Trabalho de limpeza do Cleaner",
         "sample": (
             "APENAS EXEMPLO — NÃO É UM TRABALHO REAL\n\n"
-            "Esta limpeza é uma demonstração dos e-mails do Turnover.\n"
+            "Esta limpeza é uma demonstração dos e-mails do Cleaner.\n"
             "Casa: Sample apartment\nEndereço: 123 Example Lane (endereço fictício)\n"
             "Data: {day}\nHorário de limpeza: 11:00–13:00 (horário do Leste)\n"
             "Tempo estimado: 2 horas\n\nNão vá a esse endereço. Nenhum trabalho real foi criado.\n"
         ),
-        "onboarding_subject": "Seu link de cadastro no Turnover",
+        "onboarding_subject": "Seu link de cadastro no Cleaner",
         "onboarding": (
-            "Seu administrador convidou você para o Turnover. Escolha seu idioma e configure seus "
+            "Seu administrador convidou você para o Cleaner. Escolha seu idioma e configure seus "
             "horários, intervalos e endereço de saída:\n\n{url}\n\nEste link privado expira em "
             "{expires} (horário do Leste). Não compartilhe.\n"
         ),
@@ -96,14 +96,14 @@ COPY = {
             "como concluída ou liberar uma casa para outro profissional. Mantenha este link "
             "privado.\n"
         ),
-        "portal_welcome_subject": "Seu portal de limpeza do Turnover",
+        "portal_welcome_subject": "Seu portal de limpeza do Cleaner",
         "portal_welcome": (
             "Consulte suas casas, aceite trabalhos, marque limpezas como concluídas ou libere uma "
             "casa para outro profissional. Você pode solicitar trabalhos disponíveis se forem "
             "compatíveis com seus horários e tempo de deslocamento.\n{portal}"
         ),
         "local": (
-            "Este link de demonstração abre no computador que executa o Turnover. Ainda não está "
+            "Este link de demonstração abre no computador que executa o Cleaner. Ainda não está "
             "disponível publicamente.\n"
         ),
         "offer_subject": "Limpeza disponível — {day}",

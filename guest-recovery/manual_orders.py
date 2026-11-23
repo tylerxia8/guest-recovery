@@ -98,11 +98,11 @@ def send_ready(connect, settings):
                 'from': settings['NOTIFICATION_FROM'], 'to': [settings['MANAGER_EMAIL']],
                 'subject': 'Action required: approve selected Amazon supplies',
                 'text': '\n\n'.join([
-                    'Review and approve these selected supplies in Guest Recovery.',
+                    'Review and approve these selected supplies in Guest Messages.',
                     'Property: ' + issue['property'],
                     *lines,
                     'Confirm the unit address, quantity, current price and delivery before checkout.',
-                    'Approve the selected products in Guest Recovery: ' + manager_url() + '/?' + urlencode({'supply': message['id']}),
+                    'Approve the selected products in Guest Messages: ' + manager_url() + '/?' + urlencode({'supply': message['id']}),
                 ]),
             }
             db.execute("INSERT INTO manual_order_notices (issue_id, message_id, fingerprint, order_lines, status, reference, updated_at) VALUES (?, ?, ?, ?, 'attempting', NULL, ?)",

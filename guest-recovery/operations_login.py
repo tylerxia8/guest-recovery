@@ -1,4 +1,4 @@
-"""Turnover sign-in for an explicitly linked Guest Recovery installation."""
+"""Cleaner sign-in for an explicitly linked Guest Messages installation."""
 
 import base64
 import hashlib
@@ -87,12 +87,12 @@ def finish(connect, config, headers, query):
     issuer, workspace, account, local_user = config
     identity, key = redeem(issuer, headers, query)
     if identity.get('workspace_id') != workspace or identity.get('account_id') != account:
-        raise AuthError(403, 'This Lucena account is not linked to Guest Recovery.')
+        raise AuthError(403, 'This Lucena account is not linked to Guest Messages.')
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         user = db.execute('SELECT * FROM users WHERE id = ?', (local_user,)).fetchone()
         if user is None:
-            raise AuthError(403, 'This Lucena account is not linked to Guest Recovery.')
+            raise AuthError(403, 'This Lucena account is not linked to Guest Messages.')
         token = new_session(db, user, key)
     remember_read_access(token, identity)
     return token
@@ -156,7 +156,7 @@ def read_turnover(issuer, session_hash, path):
         expiry, token, _, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
     if expiry <= time.monotonic():
         forget_read_access(session_hash)
-        raise AuthError(401, 'Sign in with Turnover again to view shared stay details.')
+        raise AuthError(401, 'Sign in with Cleaner again to view shared stay details.')
     request = Request(
         issuer + '/auth/operations' + path,
         headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'},
@@ -171,12 +171,12 @@ def read_turnover(issuer, session_hash, path):
         error.close()
         if status in (401, 403):
             forget_read_access(session_hash)
-            raise AuthError(401, 'Sign in with Turnover again to view shared stay details.') from None
+            raise AuthError(401, 'Sign in with Cleaner again to view shared stay details.') from None
         if status == 404:
             raise AuthError(404, 'This Hospitable stay was not found in your workspace.') from None
-        raise AuthError(503, 'Turnover stay details are temporarily unavailable.') from None
+        raise AuthError(503, 'Cleaner stay details are temporarily unavailable.') from None
     except (URLError, OSError, ValueError):
-        raise AuthError(503, 'Turnover stay details are temporarily unavailable.') from None
+        raise AuthError(503, 'Cleaner stay details are temporarily unavailable.') from None
     return result
 
 
@@ -203,7 +203,7 @@ def send_touchup(issuer, session_hash, payload):
     with READ_LOCK:
         expiry, _, token, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
     if not token or expiry <= time.monotonic():
-        raise AuthError(401, 'Reconnect with Turnover to send a cleaning request.')
+        raise AuthError(401, 'Reconnect with Cleaner to send a cleaning request.')
     request = Request(
         issuer + '/auth/operations/cleaning-touchup',
         data=json.dumps(payload).encode(),
@@ -218,12 +218,12 @@ def send_touchup(issuer, session_hash, payload):
         status = error.code
         error.close()
         if status in (401, 403):
-            raise AuthError(401, 'Reconnect with Turnover to send a cleaning request.') from None
+            raise AuthError(401, 'Reconnect with Cleaner to send a cleaning request.') from None
         if status == 422:
-            raise AuthError(422, 'Turnover could not validate the booking or proposed cleaning window.') from None
-        raise AuthError(503, 'Turnover could not confirm the cleaning request.') from None
+            raise AuthError(422, 'Cleaner could not validate the booking or proposed cleaning window.') from None
+        raise AuthError(503, 'Cleaner could not confirm the cleaning request.') from None
     except (URLError, OSError, ValueError):
-        raise AuthError(503, 'Turnover could not confirm the cleaning request.') from None
+        raise AuthError(503, 'Cleaner could not confirm the cleaning request.') from None
     return result
 
 
@@ -246,7 +246,7 @@ def send_repair(session_hash, payload, *, answer=False):
     with READ_LOCK:
         expiry, _, _, token = READ_SESSIONS.get(session_hash, (0, '', '', ''))
     if not origin or not token or expiry <= time.monotonic():
-        raise AuthError(401, 'Reconnect with Turnover to send a repair request.')
+        raise AuthError(401, 'Reconnect with Cleaner to send a repair request.')
     authorization = 'Bearer ' + token
     resource = 'operations-answers' if answer else 'operations-requests'
     key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() if answer else payload['issue_id']

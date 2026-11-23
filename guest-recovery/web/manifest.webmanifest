@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Lucena Guest Recovery",
-  "short_name": "Guest Recovery",
+  "name": "Lucena Guest Messages",
+  "short_name": "Guest Messages",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

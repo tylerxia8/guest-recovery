@@ -1,4 +1,4 @@
-"""Provision a private Guest Recovery database for a verified Lucena identity."""
+"""Provision a private Guest Messages database for a verified Lucena identity."""
 
 import os
 import secrets
@@ -18,7 +18,7 @@ PROVISION_LOCK = threading.Lock()
 def provision(directory, workspace_id, account_id, initialize):
     """Create or resolve a workspace database without copying installation data.
 
-    The caller must supply identities obtained from Turnover's verified exchange.
+    The caller must supply identities obtained from Cleaner's verified exchange.
     """
     workspace = str(UUID(workspace_id))
     account = str(UUID(account_id))
@@ -26,7 +26,7 @@ def provision(directory, workspace_id, account_id, initialize):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     metadata = root.lstat()
     if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
-        raise ValueError('Guest Recovery workspace directory must be private.')
+        raise ValueError('Guest Messages workspace directory must be private.')
     database = root / (workspace + '.sqlite3')
     with PROVISION_LOCK:
         if not database.exists() and not database.is_symlink():
@@ -49,16 +49,16 @@ def provision(directory, workspace_id, account_id, initialize):
                     pass
         current = database.lstat()
         if not stat.S_ISREG(current.st_mode) or current.st_uid != os.getuid() or current.st_mode & 0o077:
-            raise ValueError('Guest Recovery workspace database must be private.')
+            raise ValueError('Guest Messages workspace database must be private.')
         with closing(sqlite3.connect(database, timeout=5)) as db:
             db.row_factory = sqlite3.Row
             marker = db.execute("SELECT 1 FROM sqlite_master WHERE name = 'lucena_workspace'").fetchone()
             if not marker:
-                raise ValueError('Guest Recovery workspace database is already in use.')
+                raise ValueError('Guest Messages workspace database is already in use.')
             identity = db.execute('SELECT workspace_id, account_id FROM lucena_workspace WHERE id = 1').fetchone()
             if not identity or tuple(identity) != (workspace, account):
-                raise ValueError('Guest Recovery workspace belongs to a different account.')
+                raise ValueError('Guest Messages workspace belongs to a different account.')
             user = db.execute('SELECT * FROM users WHERE id = ?', (account,)).fetchone()
             if user is None:
-                raise ValueError('Guest Recovery workspace account is unavailable.')
+                raise ValueError('Guest Messages workspace account is unavailable.')
     return database, dict(user)
