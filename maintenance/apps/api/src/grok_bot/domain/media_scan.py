@@ -22,7 +22,19 @@ IMAGE_LIMIT = 20 * 1024 * 1024
 VIDEO_LIMIT = 200 * 1024 * 1024
 MAX_VIDEO_SECONDS = 120
 MAX_IMAGE_PIXELS = 40_000_000
-HEIC_BRANDS = (b"heic", b"heix", b"mif1", b"hevc")
+HEIC_BRANDS = (b"heic", b"heix", b"mif1", b"msf1", b"hevc")
+PHOTO_FORMATS = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/heic": "HEIF",
+    "image/heif": "HEIF",
+    "image/webp": "WEBP",
+    "image/gif": "GIF",
+    "image/bmp": "BMP",
+    "image/tiff": "TIFF",
+    "image/avif": "AVIF",
+}
+MEDIA_TYPES = PHOTO_FORMATS.keys() | {"video/mp4", "video/quicktime"}
 
 
 @dataclass(frozen=True)
@@ -47,12 +59,23 @@ def detect_type(header: bytes) -> str | None:
         return "image/jpeg"
     if header.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
+    if header.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if header.startswith(b"BM"):
+        return "image/bmp"
+    if header.startswith((b"II\x2a\x00", b"MM\x00\x2a", b"II\x2b\x00", b"MM\x00\x2b")):
+        return "image/tiff"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image/webp"
     if header.startswith(b"MZ") or header.startswith(b"\x7fELF"):
         return "application/x-executable"
     if header.startswith(b"PK\x03\x04"):
         return "application/zip"
     if len(header) >= 12 and header[4:8] == b"ftyp":
         brand = header[8:12]
+        brands = [brand, *(header[offset:offset + 4] for offset in range(16, min(len(header), int.from_bytes(header[:4], "big")), 4))]
+        if b"avif" in brands or b"avis" in brands:
+            return "image/avif"
         if brand in HEIC_BRANDS or brand.startswith(b"hei"):
             return "image/heic"
         if brand in {b"isom", b"mp42", b"mp41", b"avc1", b"iso2"} or brand.startswith(b"mp4"):
@@ -86,7 +109,7 @@ def scan_stored_file(
         return ScanResult(False, "TOO_LARGE", detected, "The file exceeds the configured size limit.", SCANNER_NAME)
     if detected.startswith("image/"):
         try:
-            _write_image_derivatives(path)
+            _write_image_derivatives(path, PHOTO_FORMATS[detected])
         except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
             return ScanResult(False, "IMAGE_DECODE_FAILED", detected, "The image could not be decoded.", SCANNER_NAME)
         return ScanResult(True, "FIXTURE_CHECKED", detected, None, SCANNER_NAME)
@@ -108,11 +131,14 @@ def scan_stored_file(
 def _compatible(declared: str, detected: str) -> bool:
     if declared == detected:
         return True
-    return declared == "video/quicktime" and detected == "video/mp4"
+    return (declared, detected) in {
+        ("image/heif", "image/heic"),
+        ("video/quicktime", "video/mp4"),
+    }
 
 
-def _write_image_derivatives(path: Path) -> None:
-    with Image.open(path) as image:
+def _write_image_derivatives(path: Path, image_format: str) -> None:
+    with Image.open(path, formats=[image_format]) as image:
         if image.width * image.height > MAX_IMAGE_PIXELS:
             raise ValueError("Image pixel limit exceeded")
         image.load()

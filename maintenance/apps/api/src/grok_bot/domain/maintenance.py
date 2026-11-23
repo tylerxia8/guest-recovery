@@ -12,7 +12,7 @@ from grok_bot.auth.tokens import _sign, verify_token
 from grok_bot.crypto import encrypt_text
 from grok_bot.db import set_tenant
 from grok_bot.domain.accounting import approve_invoice, submit_invoice
-from grok_bot.domain.media_scan import sha256_file, scan_stored_file
+from grok_bot.domain.media_scan import MEDIA_TYPES, scan_stored_file, sha256_file
 from grok_bot.domain.records import write_audit, write_outbox
 from grok_bot.domain.maintenance_workspace import ticket_details
 from grok_bot.errors import problem
@@ -387,8 +387,8 @@ def request_upload(session, organization_id, ticket_id, declared_content_type: s
     workflow = session.execute(text("SELECT EXISTS (SELECT 1 FROM work_orders WHERE organization_id=:org AND ticket_id=:ticket AND workflow_managed)"), {"org": organization_id, "ticket": ticket_id}).scalar_one()
     if count >= (20 if workflow else 10):
         problem(422, "MEDIA_LIMIT", "This ticket already has the configured number of files.")
-    if declared_content_type not in {"image/jpeg", "image/png", "image/heic", "image/heif", "video/mp4", "video/quicktime"}:
-        problem(422, "MEDIA_TYPE", "Choose a JPEG, PNG, HEIC, HEIF, MP4 or MOV file.")
+    if declared_content_type not in MEDIA_TYPES:
+        problem(422, "MEDIA_TYPE", "Choose a JPEG, PNG, HEIC, HEIF, WebP, GIF, BMP, TIFF, AVIF, MP4 or MOV file.")
     if declared_content_type.startswith("image/") and size_bytes > 20 * 1024 * 1024:
         problem(422, "MEDIA_LIMIT", "Images are limited to 20 MB.")
     if declared_content_type.startswith("video/") and size_bytes > 200 * 1024 * 1024:
