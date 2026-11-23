@@ -396,10 +396,10 @@ class TestEmailLanguage:
     @pytest.mark.parametrize(
         ("preference", "readable", "expected_subject", "expected_greeting"),
         [
-            ("es", ["en", "pt"], "Tu enlace de registro en Turnover", "Hola"),
-            ("pt", ["en", "es"], "Seu link de cadastro no Turnover", "Olá"),
+            ("es", ["en", "pt"], "Tu enlace de registro en Cleaner", "Hola"),
+            ("pt", ["en", "es"], "Seu link de cadastro no Cleaner", "Olá"),
             ("en", ["es", "pt"], "English subject", "Hi"),
-            (None, ["pt"], "Seu link de cadastro no Turnover", "Olá"),
+            (None, ["pt"], "Seu link de cadastro no Cleaner", "Olá"),
             (None, [], "English subject", "Hi"),
             (None, ["de"], "English subject", "Hi"),
         ],

@@ -485,6 +485,38 @@ def test_manager_board_flags_declined_work_and_denied_entry(client, app, migrato
     assert job("tenant")["job_status"] != "DECLINED"
 
 
+def test_repairman_can_coordinate_in_chat_without_stevie_questioning_visit_details(client, app, migrator_engine):
+    staff = _staff(client, migrator_engine)
+    ticket = _report(client, staff["tenant"], "Sink leaks")
+    _workflow_assignment(client, staff, ticket["id"])
+    endpoint = f"/v1/maintenance-tickets/{ticket['id']}/workflow"
+
+    def say(role, body):
+        response = client.post(
+            endpoint,
+            headers={**staff[role], "Idempotency-Key": str(uuid4())},
+            json={"action": "message", "body": body},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    first = say("contractor0", "I can stop by tomorrow.")
+    assert "hand the communication over" in first["messages"][-1]["body"]
+    for message in ("I can stop by between 2 and 4 Eastern tomorrow.", "I can come from 2 PM to 4 PM Eastern."):
+        result = say("contractor0", message)
+        assert result["messages"][-1]["body"] == message
+        assert not result["appointments"]
+
+    visit_date = (app.state.clock.now().date() + timedelta(days=2)).isoformat()
+    proposed = say("contractor0", f"I can stop by on {visit_date} from 2 PM to 4 PM Eastern.")
+    assert proposed["appointments"][0]["status"] == "REQUESTED"
+    tenant_reply = say("tenant", "That works")
+    assert tenant_reply["appointments"][0]["status"] == "REQUESTED"
+    assert "permission to enter" in tenant_reply["messages"][-1]["body"]
+    confirmed = say("tenant", "I give permission to enter.")
+    assert confirmed["appointments"][0]["status"] == "CONFIRMED"
+
+
 def test_mnt_08_completion_creates_no_financial_records(client, migrator_engine, fixture_scanner):
     staff = _staff(client, migrator_engine)
     ticket = _report(client, staff["tenant"], "Sink leaks")

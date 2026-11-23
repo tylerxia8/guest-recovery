@@ -354,7 +354,6 @@ def execute(session, principal, ticket_id, command, key, now):
                 scheduling_reply = f"The proposed visit is {offer['displaytext']}. Does that time work for you? Entry permission is still needed."
             elif parsed["question"]:
                 session.execute(text("UPDATE work_orders SET visit_draft=:draft WHERE organization_id=:org AND id=:work"), {**params, "work": work["id"], "draft": parsed.get("draft_text", message[:1000])})
-                scheduling_reply = parsed["question"]
         elif current["role"] == "tenant":
             visit = next((item for item in appointments if item["assignment_id"] == assignment["id"] and item["status"] == "REQUESTED" and item["starts_at"] > now), None)
             if visit:
