@@ -7,7 +7,8 @@ function guestReplyPanel(issue, message) {
   section.open = guestReplyDrafts.has(key);
   section.append(node('summary', 'Guest reply'));
   section.append(node('p', base.practice ? 'Practice draft for a historical or unverified stay. Nothing is sent.' : 'Save your draft, then approve this exact reply to send it through Hospitable.', 'help-text'));
-  if (base.safety) section.append(node('p', 'Urgent safety issue: contact the manager immediately. A saved draft does not notify anyone.', 'warning'));
+  if (base.safety) section.append(node('p', 'Urgent safety issue. New live reports trigger a manager email and emergency instructions. Check the Solution card for sending status.', 'warning'));
+  if (base.needs_manager) section.append(node('p', base.suggested ? 'Add the missing details before sending this draft.' : 'No matching manager answer found. Write your reply below.', 'warning'));
   if (base.stale || draft.source_fingerprint !== base.source_fingerprint) section.append(node('p', 'The conversation changed since this draft was prepared. Review the full conversation before saving.', 'warning'));
   const form = node('form');
   const label = node('label', 'Reply draft');
@@ -15,6 +16,7 @@ function guestReplyPanel(issue, message) {
   body.rows = 5;
   body.maxLength = 3000;
   body.required = true;
+  body.placeholder = 'Write the property manager’s answer here.';
   body.value = draft.body;
   body.oninput = () => { guestReplyDrafts.set(key, {...draft, body: body.value}); send.disabled = true; approved.checked = false; };
   label.append(body);

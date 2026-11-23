@@ -20,7 +20,7 @@ from app.models import (
     Reservation,
 )
 from app.services.audit import write_audit
-from app.services.checkout_policy import baseline_checkout
+from app.services.checkout_policy import baseline_checkout, effective_checkin
 from app.services.instructions import latest_instruction
 from app.services.schedule_freshness import NY, bump_task
 
@@ -183,9 +183,9 @@ def _upsert_task(
     nxt = _next_arrival(reservation, active)
     deadline = None
     if nxt is not None and buffer is not None:
-        deadline = readiness_deadline(nxt.checkin_at, buffer)
+        deadline = readiness_deadline(effective_checkin(nxt), buffer)
     elif nxt is not None:
-        deadline = nxt.checkin_at
+        deadline = effective_checkin(nxt)
     confirmed = (
         existing.confirmed_checkout_at
         if existing is not None and existing.confirmed_checkout_reservation_version == reservation.version
@@ -260,7 +260,7 @@ def _next_arrival(reservation: Reservation, active: list[Reservation]) -> Reserv
     candidates = [row for row in active if row.id != reservation.id and row.checkin_at >= reservation.checkout_at]
     if not candidates:
         return None
-    return min(candidates, key=lambda row: (row.checkin_at, str(row.id)))
+    return min(candidates, key=lambda row: (effective_checkin(row), str(row.id)))
 
 
 def _sync_exceptions(

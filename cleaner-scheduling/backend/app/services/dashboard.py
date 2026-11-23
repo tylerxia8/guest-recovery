@@ -197,7 +197,8 @@ def build_dashboard(
         body = _task_summary(task)
         reservation = reservations.get(task.source_reservation_id)
         body["can_confirm_early_checkout"] = (
-            bool({"owner", "manager"}.intersection(principal.roles))
+            task.kind == "departure"
+            and bool({"owner", "manager"}.intersection(principal.roles))
             and task.status not in {"completed", "canceled"}
             and task.confirmed_checkout_at is None
             and reservation is not None
@@ -205,6 +206,8 @@ def build_dashboard(
             and reservation.checkin_at <= now < reservation.checkout_at
             and reservation.checkout_at.astimezone(NY).date() == now.astimezone(NY).date()
         )
+        if task.kind == "guest_touchup" and not _viewer_only(principal):
+            body["guest_scope"] = task.guest_scope
         body["property_name"] = properties.get(task.property_id, "Unknown property")
         assignment = current.get(task.id)
         body["cleaner_name"] = None if assignment is None else cleaners.get(assignment.cleaner_id)
@@ -262,6 +265,7 @@ def build_dashboard(
         "ASSIGNMENT_EMAIL_BLOCKED",
         "EMAIL_DELIVERY_UNCERTAIN",
         "EMAIL_DELIVERY_FAILED",
+        "CLEANING_RELEASED",
         "CLEANING_UNCLAIMED",
     }
     email_problems = [
@@ -356,6 +360,7 @@ def _task_summary(task: CleaningTask) -> dict[str, object]:
     return {
         "id": str(task.id),
         "version": task.version,
+        "kind": task.kind,
         "confirmed_checkout_at": None if task.confirmed_checkout_at is None else task.confirmed_checkout_at.isoformat(),
         "property_id": str(task.property_id),
         "status": task.status,

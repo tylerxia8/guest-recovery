@@ -436,3 +436,8 @@ messages. Stale edits/previews fail and repeat requests are idempotent. Coverage
 test_cleaner_removal.py, remove-cleaner.spec.ts and scheduling/SMS regressions.
 
 M8 theme presentation check: Wada 268 palette (olive #253122, sienna CTA #a56321, mizuiro #bce4e5, umenezu #b59392, paper #f7f6f2) replaces the retired rose/scarlet theme. The header top border and brand-symbol use olive; CTA buttons use --cta #a56321 with white text; navigation selection uses --cta border; focus-visible uses --focus (olive light, mizuiro dark) at 3px. Inspect desktop/mobile dashboard and cleaner setup, including selected navigation, focus, tables and exception feedback. Normal text on brand backgrounds must retain at least 4.5:1 contrast (ink-on-paper 12.601:1, cta-text-on-cta 4.766:1). No rose hex (#e54a6f/#e76c8f) or old --primary (#c5222e) values remain in frontend/. Automated regression: test_visual_tokens.py verifies no forbidden hex appears in frontend/**/*.{css,tsx}.
+
+### Manager alert for a released house
+
+- Action: release an unstarted, unlocked assignment through the cleaner portal.
+- Pass/fail: Turnover shows the house, service date and cleaner in a manager alert while the offer is open. A claim or cancellation clears the alert. Expiry replaces it with an unclaimed coverage alert.

@@ -19,7 +19,7 @@ def build(db, issue, message, choices=None):
     if type(choices.get('gift')) is not bool or not isinstance(choices.get('pack_sizes'), dict):
         raise ValueError('Choose optional chocolates and valid pack sizes')
     destination = profile(db, issue['property_ids'][0]) if len(issue['property_ids']) == 1 else None
-    kinds = [kind for kind in issue['item_types'] if kind != 'chocolates' and re.search(ITEMS[kind][1], message['body'].replace('\u2019', "'"), re.I)]
+    kinds = [kind for kind in issue['item_types'] if kind != 'chocolates' and re.search(ITEMS[kind][1], message['body'].replace('\u2019', "'"), re.IGNORECASE)]
     amounts = quantities({**issue, 'item_types': kinds, 'evidence': [message]}, destination)
     products = [dict(row) for row in db.execute('SELECT * FROM preferred_products WHERE active = 1 AND property_id = ? ORDER BY item_type, room, id', (destination['property_id'],))] if destination else []
     products = [product for product in products if product['item_type'] == 'tv_remote']
@@ -71,7 +71,7 @@ def build(db, issue, message, choices=None):
     gift_title = gift_product['title'] if gift_product else DEFAULTS['chocolates'][0]
     gift_url = 'https://www.amazon.com/dp/' + gift_product['asin'] if gift_product else 'https://www.amazon.com/s?' + urlencode({'k': gift_title})
     gift = {'title': gift_title, 'maximum_cents': 300, 'requested': choices['gift'], 'url': gift_url, 'check': 'Add only if the full gift cost is $3 or less, fits the order budget, and arrives with the essentials without delaying them. Otherwise skip.'}
-    notice = 'PURCHASE PROPOSAL — NOT ORDERED\nProperty: ' + issue['property'] + '\n' + summary + ('\nOptional gift: ' + gift_title + ', up to $3, only without delaying essentials.' if choices['gift'] else '') + '\nAmazon price and arrival remain unverified. Totals up to $25 require a successful manager notice and a 10-minute veto window; above $25 requires manager approval before purchase. Checkout is manual.'
+    notice = 'PURCHASE PROPOSAL — NOT ORDERED\nProperty: ' + issue['property'] + '\n' + summary + ('\nOptional gift: ' + gift_title + ', up to $3, only without delaying essentials.' if choices['gift'] else '') + '\nThe manager places the Amazon order after checking current price and delivery.'
     return {'message_id': message['id'], 'lines': lines, 'order_lines': order_lines, 'destination': destination, 'gift': gift, 'choices': choices, 'blockers': blockers, 'summary': summary, 'manager_notice': notice, 'guest_acknowledgment': draft(db, issue, message)['suggested'], 'version': saved['version'] if saved else 0, 'source_fingerprint': fingerprint, 'stale': bool(saved and saved['source_fingerprint'] != fingerprint), 'saved_at': saved['updated_at'] if saved else None}
 
 
@@ -88,10 +88,8 @@ def save(db, data, timestamp):
     if type(data.get('version')) is not int or data['version'] != current['version'] or data.get('source_fingerprint') != current['source_fingerprint']:
         raise ValueError('This plan or conversation changed. Reload and review before saving.')
     choices = data.get('choices')
-    if not isinstance(choices, dict):
-        raise ValueError('Choose plan options')
-    if not isinstance(choices.get('pack_sizes'), dict):
-        raise ValueError('Enter valid pack sizes')
+    if not isinstance(choices, dict) or type(choices.get('gift')) is not bool or not isinstance(choices.get('pack_sizes'), dict):
+        raise ValueError('Choose valid plan options and pack sizes')
     selected = {line['item_type']: line['asin'] for line in current['lines']}
     for kind, size in choices['pack_sizes'].items():
         if kind not in selected or not selected[kind] or not isinstance(size, dict) or size.get('asin') != selected[kind]:

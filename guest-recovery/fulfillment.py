@@ -29,7 +29,7 @@ def quantities(issue, destination):
     from catalog import ITEMS
     home = destination.get('home', {}) if destination else {}
     bathrooms = max(1, math.ceil(home.get('bathrooms') or 1))
-    if any(re.search(r'\b(?:in (?:the |our )?(?:bathroom|kitchen)|(?:master|main|upstairs|downstairs|guest) bathroom)\b', message['body'], re.I) for message in issue['evidence']):
+    if any(re.search(r'\b(?:in (?:the |our )?(?:bathroom|kitchen)|(?:master|main|upstairs|downstairs|guest) bathroom)\b', message['body'], re.IGNORECASE) for message in issue['evidence']):
         bathrooms = 1
     defaults = {'hand_towels': (2, 'towels'), 'bath_towels': (2, 'towels'), 'trash_bags': (2, 'bags'), 'toilet_paper': (min(20, 2 * bathrooms), 'rolls'), 'paper_towels': (2, 'rolls'), 'laundry_pods': (2, 'pods'), 'dish_pods': (2, 'pods'), 'soap': (bathrooms, 'bottles'), 'shampoo': (1, 'bottle'), 'conditioner': (1, 'bottle'), 'body_wash': (bathrooms, 'bottles'), 'bath_soap': (bathrooms, 'bars'), 'blankets': (1, 'blanket'), 'pillows': (1, 'pillow'), 'batteries': (4, 'batteries'), 'sponges': (2, 'sponges'), 'salt_pepper': (1, 'small salt-and-pepper set'), 'cooking_oil': (1, 'small bottle')}
     result = []
@@ -38,7 +38,7 @@ def quantities(issue, destination):
         source = 'Home-size default' if kind in ('toilet_paper', 'soap', 'body_wash', 'bath_soap') else 'Starter replenishment'
         for message in issue['evidence']:
             pattern = r'\b(?:need|bring|send|provide|request|can we have|could we have|can we get|could we get)\s+(?:us\s+)?([1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:(?:extra|additional|more)\s+)?(?:' + ITEMS[kind][1] + ')'
-            match = re.search(pattern, message['body'].replace('\u2019', "'"), re.I)
+            match = re.search(pattern, message['body'].replace('\u2019', "'"), re.IGNORECASE)
             if match:
                 number = match[1].lower()
                 count = int(number) if number.isdigit() else ('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten').index(number) + 1
@@ -56,7 +56,7 @@ def save(db, data, timestamp):
     if type(data.get('version')) is not int or data['version'] != current['version']:
         raise ValueError('Property details changed; reload before confirming')
     raw = data.get('address')
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or not raw:
         raise ValueError('Enter a delivery address')
     address = {}
     for field, maximum in (('line1', 300), ('line2', 100), ('city', 100), ('region', 100), ('postal_code', 32), ('country', 2), ('timezone', 100)):

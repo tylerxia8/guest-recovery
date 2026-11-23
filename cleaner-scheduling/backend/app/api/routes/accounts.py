@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
 import re
+import secrets
 from collections.abc import Generator
 from typing import Annotated, Literal, cast
 
@@ -17,8 +19,16 @@ from app.models.accounts import ManagerAccount, ManagerSession
 from app.services.account_deletion import delete_account
 from app.services.email_addresses import normalize_email
 from app.services.manager_mfa import change_mfa
+from app.services.operations_access import ACCESS_SECONDS, issue_read_access, issue_repair_access, issue_touchup_access
 from app.services.security_alerts import queue_security_alert, record_failed_login
-from app.services.workspace_accounts import authenticate_session, login_session, signup, token_digest, verify_password
+from app.services.workspace_accounts import (
+    authenticate_session,
+    authenticate_session_digest,
+    login_session,
+    signup,
+    token_digest,
+    verify_password,
+)
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -44,6 +54,19 @@ class LoginWrite(BaseModel):
         if normalized is None:
             raise ValueError("Enter a valid email address.")
         return normalized.lower()
+
+
+class OperationsGrantWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    client: Literal["guest-recovery", "maintenance"]
+    challenge: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$", repr=False)
+
+
+class OperationsRedeemWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    client: Literal["guest-recovery", "maintenance"]
+    code: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$", repr=False)
+    verifier: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$", repr=False)
 
 
 class SignupWrite(LoginWrite):
@@ -223,6 +246,84 @@ def login(
     session.commit()
     logger.info("account.login", extra={"workspace_id": str(account.workspace_id)})
     return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+
+def operations_grant_key(client: str, code: str, challenge: str) -> str:
+    return f"operations-login:{client}:{token_digest(code)}:{challenge}"
+
+
+@router.post("/operations/grants", include_in_schema=False)
+def issue_operations_grant(
+    payload: OperationsGrantWrite,
+    request: Request,
+    session: Session = Depends(account_database),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    if not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+    token = bearer_token(request)
+    account = authenticate_session(session, token, clock.now())
+    account_rate_limit(cache, f"operations-grants:{account.id}", 15)
+    code = secrets.token_urlsafe(32)
+    try:
+        saved = cache.set(
+            operations_grant_key(payload.client, code, payload.challenge),
+            token_digest(token),
+            ex=60,
+            nx=True,
+        )
+    except RedisError as exc:
+        raise AppError("dependency_unavailable", "Shared sign-in is temporarily unavailable.", 503) from exc
+    if not saved:
+        raise AppError("dependency_unavailable", "Shared sign-in is temporarily unavailable.", 503)
+    return JSONResponse(content={"code": code}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/operations/redeem", include_in_schema=False)
+def redeem_operations_grant(
+    payload: OperationsRedeemWrite,
+    session: Session = Depends(account_database),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    if not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+    verifier_digest = hashlib.sha256(payload.verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(verifier_digest).decode("ascii").rstrip("=")
+    try:
+        digest = cache.getdel(operations_grant_key(payload.client, payload.code, challenge))
+    except RedisError as exc:
+        raise AppError("dependency_unavailable", "Shared sign-in is temporarily unavailable.", 503) from exc
+    if isinstance(digest, bytes):
+        digest = digest.decode("ascii")
+    if not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+        raise AppError("invalid_grant", "Shared sign-in expired. Start again.", 401)
+    account = authenticate_session_digest(session, digest, clock.now())
+    return JSONResponse(
+        content={
+            "account_id": str(account.id),
+            "workspace_id": str(account.workspace_id),
+            **(
+                {"read_token": issue_read_access(cache, digest), "read_token_expires_in": ACCESS_SECONDS}
+                if payload.client == "guest-recovery"
+                else {}
+            ),
+            **(
+                {"touchup_token": issue_touchup_access(cache, digest)}
+                if payload.client == "guest-recovery" and settings.operations_touchup_enabled
+                else {}
+            ),
+            **(
+                {"repair_token": issue_repair_access(cache, digest)}
+                if payload.client == "guest-recovery" and settings.operations_repair_enabled
+                else {}
+            ),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/me")

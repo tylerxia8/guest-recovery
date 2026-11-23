@@ -1,25 +1,31 @@
 import hashlib
+import json
+import re
 import logging
 from collections import defaultdict, deque
 from threading import Lock
-from urllib.parse import urlsplit
+from urllib.error import URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
 import time
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from grok_bot.api.deps import get_principal, get_session, require_capability, require_idempotency_key
+from grok_bot.api.deps import get_principal, get_session, request_id_of, require_capability, require_idempotency_key
+from grok_bot.api.schemas import PropertyWrite
 from grok_bot.api.success import ERROR_RESPONSES
 from grok_bot.auth.permissions import Principal
 from grok_bot.auth.tokens import TokenError, _sign, verify_token
 from grok_bot.db import set_tenant
 from grok_bot.domain import idempotency
-from grok_bot.domain.maintenance import _classify, _create_ticket
+from grok_bot.domain.maintenance import FIELD_ORDER, PLAYBOOKS, _classify, _create_ticket, add_message
+from grok_bot.domain.portfolio import create_property, create_unit
 from grok_bot.domain.records import write_audit
 from grok_bot.errors import problem
 
@@ -80,6 +86,11 @@ class ImportBody(BridgeBody):
     source_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class GuestMessageBody(BridgeBody):
+    body: str = Field(min_length=1, max_length=5000)
+    field_key: str | None = Field(default=None, max_length=100)
+
+
 class RepairOut(BaseModel):
     ticket_id: UUID
     ticket_number: int
@@ -88,9 +99,15 @@ class RepairOut(BaseModel):
     updated_at: datetime
 
 
+class IntakeQuestion(BridgeBody):
+    field_key: str
+    body: str
+
+
 class SourceRepairOut(RepairOut):
     issue_id: str
     source_fingerprint: str
+    next_question: IntakeQuestion | None = None
 
 
 class PropertyRepairsOut(BaseModel):
@@ -199,7 +216,8 @@ def connection(body: ConnectionBody, request: Request, principal: Principal = De
 def link_property(body: PropertyLinkBody, principal: Principal = Depends(get_principal), session: Session = Depends(get_session, scope="function"), key: str | None = Header(default=None, alias="Idempotency-Key")):
     require_capability(principal, "maintenance.manage")
     def create():
-        existing = session.execute(text("SELECT external_property_id,unit_id FROM maintenance_property_links WHERE organization_id=:org AND (external_property_id=:external OR unit_id=:unit) FOR UPDATE"), {"org": principal.organization_id, "external": body.external_property_id, "unit": body.unit_id}).mappings().first()
+        # mutate() already serializes bridge changes for this organization.
+        existing = session.execute(text("SELECT external_property_id,unit_id FROM maintenance_property_links WHERE organization_id=:org AND (external_property_id=:external OR unit_id=:unit)"), {"org": principal.organization_id, "external": body.external_property_id, "unit": body.unit_id}).mappings().first()
         if existing and (existing["external_property_id"] != body.external_property_id or existing["unit_id"] != body.unit_id):
             problem(409, "PROPERTY_MAPPING_CONFLICT", "This property or unit is already linked. Review the existing mapping.")
         unit = session.execute(text("SELECT p.name,u.label FROM units u JOIN properties p ON p.organization_id=u.organization_id AND p.id=u.property_id WHERE u.organization_id=:org AND u.id=:unit"), {"org": principal.organization_id, "unit": body.unit_id}).mappings().first()
@@ -228,11 +246,40 @@ def bridge(request: Request, principal: Principal = Depends(bridge_principal), s
     return {"organization_id": principal.organization_id, "source": payload["source"], "expires_at": datetime.fromtimestamp(payload["exp"], timezone.utc), "mode": "demo" if request.app.state.settings.allows_demo_session else "workspace", "properties": linked_properties(session, principal.organization_id)}
 
 
+def next_intake_question(session, org, ticket_id):
+    ticket = session.execute(
+        text("SELECT category, status, handoff, emergency, urgent_triage FROM maintenance_tickets "
+             "WHERE organization_id=:org AND id=:ticket"),
+        {"org": org, "ticket": ticket_id},
+    ).mappings().first()
+    if not ticket or ticket["status"] != "INTAKE_OPEN" or ticket["handoff"] or ticket["emergency"] or ticket["urgent_triage"]:
+        return None
+    fields = dict(session.execute(
+        text("SELECT field_key, status FROM intake_fields WHERE organization_id=:org AND ticket_id=:ticket"),
+        {"org": org, "ticket": ticket_id},
+    ).tuples().all())
+    playbook = PLAYBOOKS.get(ticket["category"], PLAYBOOKS["general"])
+    text_fields = {"exact_location", "onset_frequency", "access_windows", "entry_safety"}
+    field = next(
+        (key for key in FIELD_ORDER if key in text_fields and key in playbook and fields.get(key) in {None, "UNKNOWN"}),
+        None,
+    )
+    return {"field_key": field, "body": playbook[field]} if field else None
+
+
+def advance_guest_intake(session, org, ticket_id):
+    if next_intake_question(session, org, ticket_id) is None:
+        session.execute(text("UPDATE maintenance_tickets SET status='MANAGER_REVIEW',handoff=true,asked_fields='[]'::jsonb "
+                             "WHERE organization_id=:org AND id=:ticket AND status='INTAKE_OPEN'"),
+                        {"org": org, "ticket": ticket_id})
+
+
+
 def source_repair(session, org, issue_id):
     row = session.execute(text("SELECT r.issue_id,r.source_fingerprint,t.id AS ticket_id,t.ticket_number,t.status,CASE WHEN t.emergency THEN 'EMERGENCY' WHEN t.urgent_triage THEN 'URGENT' ELSE 'ROUTINE' END AS priority,t.updated_at FROM maintenance_source_requests r JOIN maintenance_tickets t ON t.organization_id=r.organization_id AND t.id=r.ticket_id WHERE r.organization_id=:org AND r.source='guest_recovery' AND r.issue_id=:issue"), {"org": org, "issue": issue_id}).mappings().first()
     if row is None:
         problem(404, "NOT_FOUND", "This guest issue has not been opened in maintenance.")
-    return SourceRepairOut.model_validate(dict(row)).model_dump(mode="json")
+    return SourceRepairOut.model_validate({**row, "next_question": next_intake_question(session, org, row["ticket_id"])}).model_dump(mode="json")
 
 
 @router.post("/maintenance-bridge/requests", response_model=SourceRepairOut)
@@ -252,10 +299,175 @@ def import_request(body: ImportBody, request: Request, principal: Principal = De
             problem(409, "SAFETY_REVIEW_REQUIRED", "Keep this hazard in the existing safety workflow; do not create duplicate safety responses.")
         now = request.app.state.clock.now()
         ticket = _create_ticket(session, principal.organization_id, request.app.state.settings.session_secret, description=body.description, verification="VERIFIED", unit_id=unit, lease_id=None, reporter_user_id=None, identity_status="PROVIDED", when=now, intake={}, category=None)
-        session.execute(text("UPDATE maintenance_tickets SET status='ASSIGNMENT_PENDING',handoff=true WHERE organization_id=:org AND id=:ticket"), {"org": principal.organization_id, "ticket": ticket["id"]})
+        advance_guest_intake(session, principal.organization_id, ticket["id"])
         session.execute(text("INSERT INTO maintenance_source_requests(organization_id,source,issue_id,external_property_id,ticket_id,reservation_id,conversation_id,source_fingerprint) VALUES(:org,'guest_recovery',:issue,:external,:ticket,:reservation,:conversation,:fingerprint)"), {"org": principal.organization_id, "issue": body.issue_id, "external": body.external_property_id, "ticket": ticket["id"], "reservation": body.reservation_id, "conversation": body.conversation_id, "fingerprint": body.source_fingerprint})
         return source_repair(session, principal.organization_id, body.issue_id)
     return mutate(session, principal, require_idempotency_key(key), "import", body.model_dump(mode="json"), create)
+
+
+
+class NoRepairRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def link_verified_home(session, principal, external_property, raw_home, request_id):
+    organization = principal.organization_id
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:scope,0))"),
+        {"scope": f"maintenance-bridge:{organization}"},
+    )
+    if session.scalar(
+        text("SELECT unit_id FROM maintenance_property_links WHERE organization_id=:org AND external_property_id=:external"),
+        {"org": organization, "external": external_property},
+    ):
+        return
+    if not isinstance(raw_home, dict):
+        problem(409, "PROPERTY_NOT_LINKED", "Link this home in Maintenance. The imported address is incomplete.")
+    home_data = dict(raw_home)
+    label = home_data.pop("unit_label", None)
+    if not isinstance(label, str) or not 1 <= len(label.strip()) <= 80:
+        problem(409, "PROPERTY_NOT_LINKED", "Link this home in Maintenance. The imported unit is incomplete.")
+    try:
+        home = PropertyWrite.model_validate(home_data)
+    except ValidationError:
+        problem(409, "PROPERTY_NOT_LINKED", "Link this home in Maintenance. The imported address is incomplete.")
+    if session.scalar(
+        text("""
+            SELECT id FROM properties
+            WHERE organization_id=:org
+              AND lower(trim(address_line1))=lower(trim(:street))
+              AND lower(trim(postal_code))=lower(trim(:postal))
+            LIMIT 1
+        """),
+        {"org": organization, "street": home.address_line1, "postal": home.postal_code},
+    ):
+        problem(409, "PROPERTY_NOT_LINKED", "Link the existing Maintenance home before sending the repair.")
+    created = create_property(session, principal, home, request_id)
+    unit = create_unit(session, principal, UUID(str(created["id"])), label.strip(), request_id)
+    session.execute(
+        text("INSERT INTO maintenance_property_links(organization_id,external_property_id,unit_id) VALUES(:org,:external,:unit)"),
+        {"org": organization, "external": external_property, "unit": UUID(str(unit["id"]))},
+    )
+
+
+def verify_operations_repair(request, session, property_id, reservation_id):
+    settings = request.app.state.settings
+    issuer = urlsplit(settings.operations_turnover_origin)
+    if (
+        not settings.operations_repair_handoff_enabled
+        or not settings.operations_workspace_provisioning
+        or not settings.allows_local_auth
+        or settings.allows_demo_session
+        or issuer.scheme != "https"
+        or not issuer.hostname
+        or any((issuer.username, issuer.password, issuer.path, issuer.query, issuer.fragment))
+    ):
+        problem(404, "NOT_FOUND", "Shared repair handoff is unavailable.")
+    authorization = request.headers.get("authorization", "")
+    if re.fullmatch(r"Bearer opr_[A-Za-z0-9_-]{43}", authorization) is None:
+        problem(401, "UNAUTHENTICATED", "Shared repair access is required.")
+    query = urlencode({
+        "property_external_id": str(property_id),
+        "reservation_external_id": reservation_id,
+    })
+    upstream = UrlRequest(
+        issuer.geturl() + "/auth/operations/repair-context?" + query,
+        headers={"Authorization": authorization, "Accept": "application/json"},
+    )
+    try:
+        with build_opener(NoRepairRedirect()).open(upstream, timeout=8) as response:
+            identity = json.loads(response.read(4096))
+        if identity["property_external_id"] != str(property_id) or identity["reservation_external_id"] != reservation_id:
+            raise ValueError("Mismatched stay")
+        organization = UUID(identity["workspace_id"])
+        user = UUID(identity["account_id"])
+    except (URLError, OSError, ValueError, KeyError, TypeError):
+        problem(403, "FORBIDDEN", "Turnover could not verify this workspace and stay.")
+    if not session.scalar(
+        text("SELECT public.app_provision_operations_workspace(:workspace, :account, :grant_id)"),
+        {"workspace": organization, "account": user, "grant_id": uuid4()},
+    ):
+        problem(403, "FORBIDDEN", "This Lucena account is not linked to Maintenance.")
+    set_tenant(session, organization, user)
+    if not session.scalar(text("SELECT public.app_actor_is_manager()")):
+        problem(403, "FORBIDDEN", "Maintenance manager access is required.")
+    request.state.maintenance_connection = {"source": "guest_recovery"}
+    principal = Principal(user, organization, "Lucena manager", ("property_manager",), "lucena_operations")
+    return principal, identity
+
+
+@router.post("/maintenance-bridge/operations-requests", include_in_schema=False, response_model=SourceRepairOut)
+def operations_import_request(
+    body: ImportBody,
+    request: Request,
+    session: Session = Depends(get_session, scope="function"),
+    key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    key = require_idempotency_key(key)
+    principal, identity = verify_operations_repair(request, session, body.external_property_id, body.reservation_id)
+    link_verified_home(session, principal, body.external_property_id, identity.get("home"), request_id_of(request))
+    return import_request(body, request, principal, session, key)
+
+
+class OperationsAnswer(GuestMessageBody):
+    issue_id: str = Field(min_length=1, max_length=200)
+    external_property_id: UUID
+    reservation_id: str = Field(min_length=1, max_length=200)
+    field_key: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/maintenance-bridge/operations-answers", include_in_schema=False, response_model=SourceRepairOut)
+def operations_answer(
+    body: OperationsAnswer,
+    request: Request,
+    session: Session = Depends(get_session, scope="function"),
+    key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    key = require_idempotency_key(key)
+    principal, _ = verify_operations_repair(request, session, body.external_property_id, body.reservation_id)
+    if not session.scalar(
+        text("""
+            SELECT 1 FROM maintenance_source_requests
+            WHERE organization_id=:org AND source='guest_recovery' AND issue_id=:issue
+              AND external_property_id=:property AND reservation_id=:reservation
+        """),
+        {"org": principal.organization_id, "issue": body.issue_id,
+         "property": body.external_property_id, "reservation": body.reservation_id},
+    ):
+        problem(404, "NOT_FOUND", "This repair does not match the verified stay.")
+    answer = GuestMessageBody(body=body.body, field_key=body.field_key)
+    return import_guest_message(body.issue_id, answer, request, principal, session, key)
+
+
+@router.post("/maintenance-bridge/messages/{issue_id:path}", response_model=SourceRepairOut)
+def import_guest_message(issue_id: str, body: GuestMessageBody, request: Request, principal: Principal = Depends(bridge_principal), session: Session = Depends(get_session, scope="function"), key: str | None = Header(default=None, alias="Idempotency-Key")):
+    if request.state.maintenance_connection["source"] != "guest_recovery":
+        problem(403, "FORBIDDEN", "Only the guest inbox can add guest repair messages.")
+    if request.app.state.settings.allows_demo_session:
+        problem(409, "DEMO_WORKSPACE", "Connect a real maintenance workspace before importing guest messages.")
+    if not 0 < len(issue_id) <= 200:
+        problem(422, "VALIDATION_ERROR", "Invalid guest issue identifier.")
+
+    def append():
+        repair = source_repair(session, principal.organization_id, issue_id)
+        status = session.scalar(text("SELECT status FROM maintenance_tickets WHERE organization_id=:org AND id=:ticket FOR UPDATE"),
+                                {"org": principal.organization_id, "ticket": repair["ticket_id"]})
+        if status in {"COMPLETED", "CLOSED", "CANCELED"}:
+            problem(409, "REPAIR_CLOSED", "Review this follow-up in the guest inbox before opening another repair.")
+        if _classify(body.body)[0]:
+            problem(409, "SAFETY_REVIEW_REQUIRED", "Handle this hazard in the safety workflow.")
+        if body.field_key is not None:
+            question = next_intake_question(session, principal.organization_id, repair["ticket_id"])
+            if question is None or question["field_key"] != body.field_key:
+                problem(409, "INTAKE_CHANGED", "The repair intake question changed.")
+        settings = request.app.state.settings
+        add_message(session, principal.organization_id, UUID(repair["ticket_id"]), body.body, None,
+                    settings.session_secret, request.app.state.clock, None, field_key=body.field_key, origin="guest_recovery")
+        advance_guest_intake(session, principal.organization_id, repair["ticket_id"])
+        return source_repair(session, principal.organization_id, issue_id)
+
+    return mutate(session, principal, require_idempotency_key(key), "guest_message", {"issue_id": issue_id, **body.model_dump()}, append)
 
 
 @router.get("/maintenance-bridge/requests/{issue_id:path}", response_model=SourceRepairOut)

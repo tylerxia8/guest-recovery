@@ -18,6 +18,7 @@ from app.domain.errors import AppError
 from app.domain.principal import Principal
 from app.models import OperatorProfile
 from app.services.audit import write_audit
+from app.services.operations_access import OPERATIONS_READ_PATHS, REPAIR_CONTEXT_PATH, TOUCHUP_PATH, read_session_digest
 from app.services.rate_limit import enforce_rate_limit
 
 _bearer = HTTPBearer(auto_error=False)
@@ -39,7 +40,7 @@ def get_db(request: Request) -> Generator[Session, None, None]:
     factory = request.app.state.session_factory
     if settings.workspace_signup_enabled:
         from app.db import catalog_session_factory, session_factory
-        from app.services.workspace_accounts import account_subject, authenticate_session
+        from app.services.workspace_accounts import account_subject, authenticate_session, authenticate_session_digest
         from app.workspaces import LEGACY_WORKSPACE_ID
 
         remote = getattr(request.state, "client_address", "unknown" if request.client is None else request.client.host)
@@ -68,8 +69,32 @@ def get_db(request: Request) -> Generator[Session, None, None]:
             if not hmac.compare_digest(expected, token):
                 raise AppError("link_unavailable", "Open your original private cleaner link.", 401)
         else:
+            delegated = token.startswith(("ops_", "opc_", "opr_"))
+            if delegated:
+                allowed_read = (
+                    token.startswith("ops_") and request.method == "GET" and request.url.path in OPERATIONS_READ_PATHS
+                )
+                allowed_touchup = (
+                    token.startswith("opc_")
+                    and settings.operations_touchup_enabled
+                    and request.method == "POST"
+                    and request.url.path == TOUCHUP_PATH
+                )
+                allowed_repair = (
+                    token.startswith("opr_")
+                    and settings.operations_repair_enabled
+                    and request.method == "GET"
+                    and request.url.path == REPAIR_CONTEXT_PATH
+                )
+                if not settings.operations_login_enabled or not (allowed_read or allowed_touchup or allowed_repair):
+                    raise AppError("invalid_session", "Sign in to continue.", 401)
             with catalog_session_factory(settings)() as catalog:
-                account = authenticate_session(catalog, token, request.app.state.clock.now())
+                now = request.app.state.clock.now()
+                if delegated:
+                    digest = read_session_digest(request.app.state.redis, token)
+                    account = authenticate_session_digest(catalog, digest, now)
+                else:
+                    account = authenticate_session(catalog, token, now)
                 workspace_id = account.workspace_id
                 request.state.account_subject = account_subject(account)
         factories = request.app.state.workspace_factories

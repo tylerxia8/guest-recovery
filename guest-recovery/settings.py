@@ -52,8 +52,6 @@ def save_email(data):
 
 
 def write_email(data):
-    if not isinstance(data, dict):
-        raise ValueError('Email settings must be an object')
     provider = data.get('provider')
     if provider not in ('gmail', 'resend'):
         raise ValueError('Choose Gmail or Resend')
@@ -76,6 +74,11 @@ def write_email(data):
         if not re.fullmatch(r'[a-zA-Z0-9]{16}', password):
             raise ValueError('Use a 16-character Google app password, not your normal Gmail password')
         values['SMTP_APP_PASSWORD'] = password
+    persist(values)
+    return email_status()
+
+
+def persist(values):
     lines = ENV_PATH.read_text().splitlines() if ENV_PATH.exists() else []
     remaining = [line for line in lines if line.partition('=')[0].strip() not in values]
     content = '\n'.join(remaining + [name + '=' + value for name, value in values.items()]) + '\n'
@@ -92,4 +95,3 @@ def write_email(data):
         if filename and os.path.exists(filename):
             os.unlink(filename)
     os.environ.update(values)
-    return email_status()

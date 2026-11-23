@@ -97,7 +97,7 @@ def _snapshot(session: Session, settings: Settings, clock: Clock, cleaner_id: UU
     url = cleaner_portal_url(session, settings, clock, cleaner.id)
     if recipient is None or url is None:
         raise AppError("availability_request_unavailable", "A valid email and private cleaner link are required.", 409)
-    language = email_language(cleaner) or "en"
+    language = email_language(cleaner)
     subject, body = _COPY[language]
     values = {
         "name": cleaner.display_name,
