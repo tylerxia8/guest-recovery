@@ -52,6 +52,61 @@ function node(tag, text, className) {
 function date(value) {
   return new Date(value).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
 }
+function sharedStayDetails(issue, container) {
+  const units = issue.property_ids || [];
+  if (issue.lane === 'practice' || units.length !== 1 || !issue.reservation_id) return;
+  managerSession.then(session => {
+    if (!session.shared_stay_context || !container.isConnected) return;
+    const details = node('details', '', 'property-details');
+    const status = node('p', '', 'help-text');
+    status.setAttribute('role', 'status');
+    details.append(node('summary', 'Turnover stay details'), status);
+    container.before(details);
+    details.addEventListener('toggle', async () => {
+      if (!details.open || details.dataset.loading || details.dataset.loaded) return;
+      details.dataset.loading = 'true';
+      status.textContent = 'Loading stay details…';
+      const query = new URLSearchParams({
+        property_external_id: units[0], reservation_external_id: issue.reservation_id,
+      });
+      try {
+        const response = await fetch('/api/operations/stay-context?' + query, {
+          credentials: 'same-origin', signal: AbortSignal.timeout(12000),
+        });
+        if (response.status === 401) {
+          status.replaceChildren('Shared access expired. ');
+          const signIn = node('a', 'Reconnect with Turnover');
+          signIn.href = '/auth/operations/start';
+          status.append(signIn);
+          return;
+        }
+        if (response.status === 404) {
+          status.textContent = 'Turnover has no matching stay for this property.';
+          return;
+        }
+        if (!response.ok) throw new Error('Stay details unavailable');
+        const {reservation, departure_tasks: tasks} = await response.json();
+        const arrival = node('p', 'Check-in · ' + date(reservation.checkin_at));
+        const departure = node('p', 'Checkout · ' + date(reservation.checkout_at));
+        const list = node('ul');
+        for (const task of tasks) {
+          const label = task.relationship === 'before_checkin' ? 'Cleaning before check-in' : 'Cleaning after checkout';
+          const completion = task.completed_at && task.status === 'completed'
+            ? 'completed ' + date(task.completed_at) : task.status.replaceAll('_', ' ');
+          list.append(node('li', label + ' · ' + completion));
+        }
+        details.append(arrival, departure, tasks.length ? list : node('p', 'No related departure cleaning is recorded.'));
+        status.textContent = '';
+        details.dataset.loaded = 'true';
+      } catch {
+        status.textContent = 'Could not load Turnover stay details. Close and reopen to retry.';
+      } finally {
+        delete details.dataset.loading;
+      }
+    });
+  }).catch(() => {});
+}
+
 function title(issue) {
   return issue.worksheet ? 'Missing hand towels' : {Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
 }
@@ -330,6 +385,7 @@ function render() {
   const propertyDetails = node('details', '', 'property-details');
   propertyDetails.append(node('summary', 'Property details'));
   card.append(propertyDetails);
+  sharedStayDetails(issue, propertyDetails);
   if (issue.supply_quantities?.length) {
     const amounts = issue.supply_quantities.map(item => `${dataset.catalog.item_types.find(kind => kind.id === item.item_type)?.label || item.item_type}: ${item.quantity} ${item.unit} · ${item.basis}`);
     propertyDetails.append(node('p', amounts.join(' / '), 'help-text'), node('p', 'Quantities are individual items, not Amazon packs.', 'help-text'));

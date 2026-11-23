@@ -18,7 +18,7 @@ const subscribeToInvitation = (listener: () => void) => {
   return () => window.removeEventListener("hashchange", listener);
 };
 
-export function WorkspaceSignup({login, authenticated, internalConnection = false, registrationEnabled = true, inviteSignupEnabled = false}: {login: boolean; authenticated: boolean; internalConnection?: boolean; registrationEnabled?: boolean; inviteSignupEnabled?: boolean}) {
+export function WorkspaceSignup({login, authenticated, internalConnection = false, registrationEnabled = true, inviteSignupEnabled = false, resumeOperations}: {login: boolean; authenticated: boolean; internalConnection?: boolean; registrationEnabled?: boolean; inviteSignupEnabled?: boolean; resumeOperations?: string}) {
   const router = useRouter();
   const [setup, setSetup] = useState<Setup | null>(null);
   const [reload, setReload] = useState(0);
@@ -77,7 +77,12 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
           if (login && ["mfa_required", "invalid_second_factor"].includes(body.error?.code ?? "")) setMfaRequired(true);
           throw new Error(body.error?.message ?? "Could not sign in. Please try again.");
         }
-        setPassword(""); setSecondFactor(""); router.replace("/signup"); router.refresh();
+        setPassword(""); setSecondFactor("");
+        if (login && resumeOperations) {
+          window.location.replace(resumeOperations);
+          return;
+        }
+        router.replace("/signup"); router.refresh();
       } else if (step === 2) {
         keys.current.connection ||= crypto.randomUUID();
         await api("/workspace/hospitable", {method: "POST", headers: {"Idempotency-Key": keys.current.connection}, body: JSON.stringify({token}), signal: AbortSignal.timeout(670000)});

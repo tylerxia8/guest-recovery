@@ -1,25 +1,31 @@
 import hashlib
+import json
+import re
 import logging
 from collections import defaultdict, deque
 from threading import Lock
-from urllib.parse import urlsplit
+from urllib.error import URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
 import time
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from grok_bot.api.deps import get_principal, get_session, require_capability, require_idempotency_key
+from grok_bot.api.deps import get_principal, get_session, request_id_of, require_capability, require_idempotency_key
+from grok_bot.api.schemas import PropertyWrite
 from grok_bot.api.success import ERROR_RESPONSES
 from grok_bot.auth.permissions import Principal
 from grok_bot.auth.tokens import TokenError, _sign, verify_token
 from grok_bot.db import set_tenant
 from grok_bot.domain import idempotency
 from grok_bot.domain.maintenance import FIELD_ORDER, PLAYBOOKS, _classify, _create_ticket, add_message
+from grok_bot.domain.portfolio import create_property, create_unit
 from grok_bot.domain.records import write_audit
 from grok_bot.errors import problem
 
@@ -210,7 +216,8 @@ def connection(body: ConnectionBody, request: Request, principal: Principal = De
 def link_property(body: PropertyLinkBody, principal: Principal = Depends(get_principal), session: Session = Depends(get_session, scope="function"), key: str | None = Header(default=None, alias="Idempotency-Key")):
     require_capability(principal, "maintenance.manage")
     def create():
-        existing = session.execute(text("SELECT external_property_id,unit_id FROM maintenance_property_links WHERE organization_id=:org AND (external_property_id=:external OR unit_id=:unit) FOR UPDATE"), {"org": principal.organization_id, "external": body.external_property_id, "unit": body.unit_id}).mappings().first()
+        # mutate() already serializes bridge changes for this organization.
+        existing = session.execute(text("SELECT external_property_id,unit_id FROM maintenance_property_links WHERE organization_id=:org AND (external_property_id=:external OR unit_id=:unit)"), {"org": principal.organization_id, "external": body.external_property_id, "unit": body.unit_id}).mappings().first()
         if existing and (existing["external_property_id"] != body.external_property_id or existing["unit_id"] != body.unit_id):
             problem(409, "PROPERTY_MAPPING_CONFLICT", "This property or unit is already linked. Review the existing mapping.")
         unit = session.execute(text("SELECT p.name,u.label FROM units u JOIN properties p ON p.organization_id=u.organization_id AND p.id=u.property_id WHERE u.organization_id=:org AND u.id=:unit"), {"org": principal.organization_id, "unit": body.unit_id}).mappings().first()
@@ -297,6 +304,140 @@ def import_request(body: ImportBody, request: Request, principal: Principal = De
         return source_repair(session, principal.organization_id, body.issue_id)
     return mutate(session, principal, require_idempotency_key(key), "import", body.model_dump(mode="json"), create)
 
+
+
+class NoRepairRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def link_verified_home(session, principal, external_property, raw_home, request_id):
+    organization = principal.organization_id
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:scope,0))"),
+        {"scope": f"maintenance-bridge:{organization}"},
+    )
+    if session.scalar(
+        text("SELECT unit_id FROM maintenance_property_links WHERE organization_id=:org AND external_property_id=:external"),
+        {"org": organization, "external": external_property},
+    ):
+        return
+    if not isinstance(raw_home, dict):
+        problem(409, "PROPERTY_NOT_LINKED", "Link this home in Maintenance. The imported address is incomplete.")
+    home_data = dict(raw_home)
+    label = home_data.pop("unit_label", None)
+    if not isinstance(label, str) or not 1 <= len(label.strip()) <= 80:
+        problem(409, "PROPERTY_NOT_LINKED", "Link this home in Maintenance. The imported unit is incomplete.")
+    try:
+        home = PropertyWrite.model_validate(home_data)
+    except ValidationError:
+        problem(409, "PROPERTY_NOT_LINKED", "Link this home in Maintenance. The imported address is incomplete.")
+    if session.scalar(
+        text("""
+            SELECT id FROM properties
+            WHERE organization_id=:org
+              AND lower(trim(address_line1))=lower(trim(:street))
+              AND lower(trim(postal_code))=lower(trim(:postal))
+            LIMIT 1
+        """),
+        {"org": organization, "street": home.address_line1, "postal": home.postal_code},
+    ):
+        problem(409, "PROPERTY_NOT_LINKED", "Link the existing Maintenance home before sending the repair.")
+    created = create_property(session, principal, home, request_id)
+    unit = create_unit(session, principal, UUID(str(created["id"])), label.strip(), request_id)
+    session.execute(
+        text("INSERT INTO maintenance_property_links(organization_id,external_property_id,unit_id) VALUES(:org,:external,:unit)"),
+        {"org": organization, "external": external_property, "unit": UUID(str(unit["id"]))},
+    )
+
+
+def verify_operations_repair(request, session, property_id, reservation_id):
+    settings = request.app.state.settings
+    issuer = urlsplit(settings.operations_turnover_origin)
+    if (
+        not settings.operations_repair_handoff_enabled
+        or not settings.operations_workspace_provisioning
+        or not settings.allows_local_auth
+        or settings.allows_demo_session
+        or issuer.scheme != "https"
+        or not issuer.hostname
+        or any((issuer.username, issuer.password, issuer.path, issuer.query, issuer.fragment))
+    ):
+        problem(404, "NOT_FOUND", "Shared repair handoff is unavailable.")
+    authorization = request.headers.get("authorization", "")
+    if re.fullmatch(r"Bearer opr_[A-Za-z0-9_-]{43}", authorization) is None:
+        problem(401, "UNAUTHENTICATED", "Shared repair access is required.")
+    query = urlencode({
+        "property_external_id": str(property_id),
+        "reservation_external_id": reservation_id,
+    })
+    upstream = UrlRequest(
+        issuer.geturl() + "/auth/operations/repair-context?" + query,
+        headers={"Authorization": authorization, "Accept": "application/json"},
+    )
+    try:
+        with build_opener(NoRepairRedirect()).open(upstream, timeout=8) as response:
+            identity = json.loads(response.read(4096))
+        if identity["property_external_id"] != str(property_id) or identity["reservation_external_id"] != reservation_id:
+            raise ValueError("Mismatched stay")
+        organization = UUID(identity["workspace_id"])
+        user = UUID(identity["account_id"])
+    except (URLError, OSError, ValueError, KeyError, TypeError):
+        problem(403, "FORBIDDEN", "Turnover could not verify this workspace and stay.")
+    if not session.scalar(
+        text("SELECT public.app_provision_operations_workspace(:workspace, :account, :grant_id)"),
+        {"workspace": organization, "account": user, "grant_id": uuid4()},
+    ):
+        problem(403, "FORBIDDEN", "This Lucena account is not linked to Maintenance.")
+    set_tenant(session, organization, user)
+    if not session.scalar(text("SELECT public.app_actor_is_manager()")):
+        problem(403, "FORBIDDEN", "Maintenance manager access is required.")
+    request.state.maintenance_connection = {"source": "guest_recovery"}
+    principal = Principal(user, organization, "Lucena manager", ("property_manager",), "lucena_operations")
+    return principal, identity
+
+
+@router.post("/maintenance-bridge/operations-requests", response_model=SourceRepairOut)
+def operations_import_request(
+    body: ImportBody,
+    request: Request,
+    session: Session = Depends(get_session, scope="function"),
+    key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    key = require_idempotency_key(key)
+    principal, identity = verify_operations_repair(request, session, body.external_property_id, body.reservation_id)
+    link_verified_home(session, principal, body.external_property_id, identity.get("home"), request_id_of(request))
+    return import_request(body, request, principal, session, key)
+
+
+class OperationsAnswer(GuestMessageBody):
+    issue_id: str = Field(min_length=1, max_length=200)
+    external_property_id: UUID
+    reservation_id: str = Field(min_length=1, max_length=200)
+    field_key: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/maintenance-bridge/operations-answers", response_model=SourceRepairOut)
+def operations_answer(
+    body: OperationsAnswer,
+    request: Request,
+    session: Session = Depends(get_session, scope="function"),
+    key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    key = require_idempotency_key(key)
+    principal, _ = verify_operations_repair(request, session, body.external_property_id, body.reservation_id)
+    if not session.scalar(
+        text("""
+            SELECT 1 FROM maintenance_source_requests
+            WHERE organization_id=:org AND source='guest_recovery' AND issue_id=:issue
+              AND external_property_id=:property AND reservation_id=:reservation
+        """),
+        {"org": principal.organization_id, "issue": body.issue_id,
+         "property": body.external_property_id, "reservation": body.reservation_id},
+    ):
+        problem(404, "NOT_FOUND", "This repair does not match the verified stay.")
+    answer = GuestMessageBody(body=body.body, field_key=body.field_key)
+    return import_guest_message(body.issue_id, answer, request, principal, session, key)
 
 
 @router.post("/maintenance-bridge/messages/{issue_id:path}", response_model=SourceRepairOut)

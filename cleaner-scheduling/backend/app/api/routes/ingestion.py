@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import redis
+from app.adapters.errors import AdapterError
 from app.adapters.reservations.calendar import assert_feed_url_allowed
+from app.adapters.reservations.hospitable_read import HospitableReadClient
 from app.adapters.reservations.import_csv import MAX_BYTES, parse_reservation_csv
 from app.adapters.types import NormalizedReservation
 from app.api.deps import (
     get_clock,
     get_db,
+    get_redis,
     get_settings,
     require_manager,
     require_manager_idempotency_key,
@@ -24,8 +30,11 @@ from app.domain.errors import AppError
 from app.domain.principal import Principal
 from app.domain.tasks import resolve_duration
 from app.domain.timeutil import dump_utc
-from app.models import Property, Reservation, ReservationImportPreview, ReservationSyncRun
+from app.models import CleaningTask, Property, Reservation, ReservationImportPreview, ReservationSyncRun
+from app.models.workspace_connection import WorkspaceConnection
+from app.services import guest_recovery
 from app.services.audit import write_audit
+from app.services.field_cipher import reveal_text
 from app.services.idempotency import request_digest, resolve_idempotency, store_idempotency
 from app.services.instructions import (
     apply_manager_edit,
@@ -33,15 +42,23 @@ from app.services.instructions import (
     latest_instruction,
     serialize_instruction,
 )
+from app.services.operations_access import (
+    MESSAGES_PATH,
+    REPAIR_CONTEXT_PATH,
+    STAY_CONTEXT_PATH,
+    STAYS_PATH,
+    TOUCHUP_PATH,
+)
 from app.services.reservation_sync import (
     apply_normalized,
     create_sync_run,
     execute_sync,
     publication_blocked,
 )
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from redis.exceptions import RedisError
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
@@ -113,6 +130,285 @@ def _property_json(prop: Property, *, include_coordinates: bool) -> dict[str, ob
         body["latitude"] = _number(prop.latitude)
         body["longitude"] = _number(prop.longitude)
     return body
+
+
+@router.get(STAYS_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_stays(
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+) -> JSONResponse:
+    """Read the imported arrivals and in-house stays for the authenticated workspace."""
+    if not settings.workspace_signup_enabled or not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+    now = clock.now()
+    rows = session.execute(
+        select(Property, Reservation)
+        .join(Reservation, Reservation.property_id == Property.id)
+        .where(
+            Property.active.is_(True),
+            Property.provider == "hospitable",
+            Reservation.provider == "hospitable",
+            Reservation.status == "active",
+            Reservation.checkout_at > now,
+            Reservation.checkin_at < now + timedelta(hours=48),
+        )
+        .order_by(Reservation.checkin_at, Reservation.id)
+        .limit(101)
+    ).all()
+    return JSONResponse(
+        content={
+            "stays": [
+                {
+                    "property_name": prop.name,
+                    "property_external_id": prop.external_id,
+                    "reservation_external_id": stay.external_id,
+                    "checkin_at": dump_utc(stay.approved_guest_checkin_at or stay.checkin_at),
+                    "checkout_at": dump_utc(stay.approved_guest_checkout_at or stay.checkout_at),
+                    "observed_at": dump_utc(stay.observed_at),
+                }
+                for prop, stay in rows[:100]
+            ],
+            "has_more": len(rows) > 100,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get(STAY_CONTEXT_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_stay_context(
+    property_external_id: str = Query(min_length=1, max_length=120),
+    reservation_external_id: str = Query(min_length=1, max_length=120),
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    """Resolve a Hospitable stay and its departure tasks inside the authenticated workspace."""
+    if not settings.workspace_signup_enabled or not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+
+    prop, stay = _operations_stay(session, property_external_id, reservation_external_id)
+    departures = session.scalars(
+        select(CleaningTask)
+        .where(
+            CleaningTask.property_id == prop.id,
+            CleaningTask.kind == "departure",
+            (CleaningTask.source_reservation_id == stay.id) | (CleaningTask.next_reservation_id == stay.id),
+        )
+        .order_by(CleaningTask.release_at.desc(), CleaningTask.id)
+    )
+    return JSONResponse(
+        content={
+            "property": {"id": str(prop.id), "hospitable_id": prop.external_id, "name": prop.name},
+            "reservation": {
+                "id": str(stay.id),
+                "hospitable_id": stay.external_id,
+                "version": stay.version,
+                "status": stay.status,
+                "checkin_at": dump_utc(stay.approved_guest_checkin_at or stay.checkin_at),
+                "checkout_at": dump_utc(stay.approved_guest_checkout_at or stay.checkout_at),
+                "observed_at": dump_utc(stay.observed_at),
+            },
+            "departure_tasks": [
+                {
+                    "id": str(task.id),
+                    "version": task.version,
+                    "relationship": "before_checkin" if task.next_reservation_id == stay.id else "after_checkout",
+                    "status": task.status,
+                    "completed_at": dump_utc(task.completed_at) if task.completed_at else None,
+                }
+                for task in departures
+            ],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _operations_stay(
+    session: Session, property_external_id: str, reservation_external_id: str
+) -> tuple[Property, Reservation]:
+    result = session.execute(
+        select(Property, Reservation)
+        .join(Reservation, Reservation.property_id == Property.id)
+        .where(
+            Property.active.is_(True),
+            Property.provider == "hospitable",
+            Reservation.provider == "hospitable",
+            Property.external_id == property_external_id,
+            Reservation.external_id == reservation_external_id,
+        )
+    ).one_or_none()
+    if result is None:
+        raise AppError("stay_not_found", "This Hospitable stay was not found in your workspace.", 404)
+
+    return result[0], result[1]
+
+
+@router.get(MESSAGES_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_guest_messages(
+    property_external_id: str = Query(min_length=1, max_length=120),
+    reservation_external_id: str = Query(min_length=1, max_length=120),
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    if not (
+        settings.workspace_signup_enabled
+        and settings.operations_login_enabled
+        and settings.operations_guest_messages_enabled
+        and settings.hospitable_read_only
+    ):
+        raise AppError("not_found", "Guest messages are unavailable.", 404)
+    _, stay = _operations_stay(session, property_external_id, reservation_external_id)
+    now = clock.now()
+    if (
+        stay.status != "active"
+        or (stay.approved_guest_checkout_at or stay.checkout_at) <= now
+        or (stay.approved_guest_checkin_at or stay.checkin_at) >= now + timedelta(hours=48)
+    ):
+        raise AppError("stay_not_found", "This stay is outside the shared inbox window.", 404)
+    workspace = session.info["workspace_id"]
+    connection = session.get(WorkspaceConnection, workspace)
+    if connection is None or not connection.token_ciphertext:
+        raise AppError("hospitable_not_connected", "Connect Hospitable in Turnover to load guest messages.", 409)
+    ciphertext = connection.token_ciphertext
+    try:
+        external_id = str(uuid.UUID(stay.external_id))
+        # The departure worker uses the same provider limit key.
+        if not cache.set(f"turnover:guest-departure:{external_id}", "1", nx=True, ex=31):
+            raise AppError("message_read_limited", "Wait before refreshing guest messages.", 429)
+        client = HospitableReadClient(
+            settings.hospitable_token_file,
+            access_token=reveal_text(ciphertext, settings.field_encryption_secret),
+            attempts=1,
+            budget_seconds=5,
+        )
+        try:
+            messages = client.guest_messages(external_id)
+        finally:
+            client.close()
+    except (ValueError, AdapterError, RedisError) as exc:
+        raise AppError("hospitable_unavailable", "Guest messages could not be loaded.", 503) from exc
+    latest = session.get(WorkspaceConnection, workspace, populate_existing=True)
+    if latest is None or latest.token_ciphertext != ciphertext:
+        raise AppError("hospitable_connection_changed", "The Hospitable connection changed. Try again.", 409)
+    ordered = sorted(messages, key=lambda message: (message.sent_at, message.external_id))
+    return JSONResponse(
+        content={
+            "messages": [
+                {
+                    "id": message.external_id,
+                    "sent_at": dump_utc(message.sent_at),
+                    "body": message.body[:5000],
+                    "truncated": len(message.body) > 5000,
+                }
+                for message in ordered[-10:]
+            ],
+            "has_older": len(ordered) > 10,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _repair_home(prop: Property, settings: Settings) -> dict[str, str] | None:
+    if not prop.location_ciphertext:
+        return None
+    try:
+        address = json.loads(reveal_text(prop.location_ciphertext, settings.field_encryption_secret))
+    except ValueError:
+        return None
+    if not isinstance(address, dict) or address.get("source") != "hospitable":
+        return None
+    display = address.get("display_address")
+    if not isinstance(display, str):
+        return None
+    match = re.fullmatch(
+        r"(?P<address_line1>[^,\r\n]{1,200}),\s*(?P<city>[^,\r\n]{1,100}),\s*"
+        r"(?P<region>[A-Z]{2})\s+(?P<postal_code>[0-9]{5}(?:-[0-9]{4})?),\s*(?:US|USA|United States)",
+        display.strip(),
+    )
+    if not match:
+        return None
+    unit = address.get("unit")
+    if unit is not None and (not isinstance(unit, str) or not 1 <= len(unit.strip()) <= 80):
+        return None
+    return {
+        **{field: value.strip() for field, value in match.groupdict().items()},
+        "name": prop.name,
+        "country_code": "US",
+        "timezone": prop.timezone,
+        "unit_label": unit.strip() if isinstance(unit, str) else "Entire home",
+    }
+
+
+@router.get(REPAIR_CONTEXT_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_repair_context(
+    property_external_id: str = Query(min_length=1, max_length=120),
+    reservation_external_id: str = Query(min_length=1, max_length=120),
+    principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+) -> JSONResponse:
+    if not (
+        settings.workspace_signup_enabled and settings.operations_login_enabled and settings.operations_repair_enabled
+    ):
+        raise AppError("not_found", "Repair handoff is unavailable.", 404)
+    prop, stay = _operations_stay(session, property_external_id, reservation_external_id)
+    now = clock.now()
+    if (
+        stay.status != "active"
+        or (stay.approved_guest_checkout_at or stay.checkout_at) <= now
+        or (stay.approved_guest_checkin_at or stay.checkin_at) >= now + timedelta(hours=48)
+    ):
+        raise AppError("stay_not_found", "This stay is outside the shared inbox window.", 404)
+    return JSONResponse(
+        content={
+            "account_id": principal.subject.removeprefix("manager:"),
+            "workspace_id": str(session.info["workspace_id"]),
+            "property_external_id": prop.external_id,
+            "home": _repair_home(prop, settings),
+            "reservation_external_id": stay.external_id,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+class OperationsTouchupWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    external_request_id: uuid.UUID
+    property_external_id: str = Field(min_length=1, max_length=120)
+    reservation_external_id: str = Field(min_length=1, max_length=120)
+    release_at: datetime
+    deadline_at: datetime
+    scope: str = Field(min_length=1, max_length=1000)
+    duration_minutes: int = Field(strict=True, ge=15, le=240)
+    guest_access_confirmed: bool = Field(strict=True)
+
+
+@router.post(TOUCHUP_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_cleaning_touchup(
+    payload: OperationsTouchupWrite,
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    if not (
+        settings.workspace_signup_enabled
+        and settings.operations_login_enabled
+        and settings.operations_touchup_enabled
+        and settings.local_scheduling_enabled
+    ):
+        raise AppError("not_found", "Cleaning handoff is unavailable.", 404)
+    try:
+        result = guest_recovery.handle(session, "POST", "/v1/cleaner-returns", payload.model_dump(mode="json"))
+    except (ValueError, LookupError) as exc:
+        raise AppError("touchup_unavailable", str(exc), 422) from exc
+    session.commit()
+    return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
 
 def _number(value: object) -> float | None:

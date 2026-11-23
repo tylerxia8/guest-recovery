@@ -7,7 +7,7 @@ import { enterDemoRole } from "../lib/demo";
 import Icon from "./ui/workspace-icon";
 import styles from "./maintenance-shell.module.css";
 
-export default function WorkspaceShell({ children, demo }: { children: ReactNode; demo: boolean }) {
+export default function WorkspaceShell({ children, demo, turnoverOrigin }: { children: ReactNode; demo: boolean; turnoverOrigin?: string }) {
   const pathname = usePathname();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -28,10 +28,10 @@ export default function WorkspaceShell({ children, demo }: { children: ReactNode
       setBusy(false);
     }
   }
-  const views = [{ label: "Tenant view", href: "/maintenance", role: "tenant" }, { label: "Manager view", href: "/maintenance/review", role: "property_manager" }, { label: "Repairman view", href: "/maintenance/jobs", role: "contractor" }];
+  const views = [{ label: "Guest view", href: "/maintenance", role: "tenant" }, { label: "Manager view", href: "/maintenance/review", role: "property_manager" }, { label: "Repairman view", href: "/maintenance/jobs", role: "contractor" }];
   return <div className={styles.app}>
     <header className={styles.bar}>
-      <Link className={styles.home} href="/" aria-label="Home"><Icon name="house" /></Link>
+      <Link className={styles.home} href="/" aria-label="Home"><Icon name="repair" /></Link>
       <nav className={styles.views} aria-label="Maintenance views">{views.map(view => demo
         ? <button key={view.href} type="button" disabled={busy} aria-current={pathname === view.href ? "page" : undefined} onClick={() => void open(view.role)}>{view.label}</button>
         : <Link key={view.href} href={view.href} onClick={event => {
@@ -40,6 +40,7 @@ export default function WorkspaceShell({ children, demo }: { children: ReactNode
           event.preventDefault();
           window.location.assign(`${view.href}?ticket=${encodeURIComponent(ticket)}${new URL(window.location.href).searchParams.get("past") === "1" ? "&past=1" : ""}`);
         }} aria-current={pathname === view.href ? "page" : undefined}>{view.label}</Link>)}</nav>
+      {turnoverOrigin && <a href={turnoverOrigin}>Back to Turnover</a>}
       {demo && <span className={styles.badge}>Demo</span>}
     </header>
     <main id="main" className={styles.content}>{error && <p className={styles.error} role="alert">{error}</p>}{children}</main>
