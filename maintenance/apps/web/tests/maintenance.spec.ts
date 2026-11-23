@@ -7,7 +7,7 @@ test("tenant report keeps a ticket and does not claim responders were contacted"
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/maintenance(?:\?.*)?$/);
   await page.goto("/maintenance");
-  await expect(page.getByRole("heading", { name: "Repairs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Lucena Repairs" })).toBeVisible();
   await expect(page.getByText("Immediate danger? Get somewhere safe and call emergency services.")).toBeVisible();
   await page.getByLabel("Describe the problem").fill("The kitchen sink leaks");
   await page.getByRole("button", { name: "Send request" }).click();

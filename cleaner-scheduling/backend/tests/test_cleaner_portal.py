@@ -34,6 +34,48 @@ def _migrator_session() -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
+def test_releasing_house_immediately_opens_manager_alert(monkeypatch, settings, clock):
+    from unittest.mock import Mock
+
+    from app.models import Assignment, CleaningOffer, CleaningTask, OperationalException, Property, ScheduleRun
+    from app.services import cleaner_coordination as coordination
+
+    cleaner = Cleaner(id=uuid.uuid4(), display_name="Alex")
+    task = CleaningTask(id=uuid.uuid4(), status="assigned", version=1, property_id=uuid.uuid4())
+    assignment = Assignment(
+        id=uuid.uuid4(),
+        task_id=task.id,
+        cleaner_id=cleaner.id,
+        version=1,
+        status="published",
+        planned_start=clock.now() + timedelta(hours=3),
+        service_date=clock.now().date(),
+        is_locked=False,
+    )
+    session = Mock()
+    session.scalar.side_effect = [assignment, task, None]
+    session.scalars.return_value = []
+    session.get.side_effect = [ScheduleRun(), Property(name="Sample House")]
+    for name in ("_new_version", "_advance_day", "_audit"):
+        monkeypatch.setattr(coordination, name, Mock())
+
+    result = coordination.assignment_action(session, settings, clock, cleaner, "punt", assignment.id, 1)
+
+    offer, alert = [call.args[0] for call in session.add.call_args_list]
+    assert isinstance(offer, CleaningOffer)
+    assert isinstance(alert, OperationalException)
+    assert result["offer_id"] == str(offer.id) == alert.details["offer_id"]
+    assert alert.code == "CLEANING_RELEASED"
+    assert alert.status == "open"
+    assert alert.details["property_name"] == "Sample House"
+    assert alert.details["cleaner_name"] == "Alex"
+    assert offer.status == "open"
+
+    session.scalars.return_value = [alert]
+    coordination._resolve_offer_alert(session, clock, offer)
+    assert alert.status == "resolved"
+
+
 class TestCleanerPortal:
     """Tests for cleaner_coordination portal service."""
 

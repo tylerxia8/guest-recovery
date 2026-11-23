@@ -3,7 +3,7 @@ const form = document.querySelector('#login-form');
 const submit = document.querySelector('#sign-in');
 const feedback = document.querySelector('#login-feedback');
 const requested = new URLSearchParams(window.location.search).get('next');
-const destination = /^\/\?purchase=[a-f0-9-]{36}$/.test(requested || '') ? requested : '/';
+const destination = /^\/\?(?:purchase=[a-f0-9-]{36}|supply=[A-Za-z0-9_.~%+-]{1,512})$/.test(requested || '') ? requested : '/';
 async function initializeLogin() {
   try {
     let response;

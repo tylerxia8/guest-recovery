@@ -52,12 +52,16 @@ def token_digest(token: str) -> str:
 def authenticate_session(session: Session, token: str, now: datetime) -> ManagerAccount:
     if re.fullmatch(r"mgr_[A-Za-z0-9_-]{43,64}", token) is None:
         raise AppError("invalid_session", "Sign in to continue.", 401)
+    return authenticate_session_digest(session, token_digest(token), now)
+
+
+def authenticate_session_digest(session: Session, digest: str, now: datetime) -> ManagerAccount:
     account = session.scalar(
         select(ManagerAccount)
         .join(ManagerSession, ManagerSession.account_id == ManagerAccount.id)
         .where(
             ManagerAccount.deleted_at.is_(None),
-            ManagerSession.token_hash == token_digest(token),
+            ManagerSession.token_hash == digest,
             ManagerSession.revoked_at.is_(None),
             ManagerSession.expires_at > now,
         )

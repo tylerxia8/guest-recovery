@@ -2,5 +2,10 @@
 !Dockerfile
 !guest-recovery/
 !guest-recovery/*.py
+!guest-recovery/requirements.txt
 !guest-recovery/web/
 !guest-recovery/web/**
+!cleaner-scheduling/
+!cleaner-scheduling/backend/
+!cleaner-scheduling/backend/app/
+!cleaner-scheduling/backend/app/**/*.py

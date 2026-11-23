@@ -59,7 +59,7 @@ function purchasePlanPanel(issue, message) {
   giftLink.target = '_blank';
   giftLink.rel = 'noopener noreferrer';
   form.append(giftLink);
-  form.append(node('p', '$25 threshold includes essentials, gift, tax, shipping, and fees. Above $25 requires manager approval. No total has been verified.', 'help-text'));
+  form.append(node('p', 'Verify the full cost and delivery window in Amazon Business.', 'help-text'));
   const collect = () => ({gift: gift.checked, pack_sizes: Object.fromEntries([...counts].filter(([, value]) => value.input.value).map(([kind, value]) => [kind, {asin: value.asin, units: Number(value.input.value)}]))});
   form.oninput = () => { quote.disabled = true; purchasePlanDrafts.set(key, {choices: collect(), fingerprint: cached?.fingerprint || plan.source_fingerprint, version: cached?.version ?? plan.version}); };
   const save = node('button', 'Save plan');
@@ -97,7 +97,7 @@ function purchasePlanPanel(issue, message) {
   section.append(previews);
   const quote = node('button', 'Record Amazon quote', 'secondary');
   quote.type = 'button';
-  quote.disabled = Boolean(plan.blockers.length || plan.stale || !plan.saved_at || cached || issue.purchases.some(item => item.decision !== 'vetoed'));
+  quote.disabled = Boolean(issue.manual_order_status || plan.blockers.length || plan.stale || !plan.saved_at || cached || issue.purchases.some(item => item.decision !== 'vetoed'));
   quote.onclick = () => {
     const address = plan.destination.address;
     purchaseDrafts.set(issue.id, {purchase_plan: {message_id: message.id, version: plan.version, source_fingerprint: plan.source_fingerprint}, summary: plan.summary + (plan.gift.requested ? '; Optional ' + plan.gift.title + ' only if verified at $3 or less and without delaying essentials' : ''), asins: [...new Set(plan.lines.map(item => item.asin))].join(', '), location: `${address.city}, ${address.region}`, timezone: address.timezone, fulfillment_version: plan.destination.version, arrival_date: '', delivery_window: '', address_confirmed: false, total: '', gift: '0', all_in_confirmed: false});

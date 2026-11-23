@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { repairMediaAccept, repairMediaType, repairPhotoAccept, validRepairMedia } from "../../lib/repair-media";
 import { api, API_BASE } from "../../lib/api";
 import styles from "./workflow.module.css";
 
@@ -156,8 +157,10 @@ export default function WorkflowPanel({ ticketId, onChange, audience }: { ticket
     }
     const bytes = await attachment.file.arrayBuffer();
       const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map(value => value.toString(16).padStart(2, "0")).join("");
+      const contentType = repairMediaType(attachment.file);
+      if (!contentType) throw new Error("Choose a supported photo or video.");
       attachment.slot = await workflowRequest(`/v1/maintenance-tickets/${encodeURIComponent(ticketId)}/media-uploads`, {
-        method: "POST", headers: { "Idempotency-Key": attachment.key }, body: JSON.stringify({ filename: attachment.file.name, content_type: attachment.file.type || (/\.hei[cf]$/i.test(attachment.file.name) ? "image/heic" : /\.mov$/i.test(attachment.file.name) ? "video/quicktime" : /\.mp4$/i.test(attachment.file.name) ? "video/mp4" : /\.png$/i.test(attachment.file.name) ? "image/png" : "image/jpeg"), size_bytes: attachment.file.size, sha256: hash }),
+        method: "POST", headers: { "Idempotency-Key": attachment.key }, body: JSON.stringify({ filename: attachment.file.name, content_type: contentType, size_bytes: attachment.file.size, sha256: hash }),
       });
     const slot = attachment.slot!;
     attachment.id = slot.id;
@@ -212,6 +215,7 @@ export default function WorkflowPanel({ ticketId, onChange, audience }: { ticket
       if (action === "confirm_visit") Object.assign(command, { appointment_id: value("appointment"), entry_permission: permission ? "GRANTED" : "DENIED" });
       if (action === "arrange_repair") Object.assign(command, { scope: value("text") });
       if (["message", "complete"].includes(action)) {
+        if (action === "complete" && !attachments.length) throw new Error("Attach a completion photo.");
         const mediaIds: string[] = [];
         for (const attachment of attachments) mediaIds.push(await upload(attachment));
         Object.assign(command, { [action === "message" ? "body" : "notes"]: value("text"), media_ids: mediaIds });
@@ -299,12 +303,12 @@ export default function WorkflowPanel({ ticketId, onChange, audience }: { ticket
         {chatError && <p className={styles.error} role="alert">{chatError}</p>}
         {detail.available_actions.includes("message") ? <form className={styles.composer} onSubmit={sendChat}>
           <label><span className={styles.srOnly}>Message</span><textarea value={draft} onChange={event => setDraft(event.target.value)} disabled={busy} required maxLength={4000} rows={2} placeholder={manager ? "Reply here, or ask Stevie to pass this to a repairman…" : "Write a message about this repair…"} /></label>
-          <details className={styles.chatUpload}><summary>Attach photos or videos</summary><label className={styles.muted}><span className={styles.srOnly}>Photos or videos</span><input type="file" multiple disabled={busy} accept=".jpg,.jpeg,.png,.heic,.heif,.mp4,.mov" onChange={event => {
+          <details className={styles.chatUpload}><summary>Attach photos or videos</summary><label className={styles.muted}><span className={styles.srOnly}>Photos or videos</span><input type="file" multiple disabled={busy} accept={repairMediaAccept} onChange={event => {
             const files = Array.from(event.target.files || []);
             event.target.value = "";
             const limit = detail.work_order?.workflow_managed ? 20 : 10;
             if (chatFiles.length + files.length > 10 || detail.media.length + chatFiles.filter(item => !item.id).length + files.length > limit) { setChatError(`Choose up to 10 files per message; this repair supports ${limit} files in total.`); return; }
-            if (files.some(file => !/\.(jpe?g|png|heic|heif|mp4|mov)$/i.test(file.name) || file.size > (/\.(mp4|mov)$/i.test(file.name) ? 200 : 20) * 1024 * 1024)) { setChatError("Choose photos up to 20 MB or videos up to 200 MB and 2 minutes."); return; }
+            if (files.some(file => !validRepairMedia(file))) { setChatError("Choose photos up to 20 MB or videos up to 200 MB and 2 minutes."); return; }
             setChatError("");
             setChatFiles(old => [...old, ...files.map(file => ({ file, key: crypto.randomUUID() }))]);
           }} /></label></details>
@@ -325,12 +329,12 @@ export default function WorkflowPanel({ ticketId, onChange, audience }: { ticket
           {["assign", "decline", "message", "availability", "arrange_repair", "complete", "reopen", "resolve_self"].includes(action) && <label>{action === "availability" ? "Available dates and time windows (one per line, include your time zone)" : ["assign", "arrange_repair"].includes(action) ? "Scope of work" : action === "complete" ? "What was repaired and how was it checked?" : action === "message" ? "Message to everyone on this repair" : action === "resolve_self" ? "What fixed the problem?" : action === "reopen" ? "What is still wrong?" : "Reason"}<textarea name="text" required rows={4} maxLength={4000} defaultValue={action === "availability" ? detail.availability.windows.join("\n") : ["assign", "arrange_repair"].includes(action) ? detail.assignment?.scope || detail.ticket.description : ""} /></label>}
           {["arrange_repair", "propose_visit"].includes(action) && <><p>Enter times in your local time zone: <strong>{timezone}</strong>.</p><label>Visit start<input name="starts_at" type="datetime-local" defaultValue={localTime(visits[0]?.starts_at)} required /></label><label>Visit end<input name="ends_at" type="datetime-local" defaultValue={localTime(visits[0]?.ends_at)} required /></label></>}
           {action === "confirm_visit" && <><label>Proposed visit<select name="appointment" required onChange={() => setPermission(false)} defaultValue={proposedVisit?.id || ""}><option value="" disabled>Choose a proposed visit</option>{visits.filter(visit => new Date(visit.starts_at).getTime() > Date.now()).map(visit => <option key={visit.id} value={visit.id}>{timestamp(visit.starts_at, visit.timezone)} ({visit.timezone})</option>)}</select></label><label className={styles.checkbox}><input type="checkbox" checked={permission} onChange={event => setPermission(event.target.checked)} />I explicitly give permission to enter for this visit.</label><p>{permission ? "Submitting confirms this visit and records your entry permission." : "Submitting records that entry permission is denied. No entry is authorized. Send a message in the repair chat if you need a different time."}</p></>}
-          {["message", "complete"].includes(action) && <><label>{action === "complete" ? "Completion photos (required)" : "Photos or videos (optional)"}<input type="file" accept={action === "complete" ? ".jpg,.jpeg,.png,.heic,.heif" : ".jpg,.jpeg,.png,.heic,.heif,.mp4,.mov"} multiple required={action === "complete" && !attachments.length} onChange={event => {
+          {["message", "complete"].includes(action) && <><label>{action === "complete" ? "Completion photos (required)" : "Photos or videos (optional)"}<input type="file" accept={action === "complete" ? repairPhotoAccept : repairMediaAccept} multiple onChange={event => {
             const files = Array.from(event.target.files || []);
             event.target.value = "";
             const limit = detail.work_order?.workflow_managed ? 20 : 10;
             if (attachments.length + files.length > 10 || detail.media.length + attachments.filter(item => !item.id).length + files.length > limit) { setError(`Choose up to 10 files at a time; this repair supports ${limit} files in total.`); return; }
-            if (files.some(file => !/\.(jpe?g|png|heic|heif|mp4|mov)$/i.test(file.name) || action === "complete" && /\.(mp4|mov)$/i.test(file.name) || file.size > (/\.(mp4|mov)$/i.test(file.name) ? 200 : 20) * 1024 * 1024)) { setError("Choose photos up to 20 MB or videos up to 200 MB. Completion evidence must include a photo."); return; }
+            if (files.some(file => !validRepairMedia(file, action === "complete"))) { setError("Choose photos up to 20 MB or videos up to 200 MB. Completion evidence must include a photo."); return; }
             setError("");
             setAttachments(old => [...old, ...files.map(file => ({ file, key: crypto.randomUUID() }))]);
           }} /></label>{attachments.map(item => <div className={styles.file} key={item.key}><span>{item.file.name}{item.ready ? " · Ready" : ""}</span><button type="button" onClick={() => setAttachments(old => old.filter(file => file.key !== item.key))}>Remove</button></div>)}</>}

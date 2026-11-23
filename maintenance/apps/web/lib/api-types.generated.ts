@@ -1,8 +1,8 @@
 // Generated from the FastAPI OpenAPI document by apps/api/scripts/generate_api_types.py.
 // Do not edit by hand.
 //
-// Component schemas: 279.
-// Success responses with a schema: 152.
+// Component schemas: 281.
+// Success responses with a schema: 153.
 // Success responses without a schema, typed as unknown: 0.
 // Those unknown responses are omitted from the route declaration, not filled in here.
 export const API_VERSION = "0.1.0";
@@ -504,6 +504,11 @@ export interface GrantOut {
   role: string;
 }
 
+export interface GuestMessageBody {
+  body: string;
+  field_key?: string | null;
+}
+
 export interface HealthOut {
   local_auth_enabled: boolean;
   request_id: string;
@@ -607,6 +612,11 @@ export interface IntakeOut {
   pets_declared: boolean | null;
   rental_history: string | null;
   version: number;
+}
+
+export interface IntakeQuestion {
+  body: string;
+  field_key: string;
 }
 
 export interface IntakeUpdatedOut {
@@ -1604,6 +1614,7 @@ export interface SlotPageOut {
 
 export interface SourceRepairOut {
   issue_id: string;
+  next_question?: IntakeQuestion | null;
   priority: string;
   source_fingerprint: string;
   status: string;
@@ -2886,6 +2897,23 @@ export interface apiPaths {
     get: {
       responses: {
         "200": BridgeOut;
+        "401": ErrorEnvelope;
+        "403": ErrorEnvelope;
+        "404": ErrorEnvelope;
+        "409": ErrorEnvelope;
+        "422": ErrorEnvelope;
+      };
+    };
+  };
+  "/v1/maintenance-bridge/messages/{issue_id}": {
+    post: {
+      parameters: {
+        issue_id: string;
+        "Idempotency-Key"?: string | null;
+      };
+      requestBody: GuestMessageBody;
+      responses: {
+        "200": SourceRepairOut;
         "401": ErrorEnvelope;
         "403": ErrorEnvelope;
         "404": ErrorEnvelope;

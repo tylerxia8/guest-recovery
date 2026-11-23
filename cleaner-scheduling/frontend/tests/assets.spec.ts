@@ -34,7 +34,7 @@ test("manifest.webmanifest is served with correct content", async ({ request }) 
   expect(response.status()).toBe(200);
   
   const manifest = await response.json();
-  expect(manifest.name).toBe("Turnover");
+  expect(manifest.name).toBe("Cleaner");
   expect(manifest.theme_color).toBe("#253122");
   expect(manifest.background_color).toBe("#f7f6f2");
   expect(manifest.icons).toHaveLength(3);
