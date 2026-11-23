@@ -7,7 +7,7 @@ import { enterDemoRole } from "../lib/demo";
 import Icon from "./ui/workspace-icon";
 import styles from "./maintenance-shell.module.css";
 
-export default function WorkspaceShell({ children, demo }: { children: ReactNode; demo: boolean }) {
+export default function WorkspaceShell({ children, demo, turnoverOrigin }: { children: ReactNode; demo: boolean; turnoverOrigin?: string }) {
   const pathname = usePathname();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -40,6 +40,7 @@ export default function WorkspaceShell({ children, demo }: { children: ReactNode
           event.preventDefault();
           window.location.assign(`${view.href}?ticket=${encodeURIComponent(ticket)}${new URL(window.location.href).searchParams.get("past") === "1" ? "&past=1" : ""}`);
         }} aria-current={pathname === view.href ? "page" : undefined}>{view.label}</Link>)}</nav>
+      {turnoverOrigin && <a href={turnoverOrigin}>Back to Turnover</a>}
       {demo && <span className={styles.badge}>Demo</span>}
     </header>
     <main id="main" className={styles.content}>{error && <p className={styles.error} role="alert">{error}</p>}{children}</main>

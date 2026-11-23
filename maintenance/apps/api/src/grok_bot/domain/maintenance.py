@@ -180,9 +180,9 @@ def add_message(session, organization_id, ticket_id, body: str, classifier_resul
         text(
             """
             INSERT INTO ticket_messages (id, organization_id, ticket_id, body, classifier_result, author_id, author_role, sender_label)
-            VALUES (:id, :organization_id, :ticket_id, :body, :classifier_result, CASE WHEN :origin = 'resident_phone' THEN NULL ELSE :actor_id END,
-              CASE WHEN :origin = 'resident_phone' OR :actor_id IS NULL OR :actor_id = (SELECT reporter_user_id FROM maintenance_tickets WHERE organization_id = :organization_id AND id = :ticket_id) THEN 'tenant' WHEN public.app_actor_is_manager() THEN 'manager' ELSE 'contractor' END,
-              CASE WHEN :origin = 'guest_recovery' THEN 'Guest (Hospitable)' WHEN :origin = 'resident_phone' OR :actor_id IS NULL THEN 'Resident (unverified)' ELSE COALESCE((SELECT display_name FROM users WHERE organization_id = :organization_id AND id = :actor_id),'Resident') END)
+            VALUES (:id, :organization_id, :ticket_id, :body, :classifier_result, CASE WHEN :origin = 'resident_phone' THEN NULL ELSE CAST(:actor_id AS uuid) END,
+              CASE WHEN :origin = 'resident_phone' OR CAST(:actor_id AS uuid) IS NULL OR CAST(:actor_id AS uuid) = (SELECT reporter_user_id FROM maintenance_tickets WHERE organization_id = :organization_id AND id = :ticket_id) THEN 'tenant' WHEN public.app_actor_is_manager() THEN 'manager' ELSE 'contractor' END,
+              CASE WHEN :origin = 'guest_recovery' THEN 'Guest (Hospitable)' WHEN :origin = 'resident_phone' OR CAST(:actor_id AS uuid) IS NULL THEN 'Resident (unverified)' ELSE COALESCE((SELECT display_name FROM users WHERE organization_id = :organization_id AND id = CAST(:actor_id AS uuid)),'Resident') END)
             """
         ),
         {

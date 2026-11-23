@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     routing_provider: str = "mock"
     auth_provider: str = "mock"
     workspace_signup_enabled: bool = False
+    operations_login_enabled: bool = False
+    operations_guest_messages_enabled: bool = False
+    operations_touchup_enabled: bool = False
+    operations_repair_enabled: bool = False
     workspace_registration_enabled: bool = True
     workspace_invite_signup_enabled: bool = False
     workspace_invite_email: str = Field(default="", repr=False)

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import "./globals.css";
+import { operationsOrigins } from "../lib/operations-login";
 import WorkspaceShell from "./workspace-shell";
 
 export const metadata = {
@@ -7,6 +8,8 @@ export const metadata = {
   description:
     "Report a problem and follow the repair.",
 };
+
+export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -17,6 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         </a>
         <WorkspaceShell
           demo={process.env.NEXT_PUBLIC_DEMO_FIXTURE === "sample"}
+          turnoverOrigin={operationsOrigins()?.turnover}
         >
           {children}
         </WorkspaceShell>
