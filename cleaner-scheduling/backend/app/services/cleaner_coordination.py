@@ -722,6 +722,22 @@ def assignment_action(
         claimed_assignment_id=None,
     )
     session.add(offer)
+    prop = session.get(Property, task.property_id)
+    _open_exception(
+        session,
+        clock=clock,
+        code="CLEANING_RELEASED",
+        dedupe_key=f"cleaner-offer-released:{offer.id}",
+        sync_run_id=None,
+        details={
+            "offer_id": str(offer.id),
+            "task_id": str(task.id),
+            "property_name": prop.name if prop else None,
+            "cleaner_name": cleaner.display_name,
+            "service_date": offer.service_date.isoformat(),
+        },
+        severity="warning",
+    )
     _advance_day(session, clock, assignment.service_date)
     _audit(
         session,
@@ -952,16 +968,23 @@ def claim_offer(
     return {"status": "claimed", "assignment_id": str(assignment.id), "offer_id": str(offer.id)}
 
 
-def _resolve_offer_alert(session: Session, clock: Clock, offer: CleaningOffer) -> None:
+def _resolve_offer_alert(
+    session: Session,
+    clock: Clock,
+    offer: CleaningOffer,
+    reason: str = "The cleaning job is covered or no longer requires reassignment.",
+) -> None:
     for row in session.scalars(
         select(OperationalException).where(
-            OperationalException.dedupe_key == f"cleaner-offer-unclaimed:{offer.id}",
+            OperationalException.dedupe_key.in_(
+                (f"cleaner-offer-released:{offer.id}", f"cleaner-offer-unclaimed:{offer.id}")
+            ),
             OperationalException.status.in_(("open", "acknowledged")),
         )
     ):
         row.status = "resolved"
         row.resolved_at = row.updated_at = clock.now()
-        row.resolution_reason = "The cleaning job is covered or no longer requires reassignment."
+        row.resolution_reason = reason
         row.version += 1
 
 
@@ -982,6 +1005,9 @@ def process_offer_deadlines(session: Session, settings: Settings, clock: Clock) 
             _resolve_offer_alert(session, clock, offer)
             continue
         if offer.status == "open" and offer.expires_at <= clock.now():
+            _resolve_offer_alert(
+                session, clock, offer, "The coverage window expired. See the unclaimed cleaning alert."
+            )
             offer.status = "expired"
             offer.version += 1
             offer.updated_at = clock.now()

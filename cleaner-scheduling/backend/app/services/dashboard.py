@@ -265,6 +265,7 @@ def build_dashboard(
         "ASSIGNMENT_EMAIL_BLOCKED",
         "EMAIL_DELIVERY_UNCERTAIN",
         "EMAIL_DELIVERY_FAILED",
+        "CLEANING_RELEASED",
         "CLEANING_UNCLAIMED",
     }
     email_problems = [
