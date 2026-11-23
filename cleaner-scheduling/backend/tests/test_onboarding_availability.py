@@ -25,6 +25,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+import pytest
 from app.clock import FrozenClock
 from app.config import Settings
 from app.db import get_engine, session_factory
@@ -392,19 +393,32 @@ class TestEmailLanguage:
         lang = email_language(cleaner)
         assert lang == "es", f"Should use first available reading language in priority order, got {lang}"
 
-    def test_email_language_none_when_no_match(self, settings: Settings) -> None:
-        """Email language returns None when no supported language found.
+    @pytest.mark.parametrize(
+        ("preference", "readable", "expected_subject", "expected_greeting"),
+        [
+            ("es", ["en", "pt"], "Tu enlace de registro en Turnover", "Hola"),
+            ("pt", ["en", "es"], "Seu link de cadastro no Turnover", "Olá"),
+            ("en", ["es", "pt"], "English subject", "Hi"),
+            (None, ["pt"], "Seu link de cadastro no Turnover", "Olá"),
+            (None, [], "English subject", "Hi"),
+            (None, ["de"], "English subject", "Hi"),
+        ],
+    )
+    def test_onboarding_email_uses_one_language(
+        self, preference, readable, expected_subject, expected_greeting
+    ) -> None:
+        from app.services.cleaner_language import localized_email
 
-        Mutation: Default to 'en' instead of None at cleaner_language.py.
-        Fails: assert lang is None
-        """
-        from app.services.cleaner_language import email_language
+        cleaner = Cleaner(display_name="Alex", preferred_language=preference, reading_languages=readable)
+        subject, body = localized_email(
+            cleaner,
+            "onboarding",
+            "English subject",
+            "Hi Alex, here is your link: https://example.test",
+            {"url": "https://example.test", "expires": "01/03/2027"},
+        )
 
-        cleaner = type(
-            "Cleaner",
-            (),
-            {"preferred_language": None, "reading_languages": ["de", "fr"]},
-        )()
-
-        lang = email_language(cleaner)
-        assert lang is None, f"Should return None for unsupported languages, got {lang}"
+        assert subject == expected_subject
+        assert body.startswith(f"{expected_greeting} Alex,")
+        assert body.count("https://example.test") == 1
+        assert "──────────" not in body
