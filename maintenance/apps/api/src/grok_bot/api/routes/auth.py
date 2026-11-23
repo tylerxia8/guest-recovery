@@ -93,7 +93,7 @@ class NoOperationsRedirect(HTTPRedirectHandler):
         return None
 
 
-@router.post("/auth/operations/redeem", response_model=LoginOut)
+@router.post("/auth/operations/redeem", include_in_schema=False, response_model=LoginOut)
 def operations_login(
     body: OperationsLoginBody, request: Request, session: Session = Depends(get_session, scope="function")
 ) -> dict:
