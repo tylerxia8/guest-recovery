@@ -59,5 +59,5 @@ def cleaning_form(csrf, query):
         + '<label>Latest finish (Eastern)<input type="datetime-local" name="deadline_at" required></label>'
         + '<label>Duration (minutes)<input type="number" name="duration_minutes" min="15" max="240" required></label>'
         + '<label><input type="checkbox" name="guest_access_confirmed" value="yes" required> Guest agreed to this entry window</label>'
-        + '<button type="submit">Create Turnover task</button></form>'
+        + '<button type="submit">Create Cleaner task</button></form>'
     )

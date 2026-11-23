@@ -1,6 +1,6 @@
 import hashlib
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from uuid import uuid4
 
@@ -456,19 +456,66 @@ def test_mnt_07_windows_do_not_authorize_entry(client, migrator_engine):
     assert estimate.json()["spending_limit"] is None
 
 
+def test_manager_board_flags_declined_work_and_denied_entry(client, app, migrator_engine):
+    staff = _staff(client, migrator_engine)
+    ticket = _report(client, staff["tenant"], "Sink leaks")
+    _workflow_assignment(client, staff, ticket["id"])
+    endpoint = f"/v1/maintenance-tickets/{ticket['id']}/workflow"
+
+    def action(role, **command):
+        response = client.post(endpoint, headers={**staff[role], "Idempotency-Key": str(uuid4())}, json=command)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def job(role):
+        response = client.get("/v1/maintenance-workflow?view=active", headers=staff[role])
+        assert response.status_code == 200, response.text
+        return next(item for item in response.json()["items"] if item["id"] == ticket["id"])
+
+    starts = app.state.clock.now() + timedelta(days=2)
+    proposed = action("contractor0", action="arrange_repair", scope="Fix the sink", starts_at=starts.isoformat(),
+                      ends_at=(starts + timedelta(hours=1)).isoformat(), timezone="America/New_York")
+    action("tenant", action="confirm_visit", appointment_id=proposed["appointments"][0]["id"], entry_permission="DENIED")
+    assert job("manager")["job_status"] == "ENTRY_DENIED"
+    assert job("tenant")["job_status"] != "ENTRY_DENIED"
+
+    action("contractor0", action="decline", reason="Unavailable")
+    assert job("manager")["job_status"] == "DECLINED"
+    assert "Assign someone else" in job("manager")["next_step"]
+    assert job("tenant")["job_status"] != "DECLINED"
+
+
 def test_mnt_08_completion_creates_no_financial_records(client, migrator_engine, fixture_scanner):
     staff = _staff(client, migrator_engine)
     ticket = _report(client, staff["tenant"], "Sink leaks")
     assigned = _workflow_assignment(client, staff, ticket["id"])
-    photo = _upload_and_complete(client, staff["contractor0"], ticket["id"], _jpeg_bytes(), "image/jpeg", "completed.jpg")
+    photos = [_upload_and_complete(client, staff["contractor0"], ticket["id"], _jpeg_bytes(), "image/jpeg", "completed.jpeg")]
+    for image_format, extension, content_type in (
+        ("PNG", "png", "image/png"),
+        ("HEIF", "heif", "image/heif"),
+        ("WEBP", "webp", "image/webp"),
+        ("GIF", "gif", "image/gif"),
+        ("BMP", "bmp", "image/bmp"),
+        ("TIFF", "tiff", "image/tiff"),
+        ("AVIF", "avif", "image/avif"),
+    ):
+        buffer = BytesIO()
+        image = Image.new("RGB", (24, 16), "blue")
+        if image_format == "HEIF":
+            from_pillow(image).save(buffer)
+        else:
+            image.save(buffer, format=image_format)
+        photos.append(_upload_and_complete(client, staff["contractor0"], ticket["id"], buffer.getvalue(), content_type, f"completed.{extension}"))
+    assert all(photo["status"] == "READY" for photo in photos), photos
+    media_ids = [photo["id"] for photo in photos]
     before = _journal_count(migrator_engine, staff["org_id"])
-    command = {"action": "complete", "notes": "Replaced the trap and checked for leaks.", "media_ids": [photo["id"]]}
+    command = {"action": "complete", "notes": "Replaced the trap and checked for leaks.", "media_ids": media_ids}
     headers = {**staff["contractor0"], "Idempotency-Key": f"complete-{ticket['id']}"}
     completed = client.post(f"/v1/maintenance-tickets/{ticket['id']}/workflow", headers=headers, json=command)
     assert completed.status_code == 200, completed.text
     assert completed.json()["ticket"]["status"] == "COMPLETION_REVIEW"
     assert completed.json()["work_order"]["completed_at"]
-    assert completed.json()["work_order"]["completion_media_ids"] == [photo["id"]]
+    assert completed.json()["work_order"]["completion_media_ids"] == media_ids
     replay = client.post(f"/v1/maintenance-tickets/{ticket['id']}/workflow", headers=headers, json=command)
     assert replay.status_code == 200, replay.text
     assert replay.json() == completed.json()

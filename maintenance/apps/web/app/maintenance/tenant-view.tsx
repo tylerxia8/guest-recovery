@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { repairMediaAccept, repairMediaType, validRepairMedia } from "../../lib/repair-media";
 import { API_BASE, getToken } from "../../lib/api";
 import WorkflowPanel, { workflowRequest as read } from "./workflow-panel";
 import styles from "./tenant.module.css";
@@ -171,11 +172,7 @@ export default function TenantView() {
     if (!files) return;
     const incoming = Array.from(files);
     if (attachments.length + incoming.length + (saved.current ? ticket?.media.length || 0 : 0) > 10) { setError("Choose up to 10 photos or videos."); return; }
-    for (const file of incoming) {
-      const video = /\.(mp4|mov)$/i.test(file.name);
-      if (!/\.(jpe?g|png|heic|heif|mp4|mov)$/i.test(file.name)) { setError("Choose JPEG, PNG, HEIC, HEIF, MP4 or MOV files."); return; }
-      if (file.size > (video ? 200 : 20) * 1024 * 1024) { setError(video ? "Videos must be smaller than 200 MB and no longer than 2 minutes." : "Photos must be smaller than 20 MB."); return; }
-    }
+    if (incoming.some(file => !validRepairMedia(file))) { setError("Choose supported photos up to 20 MB or videos up to 200 MB and 2 minutes."); return; }
     setError("");
     setAttachments(old => [...old, ...incoming.map(file => ({ file, key: crypto.randomUUID() }))]);
   }
@@ -187,7 +184,8 @@ export default function TenantView() {
     const file = attachment.file;
     const bytes = await file.arrayBuffer();
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map(n => n.toString(16).padStart(2, "0")).join("");
-    const contentType = /\.mov$/i.test(file.name) ? "video/quicktime" : /\.mp4$/i.test(file.name) ? "video/mp4" : /\.hei[cf]$/i.test(file.name) ? "image/heic" : /\.png$/i.test(file.name) ? "image/png" : "image/jpeg";
+    const contentType = repairMediaType(file);
+    if (!contentType) throw new Error("Choose a supported photo or video.");
     const slot = await read(`/v1/maintenance-tickets/${id}/media-uploads`, { method: "POST", headers: { "Idempotency-Key": attachment.key }, body: JSON.stringify({ filename: file.name, content_type: contentType, size_bytes: file.size, sha256: hash }) });
     attachment.slot = slot;
     if (!attachment.uploaded) {
@@ -237,7 +235,7 @@ export default function TenantView() {
   }
   const visibleItems = items.filter(item => showPast === ["COMPLETED", "CLOSED", "CANCELED"].includes(item.status));
   const picker = <div className={styles.attachments}>
-    {photosEnabled ? <label><span className={styles.attachmentHeading}>Photos or videos <span className={styles.optional}>Optional</span></span><input type="file" multiple accept=".jpg,.jpeg,.png,.heic,.heif,.mp4,.mov" disabled={busy} onChange={event => { stage(event.target.files); event.target.value = ""; }} /><small className={styles.attachmentHelp}><span>Photos up to 20 MB · Videos up to 200 MB and 2 minutes</span><span>Only record if it’s safe.</span></small></label> : <small>Photos are unavailable here. Your description is enough to send a request.</small>}
+    {photosEnabled ? <label><span className={styles.attachmentHeading}>Photos or videos <span className={styles.optional}>Optional</span></span><input type="file" multiple accept={repairMediaAccept} disabled={busy} onChange={event => { stage(event.target.files); event.target.value = ""; }} /><small className={styles.attachmentHelp}><span>Photos up to 20 MB · Videos up to 200 MB and 2 minutes</span><span>Only record if it’s safe.</span></small></label> : <small>Photos are unavailable here. Your description is enough to send a request.</small>}
     {attachments.length > 0 && <ul>{attachments.map(item => <li key={item.key}><span>{item.file.name}</span><button type="button" disabled={busy} onClick={() => setAttachments(old => old.filter(value => value.key !== item.key))}>Remove</button></li>)}</ul>}
   </div>;
   if (!ready) return <section className={styles.page}><p role="status">Loading your repairs…</p></section>;

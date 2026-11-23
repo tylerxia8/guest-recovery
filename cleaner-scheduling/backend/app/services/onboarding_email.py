@@ -67,10 +67,10 @@ def onboarding_preview(
         "grant_id": str(grant.id),
         "expires_at": grant.expires_at.isoformat(),
         "recipient": recipient,
-        "subject": "Your Turnover onboarding link",
+        "subject": "Your Cleaner onboarding link",
         "body": (
             f"Hi {cleaner.display_name},\n\n"
-            "Your property manager invited you to Turnover. "
+            "Your property manager invited you to Cleaner. "
             "Set your working hours, breaks and starting address here:\n\n"
             f"{url}\n\nThis private link expires {expires}. Do not forward it.\n"
         ),

@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
   const upstream = apiOrigin(origin);
   const headers = await proxyIdentityHeaders(request, "POST", grantPath);
   if (!upstream || !headers) {
-    return new NextResponse("Turnover is temporarily unavailable.", {status: 503, headers: privateHeaders});
+    return new NextResponse("Cleaner is temporarily unavailable.", {status: 503, headers: privateHeaders});
   }
   headers.set("Content-Type", "application/json");
   headers.set("Authorization", `Bearer ${token}`);

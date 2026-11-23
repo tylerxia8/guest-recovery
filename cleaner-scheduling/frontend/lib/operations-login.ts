@@ -1,7 +1,7 @@
 const flowValue = /^[A-Za-z0-9_-]{43}$/;
 
 const tools = [
-  {client: "guest-recovery", label: "Guest Recovery", callback: () => process.env.OPERATIONS_GUEST_RECOVERY_CALLBACK},
+  {client: "guest-recovery", label: "Guest Messages", callback: () => process.env.OPERATIONS_GUEST_RECOVERY_CALLBACK},
   {client: "maintenance", label: "Maintenance", callback: () => process.env.OPERATIONS_MAINTENANCE_CALLBACK},
 ] as const;
 

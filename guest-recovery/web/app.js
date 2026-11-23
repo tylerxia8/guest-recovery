@@ -60,7 +60,7 @@ function sharedStayDetails(issue, container) {
     const details = node('details', '', 'property-details');
     const status = node('p', '', 'help-text');
     status.setAttribute('role', 'status');
-    details.append(node('summary', 'Turnover stay details'), status);
+    details.append(node('summary', 'Cleaner stay details'), status);
     container.before(details);
     details.addEventListener('toggle', async () => {
       if (!details.open || details.dataset.loading || details.dataset.loaded) return;
@@ -75,13 +75,13 @@ function sharedStayDetails(issue, container) {
         });
         if (response.status === 401) {
           status.replaceChildren('Shared access expired. ');
-          const signIn = node('a', 'Reconnect with Turnover');
+          const signIn = node('a', 'Reconnect with Cleaner');
           signIn.href = '/auth/operations/start';
           status.append(signIn);
           return;
         }
         if (response.status === 404) {
-          status.textContent = 'Turnover has no matching stay for this property.';
+          status.textContent = 'Cleaner has no matching stay for this property.';
           return;
         }
         if (!response.ok) throw new Error('Stay details unavailable');
@@ -99,7 +99,7 @@ function sharedStayDetails(issue, container) {
         status.textContent = '';
         details.dataset.loaded = 'true';
       } catch {
-        status.textContent = 'Could not load Turnover stay details. Close and reopen to retry.';
+        status.textContent = 'Could not load Cleaner stay details. Close and reopen to retry.';
       } finally {
         delete details.dataset.loading;
       }

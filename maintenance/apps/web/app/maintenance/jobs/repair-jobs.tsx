@@ -80,7 +80,7 @@ export default function RepairJobs({ audience = "repairman" }: { audience?: "rep
     if (showPast !== ["COMPLETED", "CLOSED", "CANCELED"].includes(job.status)) continue;
     const active = !showPast;
     const unassigned = ["UNASSIGNED", "DECLINED"].includes(job.job_status) && !["INTAKE_OPEN", "TRIAGE_PENDING", "WAITING_TENANT"].includes(job.status);
-    (active && (unassigned || job.priority !== "ROUTINE" || job.due_flags.length > 0) ? attention : repairs).push(job);
+    (active && (unassigned || job.job_status === "ENTRY_DENIED" || job.priority !== "ROUTINE" || job.due_flags.length > 0) ? attention : repairs).push(job);
   }
   return <section className={styles.board}>
     <header className={styles.heading}><div><h1>{showPast ? "Past repairs" : audience === "manager" ? "Review repairs" : "My repairs"}</h1><p>{showPast ? "Open an earlier conversation or report that a problem has returned." : audience === "manager" ? "Review the problem, reply to the tenant, or pass it to a repairman." : "Your jobs, visits, and conversations."}</p></div><button className={styles.historyToggle} type="button" disabled={loading} aria-pressed={showPast} onClick={() => { select(""); setJobs([]); setPageCount(1); setShowPast(!showPast); }}>{showPast ? "Back to active repairs" : "Past repairs"}</button></header>

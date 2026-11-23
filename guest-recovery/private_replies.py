@@ -1,4 +1,4 @@
-"""Workspace-local drafts for guest messages recently verified by Turnover."""
+"""Workspace-local drafts for guest messages recently verified by Cleaner."""
 
 import hashlib
 import json

@@ -26,7 +26,7 @@ function OnboardingContent() {
   const token = useSyncExternalStore(subscribe, getToken, serverToken);
   const {language} = useCleanerLanguage();
   const text = copy[language];
-  return <main className="cleaner-onboarding" lang={language}><LanguageSelector /><header><div className="onboarding-wordmark"><Image src="/brand/turnover-mark.svg" alt="" width={32} height={32} aria-hidden="true" />Turnover</div><p className="eyebrow">{text.eyebrow}</p><h1>{text.title}</h1><p>{text.intro}</p><Image src="/illustrations/G10-onboarding-welcome-light.svg" width={280} height={180} alt="" aria-hidden="true" className="onboarding-welcome-illustration" /></header>
+  return <main className="cleaner-onboarding" lang={language}><LanguageSelector /><header><div className="onboarding-wordmark"><Image src="/brand/turnover-mark.svg" alt="" width={32} height={32} aria-hidden="true" />Cleaner</div><p className="eyebrow">{text.eyebrow}</p><h1>{text.title}</h1><p>{text.intro}</p><Image src="/illustrations/G10-onboarding-welcome-light.svg" width={280} height={180} alt="" aria-hidden="true" className="onboarding-welcome-illustration" /></header>
     {/^(?:[0-9a-f]{32}\.)?[0-9a-f]{32}\.[0-9a-f]{64}$/.test(token) ? <WeeklyHours key={token} onboardingToken={token} /> : <p role="status">{text.expired}</p>}
     <p className="onboarding-privacy">{text.privacy}</p>
   </main>;
