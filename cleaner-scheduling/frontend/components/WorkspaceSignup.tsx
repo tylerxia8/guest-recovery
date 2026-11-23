@@ -126,7 +126,7 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
         {step === 2 && (!connectionOpen || !internalConnection) ? <><button type="button" disabled={!internalConnection} onClick={() => setConnectionOpen(true)}>Connect to Hospitable</button>{connectionOpen || !internalConnection ? <p className="workspace-note" role="status">Hospitable authorization is not configured yet. Your account and setup progress are saved. You can continue here once the connection is available.</p> : null}</> : null}
         {step === 2 && internalConnection && connectionOpen ? <>
           <div className="workspace-connection-top"><span className="workspace-connection-mark" aria-hidden="true">H</span><span className="workspace-read-only">Read-only access</span></div>
-          <div className="workspace-connection-title"><h2>Connect Hospitable</h2><p>Bring your houses and reservations into Turnover.</p></div>
+          <div className="workspace-connection-title"><h2>Connect Hospitable</h2><p>Bring your houses and reservations into Cleaner.</p></div>
           <label>Access token<input type="password" autoComplete="off" value={token} onChange={event => {setToken(event.target.value); keys.current.connection = "";}} required disabled={busy} spellCheck={false} aria-describedby="workspace-token-hint" placeholder="Paste your read-only token" /><small id="workspace-token-hint">Encrypted and saved in your workspace.</small></label>
           <details className="workspace-token-help">
             <summary>How to get your access token</summary>

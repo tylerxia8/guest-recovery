@@ -273,7 +273,7 @@ def operations_guest_messages(
     workspace = session.info["workspace_id"]
     connection = session.get(WorkspaceConnection, workspace)
     if connection is None or not connection.token_ciphertext:
-        raise AppError("hospitable_not_connected", "Connect Hospitable in Turnover to load guest messages.", 409)
+        raise AppError("hospitable_not_connected", "Connect Hospitable in Cleaner to load guest messages.", 409)
     ciphertext = connection.token_ciphertext
     try:
         external_id = str(uuid.UUID(stay.external_id))

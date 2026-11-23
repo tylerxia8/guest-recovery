@@ -68,7 +68,7 @@ class OperationsLoginTests(unittest.TestCase):
             operations_login.finish(lambda: nullcontext(MagicMock()), self.config, self.headers, self.query)
             self.addCleanup(operations_login.forget_read_access, session_hash)
             query = {'property_external_id': ['house'], 'reservation_external_id': ['booking']}
-            with self.assertRaisesRegex(AuthError, 'Sign in with Turnover'):
+            with self.assertRaisesRegex(AuthError, 'Sign in with Cleaner'):
                 operations_login.stay_context(self.issuer, 'another-session', query)
             result = operations_login.stay_context(self.issuer, session_hash, query)
             self.assertEqual(result['reservation']['hospitable_id'], 'booking')

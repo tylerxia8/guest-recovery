@@ -252,7 +252,7 @@ schedulerForm.onsubmit = async event => {
   try {
     const result = await submitAction('/api/settings/cleaner-scheduler', Object.fromEntries(new FormData(schedulerForm)));
     schedulerForm.elements.token.value = '';
-    document.querySelector('#cleaner-scheduler-feedback').textContent = result.stay_configured ? 'Connected. Cleaning readiness and checkout requests can now be checked. Guest replies still require approval.' : 'Add a Guest Recovery connection token to connect.';
+    document.querySelector('#cleaner-scheduler-feedback').textContent = result.stay_configured ? 'Connected. Cleaning readiness and checkout requests can now be checked. Guest replies still require approval.' : 'Add a Guest Messages connection token to connect.';
     await load();
   } catch (error) { document.querySelector('#cleaner-scheduler-feedback').textContent = error.message; }
   finally { button.disabled = false; }

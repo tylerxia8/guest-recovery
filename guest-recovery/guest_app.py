@@ -321,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
 
         issuer = turnover_origin()
         if not issuer or not origin.startswith('https://'):
-            raise AuthError(503, 'Private Guest Recovery is unavailable.')
+            raise AuthError(503, 'Private Guest Messages is unavailable.')
         if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
             raise AuthError(405, 'This action is not available in the shared workspace yet.')
         if self.path == '/auth/operations/start':
@@ -362,7 +362,7 @@ class Handler(BaseHTTPRequestHandler):
         from html import escape
 
         page = (ROOT / 'web' / 'private-workspace.html').read_text().replace(
-            '<!-- turnover-link -->', '<a href="' + escape(issuer, quote=True) + '">Back to Turnover</a>'
+            '<!-- turnover-link -->', '<a href="' + escape(issuer, quote=True) + '">Back to Cleaner</a>'
         )
         if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
             if self.command != 'POST':
@@ -392,7 +392,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/cleaning-touchup':
                 from private_touchup import cleaning_payload
                 result = send_touchup(issuer, actor['token_hash'], cleaning_payload(parsed))
-                content = '<h2>Cleaning request saved</h2><p>Turnover task ' + escape(str(result['task_id'])) + '</p>'
+                content = '<h2>Cleaning request saved</h2><p>Cleaner task ' + escape(str(result['task_id'])) + '</p>'
             else:
                 from private_repair import answer_form, answer_payload, repair_payload
                 answering = self.path == '/repair-answer'
@@ -442,9 +442,9 @@ class Handler(BaseHTTPRequestHandler):
                 data = stays(issuer, actor['token_hash'])
                 records = data.get('stays')
                 if not isinstance(records, list) or len(records) > 100:
-                    raise AuthError(503, 'Turnover stays are temporarily unavailable.')
+                    raise AuthError(503, 'Cleaner stays are temporarily unavailable.')
                 if any(not isinstance(stay, dict) for stay in records):
-                    raise AuthError(503, 'Turnover stays are temporarily unavailable.')
+                    raise AuthError(503, 'Cleaner stays are temporarily unavailable.')
                 from urllib.parse import urlencode
 
                 rows = ''.join(
@@ -464,7 +464,7 @@ class Handler(BaseHTTPRequestHandler):
         except AuthError as error:
             content = '<p>' + escape(str(error)) + '</p>'
             if error.status == 401:
-                content += '<p><a href="/auth/operations/start">Reconnect with Turnover</a></p>'
+                content += '<p><a href="/auth/operations/start">Reconnect with Cleaner</a></p>'
         self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
 
     def dispatch(self):
@@ -579,7 +579,7 @@ class Handler(BaseHTTPRequestHandler):
                     if operations_login.configuration(origin):
                         content = content.replace(
                             b'<!-- operations-login -->',
-                            b'<p><a class="button" href="/auth/operations/start">Sign in with Turnover</a></p>',
+                            b'<p><a class="button" href="/auth/operations/start">Sign in with Cleaner</a></p>',
                         )
                 self.respond(200, content, content_type)
                 return
@@ -904,7 +904,7 @@ def main():
     if private_mode:
         from operations_login import turnover_origin
         if not configured_origin or not turnover_origin():
-            raise SystemExit('Private Guest Recovery requires HTTPS origins for Guest Recovery and Turnover')
+            raise SystemExit('Private Guest Messages requires HTTPS origins for Guest Messages and Cleaner')
     else:
         initialize()
         if configured_origin:

@@ -1,4 +1,4 @@
-"""Short-lived access to selected Turnover operations for linked Lucena tools."""
+"""Short-lived access to selected Cleaner operations for linked Lucena tools."""
 
 import re
 import secrets

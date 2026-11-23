@@ -48,7 +48,7 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
   }
 
   const toolNavigation = operationsTools.length > 0 ? <nav aria-label="Workspace tools">
-    <Link href={pathname === "/signup" ? "/signup" : "/dashboard"} aria-current="page">Turnover</Link>
+    <Link href={pathname === "/signup" ? "/signup" : "/dashboard"} aria-current="page">Cleaner</Link>
     {operationsTools.map(tool => <a key={tool.label} href={tool.href}>{tool.label}</a>)}
   </nav> : null;
 
@@ -56,7 +56,7 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
   if (pathname === "/onboarding" || pathname === "/cleaner" || pathname === "/login") return <>{children}</>;
 
   if (workspaceSignup) return <>
-    <header className="app-header"><Link href="/dashboard" className="brand"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Turnover<small>Cleaning coordination</small></span></Link>{connected ? <div className="account-actions"><Link href="/security" aria-current={pathname === "/security" ? "page" : undefined}>Security</Link><button type="button" disabled={busy} onClick={async () => {
+    <header className="app-header"><Link href="/dashboard" className="brand"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Cleaner<small>Cleaning coordination</small></span></Link>{connected ? <div className="account-actions"><Link href="/security" aria-current={pathname === "/security" ? "page" : undefined}>Security</Link><button type="button" disabled={busy} onClick={async () => {
       setBusy(true); setMessage("");
       try {
         const response = await fetch("/auth/logout", {method: "POST", signal: AbortSignal.timeout(20000)});
@@ -65,14 +65,14 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
       } catch { setMessage("Could not sign out. Try again."); setBusy(false); }
     }}>Sign out</button></div> : <Link href={pathname === "/login" ? "/signup" : "/login"}>{pathname === "/login" ? "Create account" : "Sign in"}</Link>}</header>
     {toolNavigation}
-    {connected ? <nav aria-label="Turnover navigation">{NAV_LINKS.map(({ label, href, icon: Icon }) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined}><Icon size={16} strokeWidth={2} aria-hidden="true" />{label}</Link>)}</nav> : null}
+    {connected ? <nav aria-label="Cleaner navigation">{NAV_LINKS.map(({ label, href, icon: Icon }) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined}><Icon size={16} strokeWidth={2} aria-hidden="true" />{label}</Link>)}</nav> : null}
     {sessionExpired ? <p role="alert">Your session expired. <Link href="/login">Sign in to continue</Link>.</p> : null}
     {message ? <p role="alert">{message}</p> : null}{children}
   </>;
 
   return (
     <>
-      <header className="app-header"><Link href="/" className="brand" aria-label="Turnover home"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Turnover<small>Cleaning coordination</small></span></Link>{!liveReadOnly ? <div className="app-header-meta"><span className="mode-pill"><span className="mode-dot" aria-hidden="true" />{demo ? "Synthetic demo · Nov 10, 2026 · 1 PM ET" : "Mock workspace"}</span></div> : null}</header>
+      <header className="app-header"><Link href="/" className="brand" aria-label="Cleaner home"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Cleaner<small>Cleaning coordination</small></span></Link>{!liveReadOnly ? <div className="app-header-meta"><span className="mode-pill"><span className="mode-dot" aria-hidden="true" />{demo ? "Synthetic demo · Nov 10, 2026 · 1 PM ET" : "Mock workspace"}</span></div> : null}</header>
       {liveReadOnly ? null : <ShellBanner />}
       <nav aria-label="Primary">
         {NAV_LINKS.map(({ label, href, icon: Icon }) => (
@@ -126,7 +126,7 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
       </details> : null}
       {message ? <p role="alert">{message}</p> : null}
       {children}
-      <footer>Turnover · America/New_York · {liveReadOnly ? "Read-only Hospitable import · No upstream changes" : "Synthetic data and mock integrations"}</footer>
+      <footer>Cleaner · America/New_York · {liveReadOnly ? "Read-only Hospitable import · No upstream changes" : "Synthetic data and mock integrations"}</footer>
     </>
   );
 }
