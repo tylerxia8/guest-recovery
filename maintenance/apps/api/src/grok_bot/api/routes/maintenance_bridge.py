@@ -397,7 +397,7 @@ def verify_operations_repair(request, session, property_id, reservation_id):
     return principal, identity
 
 
-@router.post("/maintenance-bridge/operations-requests", response_model=SourceRepairOut)
+@router.post("/maintenance-bridge/operations-requests", include_in_schema=False, response_model=SourceRepairOut)
 def operations_import_request(
     body: ImportBody,
     request: Request,
@@ -417,7 +417,7 @@ class OperationsAnswer(GuestMessageBody):
     field_key: str = Field(min_length=1, max_length=100)
 
 
-@router.post("/maintenance-bridge/operations-answers", response_model=SourceRepairOut)
+@router.post("/maintenance-bridge/operations-answers", include_in_schema=False, response_model=SourceRepairOut)
 def operations_answer(
     body: OperationsAnswer,
     request: Request,
