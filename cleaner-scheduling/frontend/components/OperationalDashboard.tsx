@@ -11,6 +11,16 @@ import { EmptyState } from "./EmptyState";
 export type TaskRow = { kind?: string; guest_scope?: string | null; version?: number; confirmed_checkout_at?: string | null; can_confirm_early_checkout?: boolean; duration_minutes?: number | null; id: string; property_name: string; cleaner_name: string | null; planned_start: string | null; planned_end: string | null; acknowledged: boolean; status: string; pending: boolean; deadline_at: string | null; release_at: string; cleaned?: boolean; completed_at?: string | null; overdue?: boolean; assignment_status?: string | null; needs_assignment?: boolean; deadline_conflict?: boolean; travel_before_seconds?: number | null; travel_from?: string | null; travel_source?: string | null };
 const time = (value: string | null) => value ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(value)) : "No deadline";
 const datedTime = (value: string | null | undefined) => value ? new Intl.DateTimeFormat("en-US", {timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}).format(new Date(value)) : "Not scheduled";
+function taskStatus(task: TaskRow) {
+  if (task.status === "completed") return "Cleaned";
+  if (task.status === "canceled") return "Canceled";
+  if (task.assignment_status === "blocked") return "Blocked";
+  if (task.deadline_conflict) return "Deadline conflict";
+  if (task.overdue) return "Overdue";
+  if (task.needs_assignment ?? !task.cleaner_name) return "Unassigned";
+  return task.acknowledged ? "Confirmed" : "Assigned";
+}
+
 export function TaskList({ tasks }: { tasks: TaskRow[] }) {
   return <div className="cleaning-table-wrap" role="region" aria-label="Upcoming cleaning assignments" tabIndex={0}><table className="cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Ready to clean</th><th scope="col">Cleaning deadline</th><th scope="col">Drive before cleaning</th><th scope="col">Assigned cleaner / planned time</th><th scope="col">Cleaned?</th></tr></thead>
     <tbody>{tasks.map(task => <tr key={task.id} className={task.overdue ? "cleaning-overdue" : ""}>
@@ -82,6 +92,10 @@ export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = f
   const cleaned = rows.filter(task => task.status === "completed");
   const query = search.trim().toLocaleLowerCase();
   const visible = rows.filter(task => (filter === "all" || (filter === "unassigned" ? (task.needs_assignment ?? !task.cleaner_name) && task.status !== "completed" : filter === "completed" ? task.status === "completed" : task.status !== "completed")) && `${task.property_name} ${task.cleaner_name ?? "unassigned"}`.toLocaleLowerCase().includes(query));
+  const attention = data?.email_automation?.problems.filter(problem =>
+    problem.code === "CLEANING_RELEASED" || problem.code === "CLEANING_UNCLAIMED"
+  ) ?? [];
+  const scheduleHref = data ? `/schedules?date=${encodeURIComponent(data.service_date)}` : "/schedules";
   function moveDate(offset: number) {
     if(!snapshot?.data) return;
     const fallback = snapshot.data.business_date;
@@ -96,30 +110,56 @@ export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = f
     {workspaceSignupEnabled ? <OnboardingEmailNotice /> : null}
     {error ? <p role="alert">{error}</p> : null}
     {checkoutNotice ? <p role="status">{checkoutNotice}</p> : null}
+    {attention.length || unassigned.length ? <section className="cleaning-attention" aria-labelledby="cleaning-attention-title">
+      <h2 id="cleaning-attention-title">Needs attention</h2>
+      <ul>{unassigned.length ? <li>
+        <div><strong>{unassigned.length} {unassigned.length === 1 ? "clean needs" : "cleans need"} a cleaner</strong><span>For the date shown below</span></div>
+        <button type="button" className="secondary" onClick={() => {setFilter("unassigned"); document.getElementById("cleaning-jobs")?.focus();}}>Show unassigned</button>
+      </li> : null}{attention.map(problem => <li key={problem.id}>
+        <div>
+          <strong>{problem.property_name ?? "Cleaning job"}</strong>
+          <span>{problem.code === "CLEANING_RELEASED" ? "Cleaner released the job" : "Cleaning still needs coverage"}{problem.service_date ? ` · ${problem.service_date}` : ""}{problem.cleaner_name ? ` · ${problem.cleaner_name}` : ""}</span>
+        </div>
+        <Link href="/exceptions">Review coverage</Link>
+      </li>)}</ul>
+    </section> : null}
     <div className="cleaning-summary" aria-label="Cleaning summary">{[
       ["To clean", data ? open.length : "—"], ["Assigned", data ? open.length - unassigned.length : "—"], ["Unassigned", data ? unassigned.length : "—"], ["Cleaned", data ? cleaned.length : "—"],
     ].map(([label, count]) => <div className="cleaning-summary-card" key={label}><span>{label}</span><strong>{count}</strong></div>)}</div>
-    <section className="today-cleaning-board" aria-label={isToday ? "Today’s houses" : "Selected day’s houses"}>
+    <section id="cleaning-jobs" className="today-cleaning-board" tabIndex={-1} aria-label={isToday ? "Today’s houses" : "Selected day’s houses"}>
       <div className="cleaning-board-toolbar"><div className="cleaning-board-filters" role="group" aria-label="Show cleaning work">{[["open", "To clean"], ["unassigned", "Unassigned"], ["completed", "Cleaned"], ["all", "All"]].map(([value, label]) => <button type="button" aria-pressed={filter === value} className={filter === value ? "is-selected" : ""} key={value} onClick={() => setFilter(value)}>{label}</button>)}</div><label className="cleaning-board-search"><span className="visually-hidden">Find a house or cleaner</span><input type="search" placeholder="Find a house or cleaner" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
-      {loading ? <p className="cleaning-board-empty">Loading cleaning work…</p> : data && visible.length ? <div className="today-cleaning-table-wrap" role="region" aria-label="Cleaning assignments" tabIndex={0}><table className="today-cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Assigned cleaner</th><th scope="col">Clean by</th><th scope="col">Status</th></tr></thead><tbody>{visible.map(task => {
+      {loading ? <p className="cleaning-board-empty">Loading cleaning work…</p> : data && visible.length ? <><div className="today-cleaning-table-wrap" role="region" aria-label="Cleaning assignments" tabIndex={0}><table className="today-cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Assigned cleaner</th><th scope="col">Clean by</th><th scope="col">Status</th></tr></thead><tbody>{visible.map(task => {
         const done = task.status === "completed";
-        const status = done ? "Cleaned" : task.assignment_status === "blocked" ? "Blocked" : task.deadline_conflict ? "Deadline conflict" : task.overdue ? "Overdue" : !task.cleaner_name ? "Unassigned" : task.acknowledged ? "Confirmed" : "Assigned";
+        const status = taskStatus(task);
         return <tr key={task.id} className={task.overdue ? "is-overdue" : ""}>
           <th scope="row"><strong>{task.property_name}</strong>{task.kind === "guest_touchup" ? <small>Guest touch-up{task.guest_scope ? ` · ${task.guest_scope}` : ""}</small> : null}<small>Ready after {datedTime(task.release_at)}{task.duration_minutes != null ? ` · ${task.duration_minutes} min` : ""}</small>{task.confirmed_checkout_at ? <small>Guest departure confirmed</small> : task.can_confirm_early_checkout && task.version ? <EarlyCheckout taskId={task.id} version={task.version} onConfirmed={message => {setCheckoutNotice(message); setRefreshTick(value => value + 1);}} /> : null}</th>
           <td><div className={`cleaner-assignment${!task.cleaner_name ? " is-unassigned" : ""}`}><span className="cleaner-initials" aria-hidden="true">{task.cleaner_name ? task.cleaner_name.split(/\s+/).filter(Boolean).map(part => part[0]).slice(0, 2).join("") : "—"}</span><div><strong>{task.cleaner_name ?? "Unassigned"}</strong><small>{task.planned_start ? `${datedTime(task.planned_start)} – ${time(task.planned_end)}` : "Not scheduled"}</small>{task.acknowledged && !done && status !== "Confirmed" ? <small>Cleaner confirmed</small> : null}</div></div></td>
           <td><span className={task.overdue ? "cleaning-deadline-overdue" : ""}>{task.deadline_at ? datedTime(task.deadline_at) : "Needs deadline"}</span>{task.overdue && status !== "Overdue" ? <small className="cleaning-deadline-overdue">Overdue</small> : null}{task.deadline_conflict && status !== "Deadline conflict" ? <small className="cleaning-deadline-overdue">Planned finish misses deadline</small> : null}</td>
           <td><span className={`cleaning-task-status${done ? " is-cleaned" : task.overdue || task.deadline_conflict || task.assignment_status === "blocked" ? " needs-review" : !task.cleaner_name ? " is-unassigned" : ""}${status === "Overdue" ? " is-overdue" : ""}`}>{status}</span>{task.completed_at ? <small>{datedTime(task.completed_at)}</small> : null}</td>
         </tr>;
-      })}</tbody></table></div> : data ? <EmptyState variant="dashboard" title={rows.length && filter === "open" && !query && !open.length ? "All cleaning is done" : rows.length ? "No matching cleans" : "No cleaning work on this date"} description={rows.length && filter === "open" && !query && !open.length ? "Open Cleaned to review finished work." : rows.length ? "Try another filter or search." : "Imported cleaning work will appear here."} /> : null}
+      })}</tbody></table></div>
+      <ul className="cleaning-phone-list" aria-label="Cleaning jobs">{visible.map(task => {
+        const status = taskStatus(task);
+        const needsReview = ["Overdue", "Blocked", "Deadline conflict", "Unassigned"].includes(status);
+        return <li key={task.id} className="cleaning-phone-job">
+          <div className="cleaning-phone-title">
+            <h3>{task.property_name}</h3>
+            <span className={`cleaning-task-status${needsReview ? " needs-review" : status === "Cleaned" ? " is-cleaned" : ""}`}>{status}</span>
+          </div>
+          {task.kind === "guest_touchup" ? <small>Guest touch-up{task.guest_scope ? ` · ${task.guest_scope}` : ""}</small> : null}
+          <dl>
+            <div><dt>Clean by</dt><dd>{task.deadline_at ? datedTime(task.deadline_at) : "Needs deadline"}</dd></div>
+            <div><dt>Cleaner</dt><dd>{task.cleaner_name ?? "Unassigned"}{task.planned_start ? <small>{datedTime(task.planned_start)} – {time(task.planned_end)}</small> : null}</dd></div>
+            <div><dt>Ready after</dt><dd>{datedTime(task.release_at)}{task.duration_minutes != null ? ` · ${task.duration_minutes} min` : ""}</dd></div>
+            {task.completed_at ? <div><dt>Finished</dt><dd>{datedTime(task.completed_at)}</dd></div> : null}
+          </dl>
+          {task.deadline_conflict && status !== "Deadline conflict" ? <small className="cleaning-deadline-overdue">Planned finish misses deadline</small> : null}
+          {task.confirmed_checkout_at ? <small>Guest departure confirmed</small> : task.can_confirm_early_checkout && task.version ? <EarlyCheckout taskId={task.id} version={task.version} onConfirmed={message => {setCheckoutNotice(message); setRefreshTick(value => value + 1);}} /> : null}
+          {canWrite && needsReview ? <Link className="cleaning-phone-action" href={scheduleHref} aria-label={`Review schedule for ${task.property_name}`}>Review schedule</Link> : null}
+        </li>;
+      })}</ul></> : data ? <EmptyState variant="dashboard" title={rows.length && filter === "open" && !query && !open.length ? "All cleaning is done" : rows.length ? "No matching cleans" : "No cleaning work on this date"} description={rows.length && filter === "open" && !query && !open.length ? "Open Cleaned to review finished work." : rows.length ? "Try another filter or search." : "Imported cleaning work will appear here."} /> : null}
       <div className="cleaning-board-footer"><span>{data ? `${visible.length} cleans${isToday && data.overdue?.length ? " · includes overdue work" : ""}` : ""}</span>{data?.mode === "hospitable_read_only" ? <Link href="/cleaners">Manage cleaners →</Link> : canWrite ? <Link href="/schedules">Review assignments →</Link> : <Link href="/setup">Setup →</Link>}</div>
     </section>
-    {data?.email_automation?.problems.filter(problem => ["CLEANING_RELEASED", "CLEANING_UNCLAIMED"].includes(problem.code)).map(problem => (
-      <p key={problem.id} role="status">
-        <strong>{problem.code === "CLEANING_RELEASED" ? "Cleaner released a job" : "Cleaning still needs coverage"}</strong>
-        {" · "}{problem.property_name ?? "House"}{problem.service_date ? ` · ${problem.service_date}` : ""}
-        {problem.cleaner_name ? ` · ${problem.cleaner_name}` : ""} · <Link href="/exceptions">Review exceptions</Link>
-      </p>
-    ))}
     <div className="cleaning-dashboard-status"><span>{snapshot?.checkedAt ? `Updated ${time(snapshot.checkedAt)} ET · Auto-refresh 30s` : "Waiting for an update"} <button type="button" onClick={() => setRefreshTick(value => value + 1)}>Refresh</button></span><div>{data?.mode === "hospitable_read_only" && !data.email_automation?.enabled ? <span>Automation paused</span> : null}{data?.sync_health.publication_blocked ? <Link href="/exceptions">Imports need review</Link> : null}</div></div>
     {data ? <details className="cleaning-operations-details"><summary>Operations details <span className="badge">{data.exceptions.length} exceptions</span></summary><div className="cleaning-details-grid"><div><h2>Availability · today &amp; tomorrow</h2><Counts values={data.availability} /></div><div><h2>Assignments</h2><Counts values={data.assignment_counts} /><p>{data.ack_counts.acknowledged} confirmed · {data.ack_counts.awaiting} awaiting</p></div><div><h2>Source &amp; messages</h2><p>{data.sync_health.stale ? "Source is stale" : "Latest source read is fresh"}</p><Counts values={data.mode === "hospitable_read_only" ? data.email_automation?.delivery_counts ?? {} : data.sms_delivery_counts} /></div></div><p><Link href="/exceptions">Review exceptions</Link>{data.mode !== "hospitable_read_only" ? <> · <Link href="/tomorrow">Tomorrow’s schedule</Link></> : null}</p><DemoAutomation demo={demo} canWrite={canWrite} /></details> : null}
   </main>;

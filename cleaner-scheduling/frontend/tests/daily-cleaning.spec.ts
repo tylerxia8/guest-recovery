@@ -28,4 +28,16 @@ test("daily board shows deadlines, cleaner responsibility and explicit cleaning 
   await page.getByRole("group", {name: "Show cleaning work"}).getByRole("button", {name: "Unassigned"}).click();
   await expect(todaySection.getByRole("rowheader", {name: /Fictional Charlotte house A/})).toBeVisible();
   await expect(todaySection.getByRole("rowheader", {name: "Fictional Charlotte house B"})).toHaveCount(0);
+
+  await page.setViewportSize({width: 390, height: 844});
+  await expect(todaySection.getByRole("table")).toHaveCount(0);
+  await page.getByRole("button", {name: "Show unassigned"}).click();
+  const jobs = todaySection.getByRole("list", {name: "Cleaning jobs"});
+  const card = jobs.getByRole("listitem").filter({hasText: "Fictional Charlotte house A"});
+  await expect(card).toContainText("Clean by");
+  await expect(card).toContainText("Nov 12");
+  await expect(card).toContainText("Unassigned");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await card.getByRole("link", {name: /Review schedule/}).click();
+  await expect(page.getByLabel("Schedule date")).toHaveValue("2026-11-11");
 });
