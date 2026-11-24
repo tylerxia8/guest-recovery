@@ -240,7 +240,7 @@ export default function TenantView() {
   </div>;
   if (!ready) return <section className={styles.page}><p role="status">Loading your repairs…</p></section>;
   return <section className={styles.page}>
-    <header className={styles.header}><div><p className={styles.eyebrow}>REPAIR CHAT</p><h1>Lucena Repairs</h1><p>Tell us what’s wrong. We’ll help with the next step.</p></div>{(ticket || showPast) && <button type="button" disabled={busy || attachments.length > 0} onClick={newRequest}>New request</button>}</header>
+    <header className={styles.header}><div><h1>Lucena Repairs</h1><p>Tell us what’s wrong. We’ll help with the next step.</p></div>{(ticket || showPast) && <button type="button" disabled={busy || attachments.length > 0} onClick={newRequest}>New request</button>}</header>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
     {manager && !homes.length ? <section className={styles.card}><h2>You’re signed in as a manager</h2><p>Use the repair queue to help residents, or switch to a tenant account to report a problem with your own home.</p><Link href="/maintenance/manage">Open repair queue →</Link></section> : !ticket ? showPast ? null : <section className={`${styles.card} ${styles.composer}`}><h2>What needs fixing?</h2><form onSubmit={send}>

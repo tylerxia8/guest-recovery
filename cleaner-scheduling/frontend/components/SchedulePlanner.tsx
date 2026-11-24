@@ -172,12 +172,12 @@ export function SchedulePlanner({ demo, canWrite, canApprove = false, sourceMode
     {busy ? <p role="status">Working on the schedule…</p> : null}{error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     {loaded && !run ? <section><h2>No active run for this date</h2><p>Generate a preview to see what can be covered.</p></section> : null}
     {run ? <section aria-label="Schedule plan"><div className="toolbar"><h2>{run.status === "preview" ? "Preview" : "Schedule plan"}</h2><span className="badge">{run.status}</span></div><p>{run.candidate_plan.placed.length} assignments · {run.uncovered.length} uncovered</p><p className="muted">{local ? "Saved OSRM driving times" : "Mock travel estimates"} · {run.solver_status.replaceAll("_", " ")}</p>
-      <table><thead><tr><th>Cleaner</th><th>Property</th><th>Time (ET)</th><th>Travel before</th></tr></thead><tbody>{run.candidate_plan.placed.map(row => <tr key={row.task_id}><td>{names[row.cleaner_id] ?? "Cleaner"}</td><td>{tasks[row.task_id] ?? row.task_id}</td><td>{time(row.start)}–{time(row.end)}</td><td>{Math.round(row.travel_before_seconds / 60)} min</td></tr>)}</tbody></table>
+      <div className="cleaning-table-wrap schedule-preview-table" role="region" aria-label="Schedule preview assignments" tabIndex={0}><table><thead><tr><th>Cleaner</th><th>Property</th><th>Time (ET)</th><th>Travel before</th></tr></thead><tbody>{run.candidate_plan.placed.map(row => <tr key={row.task_id}><td>{names[row.cleaner_id] ?? "Cleaner"}</td><td>{tasks[row.task_id] ?? row.task_id}</td><td>{time(row.start)}–{time(row.end)}</td><td>{Math.round(row.travel_before_seconds / 60)} min</td></tr>)}</tbody></table></div>
       {run.uncovered.length ? <div role="alert"><strong>Uncovered work needs manager attention</strong><ul>{run.uncovered.map((row, i) => <li key={i}>{tasks[row.task_id] ?? "Task"}: {row.reason.replaceAll("_", " ")}</li>)}</ul></div> : null}
       {canWrite && run.status === "preview" ? <button disabled={busy || !hydrated || run.service_date !== day} onClick={() => void act(async () => { await api(`/schedules/runs/${run.id}/publish`, {method: "POST", signal: AbortSignal.timeout(75000), headers: {"Idempotency-Key": crypto.randomUUID(), "If-Match": `"${run.version}"`}, body: JSON.stringify({expected_fingerprint: run.input_fingerprint, expected_day_revision: run.day_revision})}); setRun((await api<Schedule>(`/schedules?service_date=${day}`)).active_run); await refreshReplies(); setNotice(local ? "Schedule published. Review assignment emails on Cleaners when ready to send." : "Schedule published. No carrier SMS sent."); })}>Publish validated schedule</button> : null}
     </section> : null}
     {canWrite && !local && filteredAssignments.length > 0 ? <section aria-label="Assignment management" role="region"><h2>Assignment Management</h2><p className="muted">Lock assignments to protect them from automatic replanning. Unlock before reassigning.</p>
-      <table className="cleaning-table"><thead><tr><th>House</th><th>Cleaner</th><th>Time</th><th>Status</th><th>Lock</th><th>Actions</th></tr></thead>
+      <div className="cleaning-table-wrap" role="region" aria-label="Assignments to manage" tabIndex={0}><table className="cleaning-table"><thead><tr><th>House</th><th>Cleaner</th><th>Time</th><th>Status</th><th>Lock</th><th>Actions</th></tr></thead>
       <tbody>{filteredAssignments.map(row => <tr key={row.assignment_id} className={row.is_locked ? "locked-row" : ""}>
         <td>{row.property_name}</td>
         <td>{row.cleaner_name ?? "Unassigned"}</td>
@@ -191,7 +191,7 @@ export function SchedulePlanner({ demo, canWrite, canApprove = false, sourceMode
           }}>{row.is_locked ? "Unlock" : "Lock"}</button>
           {!row.is_locked && canManage(row) ? <button data-testid={`reassign-${row.assignment_id}`} disabled={busy || !hydrated} onClick={() => setReassignTarget({id: row.assignment_id!, version: row.assignment_version!, cleanerId: row.cleaner_id ?? "", start: row.planned_start ?? new Date().toISOString(), propertyId: row.property_id})}>Reassign</button> : null}
         </td>
-      </tr>)}</tbody></table>
+      </tr>)}</tbody></table></div>
     </section> : null}
     {canWrite && !local && reassignTarget ? <dialog open aria-label="Reassign assignment"><form onSubmit={event => {
       event.preventDefault();

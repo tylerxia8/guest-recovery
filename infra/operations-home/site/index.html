@@ -8,41 +8,34 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Lucena Systems home"><span aria-hidden="true">L</span> Lucena Systems</a>
+  </header>
   <main>
-    <header class="hero">
-      <p class="brand">Lucena Systems</p>
-      <h1>Operations</h1>
-      <p>Open the tools you use to run your rentals.</p>
+    <header class="intro">
+      <h1>Rental <br>operations</h1>
+      <p>Coordinate cleans, answer guests, and keep repairs moving.</p>
     </header>
-    <section aria-labelledby="workspaces">
-      <h2 id="workspaces">Manager workspaces</h2>
-      <div class="grid">
-        <article class="card">
-          <div class="monogram" aria-hidden="true">GR</div>
-          <h3><a href="https://web-production-b1582f9b.up.railway.app/">Guest Messages <span aria-hidden="true">↗</span></a></h3>
-          <p>Guest messages, stay requests, cleaning complaints, supplies, and maintenance intake.</p>
-        </article>
-        <article class="card">
-          <div class="monogram" aria-hidden="true">T</div>
-          <h3><a href="https://web-production-9afdd865.up.railway.app/">Cleaner <span aria-hidden="true">↗</span></a></h3>
-          <p>Cleaner schedules, assignments, and coverage.</p>
-        </article>
-        <article class="card">
-          <div class="monogram" aria-hidden="true">M</div>
-          <h3><a href="https://repairs-demo-staging.up.railway.app/?view=manager">Maintenance <span aria-hidden="true">↗</span></a></h3>
-          <p>Review and assign repair requests in the Lucena Repairs demo.</p>
-        </article>
-      </div>
+    <section aria-label="Operations workspaces" class="workspaces">
+      <article class="card card-cleaner">
+        <h2><a href="https://web-production-9afdd865.up.railway.app/">Cleaner <span class="arrow" aria-hidden="true"></span></a></h2>
+        <p>Review today’s cleans, assign houses, and find coverage.</p>
+      </article>
+      <article class="card card-messages">
+        <h2><a href="https://web-production-b1582f9b.up.railway.app/">Guest Messages <span class="arrow" aria-hidden="true"></span></a></h2>
+        <p>Reply to guests and handle requests during their stays.</p>
+      </article>
+      <article class="card card-maintenance">
+        <h2><a href="https://repairs-demo-staging.up.railway.app/?view=manager">Maintenance <span class="arrow" aria-hidden="true"></span></a></h2>
+        <p>Review and assign repair requests in the Lucena Repairs demo.</p>
+      </article>
     </section>
-    <section aria-labelledby="demos">
-      <h2 id="demos">Demos</h2>
-      <div class="grid">
-        <article class="card">
-          <div class="monogram" aria-hidden="true">P</div>
-          <h3><a href="https://playground-staging-858a60e7.up.railway.app/playground">Scheduling Playground <span aria-hidden="true">↗</span></a></h3>
-          <p>Try scheduling and cleaner cancellation recovery in a private demo session.</p>
-        </article>
+    <section class="demo" aria-labelledby="demo-title">
+      <div>
+        <h2 id="demo-title">Scheduling Playground</h2>
+        <p>Try the scheduling tools with fictional houses and cleaners.</p>
       </div>
+      <a href="https://playground-staging-858a60e7.up.railway.app/playground">Open demo <span class="arrow" aria-hidden="true"></span></a>
     </section>
   </main>
 </body>
