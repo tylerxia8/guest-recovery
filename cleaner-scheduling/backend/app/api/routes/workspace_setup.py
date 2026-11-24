@@ -427,7 +427,7 @@ def add_cleaner(
 @router.post("/complete")
 def complete_setup(
     request: Request,
-    principal: Principal = Depends(require_manager),
+    principal: Principal = Depends(require_owner),
     session: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     clock: Clock = Depends(get_clock),

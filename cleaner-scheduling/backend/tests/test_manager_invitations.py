@@ -88,6 +88,10 @@ def test_invited_manager_shares_connection_and_can_be_removed(
             == 403
         )
 
+        assert (
+            client.post("/v1/workspace/complete", headers={**auth(member), "Idempotency-Key": "test"}).status_code
+            == 403
+        )
         managers = client.get("/v1/workspace/managers", headers=auth(owner)).json()["managers"]
         assert [row["email"] for row in managers] == ["member@example.test"]
         member_url = f"/v1/workspace/managers/{managers[0]['id']}"
