@@ -544,7 +544,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with connect() as db:
                 actor = session(db, self.headers, origin)
-                setup_allowed = local_request and not configured_origin and not db.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+                setup_allowed = local_request and not configured_origin and not os.environ.get('RAILWAY_ENVIRONMENT_ID') and not db.execute('SELECT 1 FROM users LIMIT 1').fetchone()
             if self.command == 'GET' and self.path == '/api/operations/stay-context':
                 import operations_login
                 config = operations_login.configuration(origin)

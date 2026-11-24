@@ -17,3 +17,12 @@ test("connection rejects a different origin without creating a session", async (
   expect(response.status()).toBe(403);
   expect(response.headers()["set-cookie"]).toBeUndefined();
 });
+
+test("development sessions are rejected on non-loopback hosts", async ({request}) => {
+  const response = await request.post("/session", {
+    headers: {Host: "public.example"},
+    data: {token: "fictional-development-token", role: "owner"},
+  });
+  expect(response.status()).toBe(403);
+  expect(response.headers()["set-cookie"]).toBeUndefined();
+});

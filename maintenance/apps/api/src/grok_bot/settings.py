@@ -1,4 +1,5 @@
 import base64
+import os
 import re
 from functools import lru_cache
 from uuid import UUID
@@ -156,6 +157,10 @@ class Settings(BaseSettings):
     @property
     def allows_local_auth(self) -> bool:
         return self.app_env in {"development", "test"}
+
+    @property
+    def allows_local_password_login(self) -> bool:
+        return self.allows_local_auth and not os.getenv("RAILWAY_ENVIRONMENT_ID")
 
     @property
     def database_name(self) -> str:

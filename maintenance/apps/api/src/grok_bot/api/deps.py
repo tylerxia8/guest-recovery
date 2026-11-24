@@ -5,6 +5,7 @@ from fastapi import Depends, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from grok_bot.auth.constants import DEMO_ORG
 from grok_bot.auth.permissions import Grant, Principal
 from grok_bot.auth.tokens import TokenError, verify_token
 from grok_bot.db import set_tenant
@@ -43,13 +44,18 @@ def principal_from_request(request: Request, session: Session) -> Principal:
         payload = verify_token(token, settings.session_secret)
     except TokenError:
         problem(401, "UNAUTHENTICATED", "Sign-in is required.")
-    if payload.get("amr") != "local_dev" or not settings.allows_local_auth or payload.get("env") != settings.app_env:
+    method = payload.get("amr")
+    if method not in ("local_dev", "operations") or not settings.allows_local_auth or payload.get("env") != settings.app_env:
         problem(401, "UNAUTHENTICATED", "Sign-in is required.")
     try:
         user_id = UUID(payload["sub"])
         organization_id = UUID(payload["org"])
     except (KeyError, ValueError):
         problem(401, "UNAUTHENTICATED", "Sign-in is required.")
+    # In hosted environments, discard legacy local tokens for any real workspace.
+    if method == "local_dev" and not settings.allows_local_password_login:
+        if not settings.allows_demo_session or organization_id != DEMO_ORG:
+            problem(401, "UNAUTHENTICATED", "Sign-in is required.")
     set_tenant(session, organization_id, user_id)
     user = session.execute(
         text(

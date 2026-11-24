@@ -69,3 +69,11 @@ def test_dev_cors_allows_local_web_only(client):
     response = client.get("/v1/health", headers={"Origin": "http://127.0.0.1:3000"})
     assert response.json()["local_auth_enabled"] is True
     assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
+
+
+def test_railway_disables_local_password_login(client, app, monkeypatch):
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_ID", "fixture-hosted")
+    assert app.state.settings.allows_local_auth is True
+    assert app.state.settings.allows_local_password_login is False
+    response = client.post("/v1/auth/local/login", json={"subject": "admin@example.test", "password": "test-only-example"})
+    assert response.status_code == 404
