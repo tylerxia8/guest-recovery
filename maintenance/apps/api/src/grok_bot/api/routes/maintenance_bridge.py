@@ -285,7 +285,7 @@ def source_repair(session, org, issue_id):
 @router.post("/maintenance-bridge/requests", response_model=SourceRepairOut)
 def import_request(body: ImportBody, request: Request, principal: Principal = Depends(bridge_principal), session: Session = Depends(get_session, scope="function"), key: str | None = Header(default=None, alias="Idempotency-Key")):
     if request.state.maintenance_connection["source"] != "guest_recovery":
-        problem(403, "FORBIDDEN", "Only Guest Recovery can hand off guest requests.")
+        problem(403, "FORBIDDEN", "Only Guest Messages can hand off guest requests.")
     if request.app.state.settings.allows_demo_session:
         problem(409, "DEMO_WORKSPACE", "Connect a maintenance workspace with real accounts and homes before importing guest issues.")
     def create():

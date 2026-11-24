@@ -4,7 +4,7 @@ Three applications for vacation-rental operations, maintained in one repository.
 
 | Application | Purpose | Start here |
 | --- | --- | --- |
-| Guest Messages | Review guest issues, draft replies, prepare supply purchases, and send repair handoffs | [Maintenance connection](guest-recovery/docs/maintenance-connection.md) |
+| Guest Messages | Manage guest messages, stay requests, cleaning follow-ups, and repair and supply handoffs | [Maintenance connection](guest-recovery/docs/maintenance-connection.md) |
 | Cleaner | Import reservations, plan turnovers, assign cleaners, and track completion | [Cleaner README](cleaner-scheduling/README.md) |
 | Maintenance | Review requests, triage repairs, and coordinate work | [Maintenance README](maintenance/README.md) |
 
