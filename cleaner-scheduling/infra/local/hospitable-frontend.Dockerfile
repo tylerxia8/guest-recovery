@@ -4,6 +4,6 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --fetch-timeout=30000
 COPY frontend .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npx next build && chown -R node:node /app/.next
+RUN npm run build && chown -R node:node /app/.next
 USER node
 CMD ["npm", "start"]
