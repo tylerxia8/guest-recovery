@@ -30,6 +30,17 @@ async function signIn(page: Page, token: string, role: string) {
   ]);
 }
 
+// The Next.js development server can reload while compiling a new route.
+async function navigate(page: Page, path: string) {
+  try {
+    await page.goto(path, {waitUntil: "commit"});
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED")) throw error;
+    await page.goto(path, {waitUntil: "commit"});
+  }
+  await expect(page).toHaveURL(new URL(path, WEB_ORIGIN).href);
+}
+
 test("manager dashboard renders live mock panels and viewer cannot resolve", async ({ page, request }) => {
   const manager = devToken("synthetic-manager", ["manager"]);
   const viewer = devToken("synthetic-viewer", ["viewer"]);
@@ -44,29 +55,29 @@ test("manager dashboard renders live mock panels and viewer cannot resolve", asy
   expect(JSON.stringify(viewerBody)).not.toContain("amount_cents");
 
   await signIn(page, manager, "manager");
-  await page.goto("/dashboard");
+  await navigate(page, "/dashboard");
   await page.waitForSelector("table", {timeout: 10000});
   await expect(page.locator("h1:has-text('cleaning')")).toBeVisible();
   await expect(page.locator("section.today-cleaning-board")).toBeVisible();
   await expect(page.locator("th:has-text('Clean by')")).toBeVisible();
 
-  await page.goto("/properties");
+  await navigate(page, "/properties");
   await expect(page.getByRole("heading", { name: "Properties" })).toBeVisible();
   await expect(page.getByRole("listitem").filter({hasText: "Synthetic Property 001"})).toBeVisible();
 
-  await page.goto("/cleaners");
+  await navigate(page, "/cleaners");
   await expect(page.getByRole("heading", { name: "Cleaners", exact: true })).toBeVisible();
 
   for (const path of ["/settings", "/payments"]) {
-    const response = await page.goto(path);
-    expect(response?.status()).toBe(404);
+    const response = await page.request.get(path);
+    expect(response.status()).toBe(404);
   }
 
   await signIn(page, viewer, "viewer");
-  await page.goto("/dashboard");
+  await navigate(page, "/dashboard");
   await expect(page.getByRole("link", {name: "Payments", exact: true})).toHaveCount(0);
   await expect(page.getByRole("link", {name: "Settings", exact: true})).toHaveCount(0);
-  await page.goto("/exceptions");
+  await navigate(page, "/exceptions");
   await expect(page.getByRole("button", { name: "Resolve" })).toHaveCount(0);
 });
 
