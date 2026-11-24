@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { repairMediaAccept, repairMediaType, validRepairMedia } from "../../lib/repair-media";
 import { API_BASE, getToken } from "../../lib/api";
 import WorkflowPanel, { workflowRequest as read } from "./workflow-panel";
 import styles from "./tenant.module.css";
@@ -171,11 +172,7 @@ export default function TenantView() {
     if (!files) return;
     const incoming = Array.from(files);
     if (attachments.length + incoming.length + (saved.current ? ticket?.media.length || 0 : 0) > 10) { setError("Choose up to 10 photos or videos."); return; }
-    for (const file of incoming) {
-      const video = /\.(mp4|mov)$/i.test(file.name);
-      if (!/\.(jpe?g|png|heic|heif|mp4|mov)$/i.test(file.name)) { setError("Choose JPEG, PNG, HEIC, HEIF, MP4 or MOV files."); return; }
-      if (file.size > (video ? 200 : 20) * 1024 * 1024) { setError(video ? "Videos must be smaller than 200 MB and no longer than 2 minutes." : "Photos must be smaller than 20 MB."); return; }
-    }
+    if (incoming.some(file => !validRepairMedia(file))) { setError("Choose supported photos up to 20 MB or videos up to 200 MB and 2 minutes."); return; }
     setError("");
     setAttachments(old => [...old, ...incoming.map(file => ({ file, key: crypto.randomUUID() }))]);
   }
@@ -187,7 +184,8 @@ export default function TenantView() {
     const file = attachment.file;
     const bytes = await file.arrayBuffer();
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map(n => n.toString(16).padStart(2, "0")).join("");
-    const contentType = /\.mov$/i.test(file.name) ? "video/quicktime" : /\.mp4$/i.test(file.name) ? "video/mp4" : /\.hei[cf]$/i.test(file.name) ? "image/heic" : /\.png$/i.test(file.name) ? "image/png" : "image/jpeg";
+    const contentType = repairMediaType(file);
+    if (!contentType) throw new Error("Choose a supported photo or video.");
     const slot = await read(`/v1/maintenance-tickets/${id}/media-uploads`, { method: "POST", headers: { "Idempotency-Key": attachment.key }, body: JSON.stringify({ filename: file.name, content_type: contentType, size_bytes: file.size, sha256: hash }) });
     attachment.slot = slot;
     if (!attachment.uploaded) {
@@ -237,15 +235,15 @@ export default function TenantView() {
   }
   const visibleItems = items.filter(item => showPast === ["COMPLETED", "CLOSED", "CANCELED"].includes(item.status));
   const picker = <div className={styles.attachments}>
-    {photosEnabled ? <label><span className={styles.attachmentHeading}>Photos or videos <span className={styles.optional}>Optional</span></span><input type="file" multiple accept=".jpg,.jpeg,.png,.heic,.heif,.mp4,.mov" disabled={busy} onChange={event => { stage(event.target.files); event.target.value = ""; }} /><small className={styles.attachmentHelp}><span>Photos up to 20 MB · Videos up to 200 MB and 2 minutes</span><span>Only record if it’s safe.</span></small></label> : <small>Photos are unavailable here. Your description is enough to send a request.</small>}
+    {photosEnabled ? <label><span className={styles.attachmentHeading}>Photos or videos <span className={styles.optional}>Optional</span></span><input type="file" multiple accept={repairMediaAccept} disabled={busy} onChange={event => { stage(event.target.files); event.target.value = ""; }} /><small className={styles.attachmentHelp}><span>Photos up to 20 MB · Videos up to 200 MB and 2 minutes</span><span>Only record if it’s safe.</span></small></label> : <small>Photos are unavailable here. Your description is enough to send a request.</small>}
     {attachments.length > 0 && <ul>{attachments.map(item => <li key={item.key}><span>{item.file.name}</span><button type="button" disabled={busy} onClick={() => setAttachments(old => old.filter(value => value.key !== item.key))}>Remove</button></li>)}</ul>}
   </div>;
   if (!ready) return <section className={styles.page}><p role="status">Loading your repairs…</p></section>;
   return <section className={styles.page}>
-    <header className={styles.header}><div><p className={styles.eyebrow}>YOUR HOME</p><h1>Repairs</h1><p>Tell us what’s wrong. We’ll help with the next step.</p></div>{(ticket || showPast) && <button type="button" disabled={busy || attachments.length > 0} onClick={newRequest}>New request</button>}</header>
+    <header className={styles.header}><div><p className={styles.eyebrow}>REPAIR CHAT</p><h1>Lucena Repairs</h1><p>Tell us what’s wrong. We’ll help with the next step.</p></div>{(ticket || showPast) && <button type="button" disabled={busy || attachments.length > 0} onClick={newRequest}>New request</button>}</header>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
-    {manager && !homes.length ? <section className={styles.card}><h2>You’re signed in as a manager</h2><p>Use the repair queue to help residents, or switch to a tenant account to report a problem with your own home.</p><Link href="/maintenance/manage">Open repair queue →</Link></section> : !ticket ? showPast ? null : <section className={styles.card}><h2>What needs fixing?</h2><form onSubmit={send}>
+    {manager && !homes.length ? <section className={styles.card}><h2>You’re signed in as a manager</h2><p>Use the repair queue to help residents, or switch to a tenant account to report a problem with your own home.</p><Link href="/maintenance/manage">Open repair queue →</Link></section> : !ticket ? showPast ? null : <section className={`${styles.card} ${styles.composer}`}><h2>What needs fixing?</h2><form onSubmit={send}>
       {homes.length > 1 && <label>Which home?<select value={home} onChange={event => setHome(event.target.value)} disabled={busy}>{homes.map(item => <option key={item.lease_id} value={item.lease_id}>{item.property_name} · {item.unit_label}</option>)}</select></label>}
       {homes.length === 1 && <p className={styles.home}>{homes[0].property_name} · {homes[0].unit_label}</p>}
       <label htmlFor="repair-description">Describe the problem<textarea id="repair-description" required maxLength={5000} rows={4} value={description} disabled={busy} onChange={event => setDescription(event.target.value)} placeholder="For example: the shower has no hot water, even after running it for a few minutes." /></label>

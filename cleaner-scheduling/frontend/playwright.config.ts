@@ -8,7 +8,7 @@ export default defineConfig({
   timeout: 60_000,
   use: { baseURL },
   webServer: {
-    command: `npx next dev --hostname 127.0.0.1 --port ${port}`,
+    command: `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`,
     url: baseURL,
     reuseExistingServer: process.env.PLAYWRIGHT_REUSE_SERVER === "1",
     timeout: 120_000,

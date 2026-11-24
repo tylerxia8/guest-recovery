@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Lucena Guest Operations",
-  "short_name": "Guest Ops",
+  "name": "Lucena Guest Messages",
+  "short_name": "Guest Messages",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

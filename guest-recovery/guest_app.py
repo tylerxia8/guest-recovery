@@ -12,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from settings import load_environment, public_origin
@@ -30,8 +30,8 @@ CATALOG = {'hand_towels': ('hand towels', 'hand towel'), 'bath_towels': ('bath t
 
 
 @contextmanager
-def connect():
-    connection = sqlite3.connect(DATABASE, timeout=5)
+def connect(database=None):
+    connection = sqlite3.connect(DATABASE if database is None else database, timeout=5)
     connection.row_factory = sqlite3.Row
     connection.execute('PRAGMA foreign_keys = ON')
     try:
@@ -41,8 +41,9 @@ def connect():
         connection.close()
 
 
-def initialize():
-    with connect() as db:
+def initialize(database=None):
+    database = DATABASE if database is None else database
+    with connect(database) as db:
         db.executescript('''
         PRAGMA journal_mode = WAL;
         CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, salt BLOB NOT NULL, password_hash BLOB NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','manager')), created_at REAL NOT NULL);
@@ -84,12 +85,15 @@ def initialize():
         db.execute("CREATE TABLE IF NOT EXISTS guest_reply_sends (id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL, message_id TEXT NOT NULL, issue_id TEXT NOT NULL, body TEXT NOT NULL, context TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('queued','attempting','accepted','blocked','failed','unknown')), reference TEXT, error TEXT, approved_at TEXT NOT NULL, attempted_at TEXT, updated_at TEXT NOT NULL, UNIQUE(reservation_id, message_id))")
         db.execute('CREATE TABLE IF NOT EXISTS shared_products (id TEXT PRIMARY KEY, item_type TEXT NOT NULL, title TEXT NOT NULL, asin TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)')
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS active_shared_product ON shared_products(item_type) WHERE active = 1')
+        from manual_orders import initialize as initialize_manual_orders
+        initialize_manual_orders(db)
         db.execute('CREATE TABLE IF NOT EXISTS purchase_plans (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS guest_reply_drafts (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, body TEXT NOT NULL, version INTEGER NOT NULL, source_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         db.execute('CREATE TABLE IF NOT EXISTS cleaner_response_links (request_id TEXT PRIMARY KEY REFERENCES local_requests(id), token_hash TEXT NOT NULL UNIQUE, fingerprint TEXT)')
         db.execute("CREATE TABLE IF NOT EXISTS cleaner_returns (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('draft','queued','submitted','uncertain','blocked','completed','cancelled')), remote TEXT, error TEXT, version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_poll TEXT NOT NULL, attempted_at TEXT)")
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_cleaner_return ON cleaner_returns(issue_id) WHERE state IN ('draft','queued','submitted','uncertain','blocked')")
         db.execute('CREATE TABLE IF NOT EXISTS maintenance_links (issue_id TEXT PRIMARY KEY,ticket_id TEXT NOT NULL UNIQUE,source_fingerprint TEXT NOT NULL,remote TEXT NOT NULL,checked_at TEXT NOT NULL)')
+        db.execute('CREATE TABLE IF NOT EXISTS maintenance_synced_messages (issue_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY (issue_id, message_id))')
         from reply_library import initialize as initialize_reply_library
         initialize_reply_library(db)
         from safety import initialize as initialize_safety
@@ -98,7 +102,7 @@ def initialize():
         initialize_stay_policy(db)
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
             db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
-    os.chmod(DATABASE, 0o600)
+    os.chmod(database, 0o600)
 
 
 def now():
@@ -168,6 +172,9 @@ def mutate(db, path, data):
             raise ValueError('Product changed; reload before removing it')
         audit(db, identifier, 'preferred_product_archived', {})
         return {'id': identifier}
+    if path == '/api/manual-order/approve':
+        from manual_orders import approve
+        return approve(db, data, now())
     if path == '/api/purchases' or path.startswith('/api/purchases/'):
         from purchases import change
         return change(db, path, data, now())
@@ -279,6 +286,8 @@ def mutate(db, path, data):
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 10
+    server_version = "GuestRecovery"
+    sys_version = ""
 
     def log_message(self, format, *args):
         pass
@@ -290,13 +299,173 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+        if getattr(self, 'verified_https', False):
+            self.send_header('Strict-Transport-Security', 'max-age=31536000')
         self.send_header('X-Frame-Options', 'DENY')
-        for name, value in (headers or {}).items():
+        fields = headers.items() if isinstance(headers, dict) else headers or ()
+        for name, value in fields:
             self.send_header(name, value)
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         self.end_headers()
         self.wfile.write(body)
+
+    def private_workspace(self, directory, origin, query):
+        from auth import AuthError, cookie, new_session, require_csrf, session
+        from operations_login import (
+            guest_messages, has_repair_access, has_touchup_access, redeem, remember_read_access, selected_workspace,
+            send_repair, send_touchup, start, stays, turnover_origin, workspace_cookie,
+        )
+        from workspace_database import provision
+
+        issuer = turnover_origin()
+        if not issuer or not origin.startswith('https://'):
+            raise AuthError(503, 'Private Guest Messages is unavailable.')
+        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+            raise AuthError(405, 'This action is not available in the shared workspace yet.')
+        if self.path == '/auth/operations/start':
+            target, state_cookie = start(issuer)
+            self.respond(303, b'', 'text/plain', {'Location': target, 'Set-Cookie': state_cookie})
+            return
+        if self.path == '/auth/operations/callback':
+            identity, key = redeem(issuer, self.headers, query)
+            workspace = identity.get('workspace_id')
+            account = identity.get('account_id')
+            if not isinstance(workspace, str) or not isinstance(account, str):
+                raise AuthError(401, 'Shared sign-in did not return a workspace.')
+            database, user = provision(directory, workspace, account, initialize)
+            with connect(database) as db:
+                db.execute('BEGIN IMMEDIATE')
+                token = new_session(db, user, key)
+            remember_read_access(token, identity)
+            self.respond(303, b'', 'text/plain', [
+                ('Location', '/'), ('Set-Cookie', cookie(token, origin)),
+                ('Set-Cookie', workspace_cookie(str(uuid.UUID(workspace)))),
+            ])
+            return
+        if self.path == '/style.css':
+            self.respond(200, (ROOT / 'web' / 'style.css').read_bytes(), 'text/css')
+            return
+        if self.path not in ('/', '/login', '/messages', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+            raise AuthError(404, 'Not found.')
+        workspace = selected_workspace(self.headers)
+        actor = None
+        if workspace:
+            database = Path(directory) / (workspace + '.sqlite3')
+            if database.is_file() and not database.is_symlink():
+                with connect(database) as db:
+                    actor = session(db, self.headers, origin)
+        if not actor:
+            self.respond(303, b'', 'text/plain', {'Location': '/auth/operations/start'})
+            return
+        from html import escape
+
+        page = (ROOT / 'web' / 'private-workspace.html').read_text().replace(
+            '<!-- turnover-link -->', '<a href="' + escape(issuer, quote=True) + '">Back to Cleaner</a>'
+        )
+        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+            if self.command != 'POST':
+                raise AuthError(405, 'Submit the request from the guest case.')
+            if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
+                raise AuthError(400, 'Submit the request from the guest case.')
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 65536 or self.headers.get('Transfer-Encoding'):
+                raise AuthError(400, 'Invalid request size.')
+            fields = parse_qs(self.rfile.read(length).decode(), max_num_fields=12)
+            if any(len(values) != 1 for values in fields.values()):
+                raise AuthError(400, 'Invalid request fields.')
+            parsed = {name: values[0] for name, values in fields.items()}
+            require_csrf(actor, {'X-CSRF-Token': parsed.pop('csrf', '')})
+            if self.path == '/reply-draft':
+                from private_replies import save
+                with connect(database) as db:
+                    save(db, parsed)
+                from urllib.parse import urlencode
+                back = escape(urlencode({
+                    name: parsed[name] for name in ('property_external_id', 'reservation_external_id')
+                }))
+                content = '<h2>Reply draft saved</h2><p>The reply has not been sent.</p>'
+                content += '<p><a href="/messages?' + back + '">Back to guest messages</a></p>'
+                self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+                return
+            if self.path == '/cleaning-touchup':
+                from private_touchup import cleaning_payload
+                result = send_touchup(issuer, actor['token_hash'], cleaning_payload(parsed))
+                content = '<h2>Cleaning request saved</h2><p>Cleaner task ' + escape(str(result['task_id'])) + '</p>'
+            else:
+                from private_repair import answer_form, answer_payload, repair_payload
+                answering = self.path == '/repair-answer'
+                payload = answer_payload(parsed) if answering else repair_payload(parsed)
+                result = send_repair(actor['token_hash'], payload, answer=answering)
+                content = '<h2>Repair request saved</h2><p>Maintenance ticket ' + escape(str(result.get('ticket_number', result['ticket_id']))) + '</p>'
+                next_question = result.get('next_question')
+                if isinstance(next_question, dict) and isinstance(next_question.get('body'), str):
+                    content += '<h3>Next intake question</h3><p>' + escape(next_question['body']) + '</p>'
+                    if isinstance(next_question.get('field_key'), str):
+                        content += answer_form(actor['csrf'], payload, next_question)
+            content += '<p>Current status · ' + escape(str(result.get('status', '')).replace('_', ' ')) + '</p>'
+            content += '<p><a href="/">Back to stays</a></p>'
+            self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+            return
+        try:
+            if self.path == '/messages':
+                data = guest_messages(issuer, actor['token_hash'], query)
+                messages = data.get('messages')
+                if not isinstance(messages, list) or len(messages) > 10 or any(not isinstance(item, dict) for item in messages):
+                    raise AuthError(503, 'Guest messages are temporarily unavailable.')
+                from private_replies import form as reply_form, observe_messages
+
+                fields = {name: query[name][0] for name in ('property_external_id', 'reservation_external_id')}
+                with connect(database) as db:
+                    drafts = observe_messages(db, fields, messages)
+                rows = ''.join(
+                    '<li><strong>' + escape(str(message.get('sent_at', ''))) + '</strong><p class="guest-text">'
+                    + escape(str(message.get('body', '')))
+                    + ('…' if message.get('truncated') is True else '') + '</p>'
+                    + (reply_form(actor['csrf'], fields, message['id'], drafts[message['id']])
+                       if isinstance(message.get('id'), str) and message['id'] in drafts else '')
+                    + '</li>'
+                    for message in messages
+                )
+                content = '<p><a href="/">Back to stays</a></p><h2>Guest messages</h2>'
+                content += '<ul>' + rows + '</ul>' if rows else '<p>No plain-text guest messages for this stay.</p>'
+                if data.get('has_older') is True:
+                    content += '<p>Showing the latest 10 guest messages.</p>'
+                if has_touchup_access(actor['token_hash']):
+                    from private_touchup import cleaning_form
+                    content += cleaning_form(actor['csrf'], query)
+                if has_repair_access(actor['token_hash']):
+                    from private_repair import repair_form
+                    content += repair_form(actor['csrf'], query)
+            else:
+                data = stays(issuer, actor['token_hash'])
+                records = data.get('stays')
+                if not isinstance(records, list) or len(records) > 100:
+                    raise AuthError(503, 'Cleaner stays are temporarily unavailable.')
+                if any(not isinstance(stay, dict) for stay in records):
+                    raise AuthError(503, 'Cleaner stays are temporarily unavailable.')
+                from urllib.parse import urlencode
+
+                rows = ''.join(
+                    '<li><strong>' + escape(str(stay.get('property_name', ''))) + '</strong> · '
+                    + escape(str(stay.get('checkin_at', ''))) + ' to '
+                    + escape(str(stay.get('checkout_at', ''))) + ' · <a href="/messages?'
+                    + escape(urlencode({
+                        'property_external_id': stay.get('property_external_id', ''),
+                        'reservation_external_id': stay.get('reservation_external_id', ''),
+                    })) + '">View guest messages</a></li>'
+                    for stay in records
+                )
+                content = '<h2>Current stays and upcoming arrivals</h2>'
+                content += '<ul>' + rows + '</ul>' if rows else '<p>No imported current stays or upcoming arrivals.</p>'
+                if data.get('has_more') is True:
+                    content += '<p>Showing the first 100 stays.</p>'
+        except AuthError as error:
+            content = '<p>' + escape(str(error)) + '</p>'
+            if error.status == 401:
+                content += '<p><a href="/auth/operations/start">Reconnect with Cleaner</a></p>'
+        self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
 
     def dispatch(self):
         started = time.monotonic()
@@ -310,6 +479,7 @@ class Handler(BaseHTTPRequestHandler):
             require_csrf,
             session,
         )
+        self.verified_https = False
         requested = self.path
         try:
             self.path = urlsplit(self.path).path
@@ -328,6 +498,7 @@ class Handler(BaseHTTPRequestHandler):
             if not local_request and not remote_request and not health_request:
                 self.respond(403, {'error': 'Use the configured HTTPS dashboard or local address'})
                 return
+            self.verified_https = remote_request
             origin = configured_origin if remote_request else 'http://' + host
             if self.command == 'POST' and self.headers.get('Origin') != origin:
                 self.respond(403, {'error': 'Same-origin access required'})
@@ -356,16 +527,41 @@ class Handler(BaseHTTPRequestHandler):
             if health_request:
                 self.respond(200, {'status': 'ok'})
                 return
+            if directory := os.environ.get('OPERATIONS_WORKSPACE_DIRECTORY'):
+                self.private_workspace(directory, origin, parse_qs(urlsplit(requested).query))
+                return
+            if self.command == 'GET' and self.path in ('/auth/operations/start', '/auth/operations/callback'):
+                import operations_login
+                config = operations_login.configuration(origin)
+                if config is None:
+                    raise AuthError(404, 'Shared sign-in is unavailable.')
+                if self.path.endswith('/start'):
+                    location, sign_in_cookie = operations_login.start(config[0])
+                    self.respond(303, b'', 'text/plain', {'Location': location, 'Set-Cookie': sign_in_cookie})
+                else:
+                    token = operations_login.finish(connect, config, self.headers, parse_qs(urlsplit(requested).query))
+                    self.respond(303, b'', 'text/plain', {'Location': '/', 'Set-Cookie': cookie(token, origin)})
+                return
             with connect() as db:
                 actor = session(db, self.headers, origin)
                 setup_allowed = local_request and not configured_origin and not db.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+            if self.command == 'GET' and self.path == '/api/operations/stay-context':
+                import operations_login
+                config = operations_login.configuration(origin)
+                if not config or not actor or actor['user_id'] != config[3]:
+                    raise AuthError(404, 'Shared stay details are unavailable.')
+                context = operations_login.stay_context(config[0], actor['token_hash'], parse_qs(urlsplit(requested).query))
+                self.respond(200, context)
+                return
             if self.command == 'GET' and self.path == '/api/auth/session':
-                self.respond(200, {'authenticated': bool(actor), 'setup_allowed': setup_allowed, 'username': actor['username'] if actor else None, 'role': actor['role'] if actor else None, 'csrf': actor['csrf'] if actor else None})
+                from operations_login import has_read_access
+                shared_stay_context = bool(actor and has_read_access(actor['token_hash']))
+                self.respond(200, {'authenticated': bool(actor), 'setup_allowed': setup_allowed, 'username': actor['username'] if actor else None, 'role': actor['role'] if actor else None, 'csrf': actor['csrf'] if actor else None, 'shared_stay_context': shared_stay_context})
                 return
             assets = {'/login': ('login.html', 'text/html; charset=utf-8'), '/login.js': ('login.js', 'text/javascript'), '/auth-client.js': ('auth-client.js', 'text/javascript'), '/app.js': ('app.js', 'text/javascript'), '/catalog.js': ('catalog.js', 'text/javascript'), '/local-supply.js': ('local-supply.js', 'text/javascript'), '/guest-replies.js': ('guest-replies.js', 'text/javascript'), '/purchase-plans.js': ('purchase-plans.js', 'text/javascript'), '/manager-view.js': ('manager-view.js', 'text/javascript'), '/maintenance.js': ('maintenance.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if self.command == 'GET' and self.path == '/':
                 if not actor:
-                    target = requested if re.fullmatch(r'/\?purchase=[a-f0-9-]{36}', requested) else '/'
+                    target = requested if re.fullmatch(r'/\?(?:purchase=[a-f0-9-]{36}|supply=[A-Za-z0-9_.~%+-]{1,512})', requested) else '/'
                     self.respond(303, b'', 'text/plain', {'Location': '/login?next=' + quote(target, safe='')})
                     return
                 self.respond(200, (ROOT / 'web' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
@@ -377,7 +573,15 @@ class Handler(BaseHTTPRequestHandler):
             })
             if self.command == 'GET' and self.path in assets:
                 filename, content_type = assets[self.path]
-                self.respond(200, (ROOT / 'web' / filename).read_bytes(), content_type)
+                content = (ROOT / 'web' / filename).read_bytes()
+                if filename == 'login.html':
+                    import operations_login
+                    if operations_login.configuration(origin):
+                        content = content.replace(
+                            b'<!-- operations-login -->',
+                            b'<p><a class="button" href="/auth/operations/start">Sign in with Cleaner</a></p>',
+                        )
+                self.respond(200, content, content_type)
                 return
             if self.command == 'GET' and self.path == '/cleaner-returns.js':
                 self.respond(200, (ROOT / 'web' / 'cleaner-returns.js').read_bytes(), 'text/javascript')
@@ -442,8 +646,12 @@ class Handler(BaseHTTPRequestHandler):
                     import maintenance_bridge
                     result['maintenance'] = maintenance_bridge.configuration()
                     maintenance_links = {row['issue_id']: maintenance_bridge.describe(row) for row in db.execute('SELECT * FROM maintenance_links')}
+                    synced_repairs = {}
+                    for message in db.execute('SELECT issue_id, message_id FROM maintenance_synced_messages'):
+                        synced_repairs.setdefault(message['issue_id'], []).append(message['message_id'])
                     for issue in result['issues']:
                         if issue['category'] == 'Maintenance':
+                            issue['maintenance_synced_messages'] = synced_repairs.get(issue['id'], [])
                             issue['maintenance_fingerprint'] = maintenance_bridge.fingerprint(issue)
                             issue['maintenance_link'] = maintenance_links.get(issue['id'])
                             issue['maintenance_fingerprints'] = {message['id']: maintenance_bridge.fingerprint(issue, message) for message in issue['evidence']}
@@ -509,14 +717,17 @@ class Handler(BaseHTTPRequestHandler):
                     state = db.execute('SELECT status, last_attempt, last_success, error FROM integration_state WHERE id = 1').fetchone()
                     from mailer import email_ready
                     from purchases import (
-                        AUTO_LIMIT_CENTS,
-                        VETO_SECONDS,
                         describe,
                         email_settings,
                     )
                     settings = email_settings()
-                    result['purchase_policy'] = {'auto_limit_cents': AUTO_LIMIT_CENTS, 'veto_seconds': VETO_SECONDS, 'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
+                    result['purchase_policy'] = {'email_configured': email_ready(settings), 'checkout_connected': False, 'simulation': True}
                     for issue in result['issues']:
+                        handoff = db.execute('SELECT status, order_lines, fingerprint, approved_at FROM manual_order_notices WHERE issue_id = ?', (issue['id'],)).fetchone()
+                        issue['manual_order_status'] = handoff['status'] if handoff else None
+                        issue['manual_order_fingerprint'] = handoff['fingerprint'] if handoff else None
+                        issue['manual_order_approved_at'] = handoff['approved_at'] if handoff else None
+                        issue['manual_order_lines'] = json.loads(handoff['order_lines']) if handoff else []
                         issue['purchases'] = [describe(row) for row in db.execute('SELECT * FROM purchase_requests WHERE issue_id = ? ORDER BY created_at DESC', (issue['id'],))]
                     result['integration'] = dict(state) if state else {'status': 'starting', 'last_attempt': None, 'last_success': None, 'error': None}
                     for issue in result['issues']:
@@ -536,7 +747,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != 'POST':
                 self.respond(404, {'error': 'Not found'})
                 return
-            if self.path not in ('/api/settings/maintenance', '/api/maintenance/import', '/api/maintenance/refresh', '/api/property-instructions', '/api/cleaner-returns/notify', '/api/cleaner-returns/propose', '/api/cleaner-returns/approve-schedule', '/api/cleaner-returns', '/api/cleaner-returns/decline', '/api/cleaner-returns/retry', '/api/cleaner-returns/confirm', '/api/settings/cleaner-scheduler', '/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
+            if self.path not in ('/api/settings/maintenance', '/api/maintenance/import', '/api/maintenance/refresh', '/api/property-instructions', '/api/cleaner-returns/notify', '/api/cleaner-returns/propose', '/api/cleaner-returns/approve-schedule', '/api/cleaner-returns', '/api/cleaner-returns/decline', '/api/cleaner-returns/retry', '/api/cleaner-returns/confirm', '/api/settings/cleaner-scheduler', '/api/purchase-plans', '/api/guest-replies/send', '/api/guest-replies', '/api/intake', '/api/worksheets', '/api/integration/sync', '/api/purchases', '/api/manual-order/approve', '/api/catalog', '/api/catalog/archive', '/api/fulfillment', '/api/local-supplier', '/api/local-requests', '/api/settings/email', '/api/auth/login', '/api/auth/setup', '/api/auth/logout') and not re.fullmatch(r'/api/(?:purchases/[a-f0-9-]{36}/(?:approve|veto)|local-requests/[a-f0-9-]{36}/(?:available|unavailable|cancel|received))', self.path):
                 self.respond(403, {'error': 'Research mode: fulfillment actions are disabled'})
                 return
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -567,6 +778,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     if actor:
                         require_csrf(actor, self.headers)
+                        from operations_login import forget_read_access
+                        forget_read_access(actor['token_hash'])
                         with connect() as db:
                             db.execute('DELETE FROM sessions WHERE token_hash = ?', (actor['token_hash'],))
                             audit(db, actor['user_id'], 'manager_signed_out', {'actor': actor['username']})
@@ -686,16 +899,26 @@ def main():
         raise SystemExit('INCIDENT_LIMIT_CENTS must be positive')
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     os.umask(0o077)
-    initialize()
     configured_origin = public_origin()
-    if configured_origin:
-        with connect() as db:
-            if not db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone():
-                raise SystemExit('Create an administrator locally before enabling APP_PUBLIC_URL')
+    private_mode = bool(os.environ.get('OPERATIONS_WORKSPACE_DIRECTORY'))
+    if private_mode:
+        from operations_login import turnover_origin
+        if not configured_origin or not turnover_origin():
+            raise SystemExit('Private Guest Messages requires HTTPS origins for Guest Messages and Cleaner')
+    else:
+        initialize()
+        if configured_origin:
+            with connect() as db:
+                if not db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone():
+                    raise SystemExit('Create an administrator locally before enabling APP_PUBLIC_URL')
     bind_host = os.environ.get('BIND_HOST', '127.0.0.1')
     if bind_host != '127.0.0.1' and not configured_origin:
-        raise SystemExit('Remote binding requires APP_PUBLIC_URL and an existing administrator')
+        raise SystemExit('Remote binding requires APP_PUBLIC_URL')
     server = ThreadingHTTPServer((bind_host, int(os.environ.get('PORT', '3000'))), Handler)
+    if private_mode:
+        with server:
+            server.serve_forever()
+        return
     worker = threading.Thread(target=poll_hospitable, daemon=True)
     worker.start()
     from purchases import deliver_notices
@@ -704,6 +927,9 @@ def main():
     from local_supply import deliver_requests
     cleaner_notices = threading.Thread(target=deliver_requests, args=(connect, SYNC_STOP), daemon=True)
     cleaner_notices.start()
+    from maintenance_bridge import synchronize as synchronize_maintenance
+    maintenance_worker = threading.Thread(target=synchronize_maintenance, args=(connect, SYNC_STOP), daemon=True)
+    maintenance_worker.start()
     from cleaner_returns import synchronize as synchronize_returns
     cleaner_return_worker = threading.Thread(target=synchronize_returns, args=(connect, SYNC_STOP), daemon=True)
     cleaner_return_worker.start()

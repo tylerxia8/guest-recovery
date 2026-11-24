@@ -51,12 +51,12 @@ def queue_security_alert(
     event_id = uuid4()
     snapshot = {
         "recipient": settings.security_alert_email,
-        "subject": f"Turnover security: {_SUBJECTS[kind]}",
+        "subject": f"Cleaner security: {_SUBJECTS[kind]}",
         "body": (
             f"{_SUBJECTS[kind]}.\n\n"
             f"Time (UTC): {now.isoformat()}\nAccount ID: {account_id}\n"
             f"Workspace ID: {workspace_id}\nEvent ID: {event_id}\n\n"
-            "If this activity is unexpected, review account access in Turnover.\n"
+            "If this activity is unexpected, review account access in Cleaner.\n"
         ),
     }
     result = session.execute(

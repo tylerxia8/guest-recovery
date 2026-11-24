@@ -2,11 +2,12 @@ import { sessionTokenCookie, workspaceMode, workspaceSignupEnabled } from "../li
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
+import { operationsToolLinks } from "../lib/operations-login";
 import { AppFrame } from "../components/AppFrame";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Turnover · Cleaning coordination",
+  title: "Cleaner · Cleaning coordination",
   description: "Cleaning schedules and cleaner coordination for short-term rentals",
   manifest: "/manifest.webmanifest",
   icons: {
@@ -27,13 +28,14 @@ export const viewport: Viewport = {
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const connected = Boolean((await cookies()).get(sessionTokenCookie)?.value);
+  const tools = connected && workspaceSignupEnabled ? operationsToolLinks() : [];
   return (
     <html lang="en">
       <head>
         <link rel="preload" href="/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body>
-        <AppFrame workspaceSignup={workspaceSignupEnabled} connected={connected} demo={process.env.LOCAL_DEMO === "1"} sourceMode={workspaceMode}>{children}</AppFrame>
+        <AppFrame operationsTools={tools} workspaceSignup={workspaceSignupEnabled} connected={connected} demo={process.env.LOCAL_DEMO === "1"} sourceMode={workspaceMode}>{children}</AppFrame>
       </body>
     </html>
   );

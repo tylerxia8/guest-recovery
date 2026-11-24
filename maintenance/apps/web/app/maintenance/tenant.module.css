@@ -49,3 +49,15 @@
 @media (max-width: 600px) { .page { padding-top: 10px; } .card { padding: 21px; border-radius: 15px; } .header { gap: 10px; } .header p { font-size: 14px; } .header button { font-size: 12px; padding: 9px; } .page h2 { font-size: 21px; } .page .primary { width: 100%; } }
 
 .page .primary:hover:not(:disabled) { background: var(--cta-hover); border-color: var(--cta-hover); }
+
+.composer textarea {
+  background: var(--surface-mist);
+  border-radius: 16px;
+  min-height: 110px;
+  resize: vertical;
+}
+
+.composer .primary {
+  justify-self: start;
+  border-radius: 999px;
+}

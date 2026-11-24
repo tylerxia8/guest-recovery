@@ -52,6 +52,61 @@ function node(tag, text, className) {
 function date(value) {
   return new Date(value).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
 }
+function sharedStayDetails(issue, container) {
+  const units = issue.property_ids || [];
+  if (issue.lane === 'practice' || units.length !== 1 || !issue.reservation_id) return;
+  managerSession.then(session => {
+    if (!session.shared_stay_context || !container.isConnected) return;
+    const details = node('details', '', 'property-details');
+    const status = node('p', '', 'help-text');
+    status.setAttribute('role', 'status');
+    details.append(node('summary', 'Cleaner stay details'), status);
+    container.before(details);
+    details.addEventListener('toggle', async () => {
+      if (!details.open || details.dataset.loading || details.dataset.loaded) return;
+      details.dataset.loading = 'true';
+      status.textContent = 'Loading stay details…';
+      const query = new URLSearchParams({
+        property_external_id: units[0], reservation_external_id: issue.reservation_id,
+      });
+      try {
+        const response = await fetch('/api/operations/stay-context?' + query, {
+          credentials: 'same-origin', signal: AbortSignal.timeout(12000),
+        });
+        if (response.status === 401) {
+          status.replaceChildren('Shared access expired. ');
+          const signIn = node('a', 'Reconnect with Cleaner');
+          signIn.href = '/auth/operations/start';
+          status.append(signIn);
+          return;
+        }
+        if (response.status === 404) {
+          status.textContent = 'Cleaner has no matching stay for this property.';
+          return;
+        }
+        if (!response.ok) throw new Error('Stay details unavailable');
+        const {reservation, departure_tasks: tasks} = await response.json();
+        const arrival = node('p', 'Check-in · ' + date(reservation.checkin_at));
+        const departure = node('p', 'Checkout · ' + date(reservation.checkout_at));
+        const list = node('ul');
+        for (const task of tasks) {
+          const label = task.relationship === 'before_checkin' ? 'Cleaning before check-in' : 'Cleaning after checkout';
+          const completion = task.completed_at && task.status === 'completed'
+            ? 'completed ' + date(task.completed_at) : task.status.replaceAll('_', ' ');
+          list.append(node('li', label + ' · ' + completion));
+        }
+        details.append(arrival, departure, tasks.length ? list : node('p', 'No related departure cleaning is recorded.'));
+        status.textContent = '';
+        details.dataset.loaded = 'true';
+      } catch {
+        status.textContent = 'Could not load Cleaner stay details. Close and reopen to retry.';
+      } finally {
+        delete details.dataset.loading;
+      }
+    });
+  }).catch(() => {});
+}
+
 function title(issue) {
   return issue.worksheet ? 'Missing hand towels' : {Supplies: 'Missing or needed supplies', Maintenance: 'Something needs fixing', Cleaning: 'A cleaning concern', Instructions: 'A guest needs directions', Safety: 'A possible safety concern'}[issue.category];
 }
@@ -80,9 +135,9 @@ async function submitAction(path, data) {
 function purchasePanel(issue) {
   const section = node('section', '', 'purchase-panel');
   section.append(node('h3', 'Purchase notice & manager decision'));
-  section.append(node('p', '$25 or less: email the manager, then wait 10 minutes for a possible veto. Above $25: get explicit approval. The total includes all items, gifts, tax, shipping, and fees.', 'help-text'));
-  section.append(node('p', 'Simulation only · Amazon checkout is not connected. Manager decisions require sign-in.', 'delivery-status'));
-  if (!dataset.purchase_policy.email_configured) section.append(node('p', 'Email setup incomplete. An administrator can configure sending under Email delivery settings. Notices and timers remain blocked until then.', 'context-note'));
+  section.append(node('p', 'The manager places every order in Amazon Business. Include tax, shipping, and fees when recording a quote.', 'help-text'));
+  section.append(node('p', 'Check current pricing and arrival before placing the order.', 'delivery-status'));
+  if (!dataset.purchase_policy.email_configured) section.append(node('p', 'Email setup incomplete. An administrator can configure sending under Email delivery settings. Manager email requires this setup.', 'context-note'));
   for (const request of issue.purchases) {
     const card = node('div', '', 'purchase-request');
     card.append(node('strong', request.summary), node('p', `$${(request.total_cents / 100).toFixed(2)} total · $${(request.gift_cents / 100).toFixed(2)} gift included`, 'help-text'), node('p', request.status, 'purchase-status'), node('p', request.email_evidence, 'help-text'));
@@ -102,15 +157,10 @@ function purchasePanel(issue) {
         card.append(link);
       }
     } else card.append(node('p', 'No address-specific delivery estimate recorded.', 'help-text'));
-    if (request.eligible_at && request.decision !== 'vetoed') {
-      const countdown = node('p', '', 'countdown');
-      countdown.dataset.deadline = request.eligible_at;
-      card.append(countdown);
-    }
     if (request.error) card.append(node('p', request.error, 'warning'));
     if (request.decision !== 'vetoed') {
       const actions = node('div', '', 'purchase-actions');
-      for (const [action, label] of [['veto', 'Veto / cancel'], ...(request.approval_required && request.decision !== 'approved' ? [['approve', 'Manager: approve this total']] : [])]) {
+      for (const [action, label] of [['veto', 'Cancel proposal'], ...(request.approval_required && request.decision !== 'approved' ? [['approve', 'Confirm proposal']] : [])]) {
         const button = node('button', label, action === 'veto' ? 'secondary' : '');
         button.type = 'button';
         button.onclick = async () => {
@@ -125,7 +175,7 @@ function purchasePanel(issue) {
     }
     section.append(card);
   }
-  if (issue.purchases.some(request => request.decision !== 'vetoed')) return section;
+  if (issue.manual_order_status || issue.purchases.some(request => request.decision !== 'vetoed')) return section;
   const details = document.createElement('details');
   details.open = purchaseDrafts.has(issue.id);
   details.append(node('summary', 'Prepare a purchase notice'));
@@ -203,19 +253,13 @@ function purchasePanel(issue) {
       form.blur();
       document.activeElement?.blur();
       await load();
-      notice.textContent = 'Proposal saved. The clock starts after a successful Gmail send; uncertain sends stay blocked. No purchase will be made in simulation mode.';
+      notice.textContent = 'Proposal saved. The manager will receive the order details by email.';
     } catch (error) { feedback.textContent = error.message; }
     finally { for (const control of form.elements) control.disabled = false; timezoneSelect.disabled = bound; }
   };
   details.append(form);
   section.append(details);
   return section;
-}
-function updateCountdowns() {
-  for (const element of document.querySelectorAll('[data-deadline]')) {
-    const seconds = Math.max(0, Math.ceil((new Date(element.dataset.deadline) - Date.now()) / 1000));
-    element.textContent = seconds ? `Time to deny: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : 'Window ended · checkout not connected.';
-  }
 }
 function showSettings() {
   document.querySelector('#settings-workspace').hidden = false;
@@ -269,12 +313,16 @@ function render() {
   for (const text of texts) text.issues.sort((a, b) => priority.indexOf(a.category) - priority.indexOf(b.category));
   if (!purchaseLinkSelected && dataset.purchase_policy) {
     purchaseLinkSelected = true;
-    const requestedPurchase = new URLSearchParams(window.location.search).get('purchase');
-    const target = texts.find(text => text.issues.some(issue => issue.purchases.some(request => request.id === requestedPurchase)));
+    const links = new URLSearchParams(window.location.search);
+    const requestedPurchase = links.get('purchase');
+    const requestedSupply = links.get('supply');
+    const matches = (text, issue) => issue.purchases.some(request => request.id === requestedPurchase) ||
+      (requestedSupply === text.message.id && issue.category === 'Supplies');
+    const target = texts.find(text => text.issues.some(issue => matches(text, issue)));
     if (target) {
       selected = target.key;
       if (phoneViewport.matches) phoneDetail = true;
-      const targetIssue = target.issues.find(issue => issue.purchases.some(request => request.id === requestedPurchase));
+      const targetIssue = target.issues.find(issue => matches(target, issue));
       selectedIssueByText.set(target.key, targetIssue.id);
       view.value = target.issues[0].lane || 'practice';
     }
@@ -337,6 +385,7 @@ function render() {
   const propertyDetails = node('details', '', 'property-details');
   propertyDetails.append(node('summary', 'Property details'));
   card.append(propertyDetails);
+  sharedStayDetails(issue, propertyDetails);
   if (issue.supply_quantities?.length) {
     const amounts = issue.supply_quantities.map(item => `${dataset.catalog.item_types.find(kind => kind.id === item.item_type)?.label || item.item_type}: ${item.quantity} ${item.unit} · ${item.basis}`);
     propertyDetails.append(node('p', amounts.join(' / '), 'help-text'), node('p', 'Quantities are individual items, not Amazon packs.', 'help-text'));
@@ -555,7 +604,6 @@ function render() {
   renderedIssues = JSON.stringify(dataset.issues.map(({worksheet, ...issue}) => issue));
   renderedPreferences = JSON.stringify(dataset.catalog);
   renderedSupplier = JSON.stringify(dataset.local_supplier);
-  updateCountdowns();
 }
 async function load() {
   if (loading) return;
@@ -613,6 +661,5 @@ document.querySelector('#refresh').onclick = async () => {
   finally { button.disabled = false; }
 };
 setInterval(() => { if (!document.hidden) load(); }, 15000);
-setInterval(updateCountdowns, 1000);
 window.addEventListener('beforeunload', event => { if (purchaseDrafts.size) { event.preventDefault(); event.returnValue = ''; } });
 load();

@@ -7,9 +7,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mailer import email_ready, resend, send_email
 
-AUTO_LIMIT_CENTS = 2500
-VETO_SECONDS = 600
-
 
 def email_settings():
     from settings import email_configuration
@@ -26,14 +23,10 @@ def describe(row):
         request['status'] = 'Email outcome unconfirmed — purchase blocked' if (row['email_id'] or '').startswith('smtp:') else 'Email failed — purchase blocked'
     elif not row['notified_at'] or (row['notice_status'] != 'delivered' and not (row['email_id'] or '').startswith('smtp:')):
         request['status'] = 'Waiting for email delivery'
-    elif row['total_cents'] > AUTO_LIMIT_CENTS:
-        request['status'] = 'Checkout not connected' if row['decision'] == 'approved' else 'Manager approval required'
     else:
-        eligible = dt.datetime.fromisoformat(row['notified_at']) + dt.timedelta(seconds=VETO_SECONDS)
-        request['eligible_at'] = eligible.isoformat()
-        request['status'] = '10-minute veto window' if current < eligible else 'Checkout not connected'
+        request['status'] = 'Manager to place Amazon order'
     request['email_evidence'] = 'Gmail accepted the message; inbox delivery is not verified.' if (row['email_id'] or '').startswith('smtp:') and row['notified_at'] else 'Email delivery confirmed by provider.' if row['notice_status'] == 'delivered' else 'Notification is not confirmed.'
-    request['approval_required'] = row['total_cents'] > AUTO_LIMIT_CENTS
+    request['approval_required'] = True
     request['simulation'] = True
     request['offer'] = json.loads(row['offer']) if row['offer'] else None
     if request['offer']:
@@ -124,6 +117,8 @@ def change(db, path, data, timestamp):
             towels = next((item for item in offer['supply_quantities'] if item['item_type'] == 'hand_towels'), None)
             if towels:
                 offer['hand_towels_needed'] = towels['quantity']
+        if db.execute('SELECT 1 FROM manual_order_notices WHERE issue_id = ?', (issue_id,)).fetchone():
+            raise ValueError('A manual order notice already exists. Check its email status before placing an order.')
         if db.execute("SELECT id FROM purchase_requests WHERE issue_id = ? AND decision != 'vetoed'", (issue_id,)).fetchone():
             raise ValueError('A proposal already exists. Cancel it before changing the items or total.')
         identifier = str(uuid.uuid4())
@@ -156,6 +151,11 @@ def deliver_notices(connect, stop):
     while not stop.is_set():
         settings = email_settings()
         if email_ready(settings):
+            from manual_orders import send_ready
+            try:
+                send_ready(connect, settings)
+            except Exception as error:
+                logging.getLogger(__name__).warning('Manual order scan failed (%s)', type(error).__name__)
             with connect() as db:
                 rows = db.execute("SELECT * FROM purchase_requests WHERE decision != 'vetoed' AND (notice_status = 'pending' OR (notice_status = 'sent' AND notified_at IS NULL)) ORDER BY created_at LIMIT 10").fetchall()
             for row in rows:
@@ -173,13 +173,12 @@ def deliver_notices(connect, stop):
                                 for name in ('NOTIFICATION_FROM', 'MANAGER_EMAIL'):
                                     if not re.fullmatch(r'[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+', settings[name]):
                                         raise ValueError('Notification addresses must be plain email addresses')
-                                policy = 'Explicit approval is required before purchase.' if row['total_cents'] > AUTO_LIMIT_CENTS else 'A 10-minute veto window starts after a successful Gmail send or confirmed Resend delivery. Gmail acceptance does not guarantee inbox delivery.'
                                 from settings import manager_url
-                                text = '\n'.join(('[SIMULATION — no purchase will be made]', 'Proposal ID: ' + row['id'], 'Property: ' + row['property'], 'Proposed items: ' + row['summary'], 'All-in total: $' + format(row['total_cents'] / 100, '.2f'), 'Gift included: $' + format(row['gift_cents'] / 100, '.2f'), policy, 'Sign in to Guest Operations to approve or veto this proposal:', manager_url() + '/?purchase=' + row['id'], 'Changes to items or price require cancelling this proposal and sending a new notice.'))
+                                text = '\n'.join(('Please place this order in Amazon Business.', 'Proposal ID: ' + row['id'], 'Property: ' + row['property'], 'Selected items: ' + row['summary'], 'Recorded all-in total: $' + format(row['total_cents'] / 100, '.2f'), 'Gift included: $' + format(row['gift_cents'] / 100, '.2f'), 'Check the unit, current cost and delivery window before checkout.', 'Open Guest Messages:', manager_url() + '/?purchase=' + row['id']))
                                 if current['offer']:
                                     offer = json.loads(current['offer'])
-                                    text += '\n' + '\n'.join(('Delivery location: ' + offer['location'], 'Amazon arrival estimate: ' + offer['arrival_date'] + ' ' + offer['delivery_window'] + ' (' + offer['timezone'] + ')', 'Estimate recorded: ' + offer['recorded_at'], offer['source'], *('https://www.amazon.com/dp/' + asin for asin in offer['asins']), 'Confirm price, compatibility, and delivery again before any future checkout.'))
-                                payload = {'from': settings['NOTIFICATION_FROM'], 'to': [settings['MANAGER_EMAIL']], 'subject': '[SIMULATION] Guest Operations purchase proposal $' + format(row['total_cents'] / 100, '.2f'), 'text': text}
+                                    text += '\n' + '\n'.join(('Delivery location: ' + offer['location'], 'Amazon arrival estimate: ' + offer['arrival_date'] + ' ' + offer['delivery_window'] + ' (' + offer['timezone'] + ')', 'Estimate recorded: ' + offer['recorded_at'], offer['source'], *('https://www.amazon.com/dp/' + asin for asin in offer['asins']), 'Confirm price, compatibility, and delivery at checkout.'))
+                                payload = {'from': settings['NOTIFICATION_FROM'], 'to': [settings['MANAGER_EMAIL']], 'subject': 'Action required: place Amazon supply order $' + format(row['total_cents'] / 100, '.2f'), 'text': text}
                                 db.execute('UPDATE purchase_requests SET email_payload = ? WHERE id = ?', (json.dumps(payload), row['id']))
                             if settings['EMAIL_PROVIDER'] == 'gmail':
                                 db.execute("UPDATE purchase_requests SET notice_status = 'sent', email_id = 'smtp:inflight' WHERE id = ?", (row['id'],))

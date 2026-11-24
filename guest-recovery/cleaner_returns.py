@@ -87,7 +87,7 @@ def configure(prepared):
 
 def verify_connection(origin, token):
     if not token:
-        raise ValueError('Create a connection token for the guest inbox in the scheduler’s account settings, then paste it here.')
+        raise ValueError('Create a Guest Messages connection token in the scheduler’s account settings, then paste it here.')
     opener = urllib.request.build_opener(NoRedirect())
     req = urllib.request.Request(origin + '/v1/stay-adjustments', headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
     for attempt in range(3):
