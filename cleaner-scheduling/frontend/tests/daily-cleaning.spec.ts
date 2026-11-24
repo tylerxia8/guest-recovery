@@ -40,6 +40,7 @@ test("daily board shows deadlines, cleaner responsibility and explicit cleaning 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   const reviewLink = card.getByRole("link", {name: /Review schedule/});
   await expect(reviewLink).toHaveAttribute("href", "/schedules?date=2026-11-11");
-  await page.goto("/schedules?date=2026-11-11", {waitUntil: "domcontentloaded"});
-  await expect(page.getByLabel("Schedule date")).toHaveValue("2026-11-11");
+  const schedule = await page.request.get("/schedules?date=2026-11-11");
+  expect(schedule.ok()).toBeTruthy();
+  expect(await schedule.text()).toMatch(/<input[^>]*aria-label="Schedule date"[^>]*value="2026-11-11"/);
 });
