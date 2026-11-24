@@ -14,10 +14,10 @@ def test_liveness_has_no_provider_dependency(client: TestClient) -> None:
 def test_readiness_reports_schema_revision(client: TestClient) -> None:
     response = client.get("/v1/health/ready")
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "schema_revision": "0030_manager_invitations"}
+    assert response.json() == {"status": "ready", "schema_revision": "0031_action_inbox_claims"}
 
 
 def test_schema_match_helper() -> None:
-    assert schema_matches(["0030_manager_invitations"]) is True
+    assert schema_matches(["0031_action_inbox_claims"]) is True
     assert schema_matches([]) is False
     assert schema_matches(["0004_scheduling"]) is False

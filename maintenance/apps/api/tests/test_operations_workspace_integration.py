@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import text
 
-from grok_bot.api.routes import auth, maintenance_bridge
+from grok_bot.api.routes import auth, maintenance_bridge, operations as operations_routes
 from grok_bot.auth import operations
 
 
@@ -149,3 +149,15 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
     del active["opm_" + teammate_code]
     assert client.get("/v1/maintenance-workspace", headers=teammate).status_code == 401
     assert client.get("/v1/maintenance-workspace", headers=manager_a).status_code == 200
+
+    # Inbox identity is independently read-only and only returns ticket summaries in that workspace.
+    identity = {"workspace_id": str(first_workspace), "account_id": str(pairs[teammate_code][1]),
+                "workspace_owner_id": str(owners[first_workspace])}
+    monkeypatch.setattr(operations_routes, "read_operations_identity", lambda *_args, **_kwargs: identity)
+    with migrator_engine.begin() as db:
+        db.execute(text("UPDATE maintenance_tickets SET status='ASSIGNMENT_PENDING' WHERE id=:id"),
+                   {"id": result_a.json()["ticket_id"]})
+    queue = client.get("/v1/operations/action-inbox", headers={"Authorization": "Bearer opq_" + "a" * 43})
+    assert queue.status_code == 200, queue.text
+    assert [item["id"] for item in queue.json()["items"]] == [result_a.json()["ticket_id"]]
+    assert queue.json()["items"][0]["property"] == "Fixture House 0"

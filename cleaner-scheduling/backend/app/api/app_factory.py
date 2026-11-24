@@ -137,9 +137,11 @@ def create_app(settings: Settings, clock: Clock | None = None) -> FastAPI:
     app.include_router(onboarding_router)
     app.include_router(cleaner_portal_router)
     from app.api.routes.accounts import router as accounts_router
+    from app.api.routes.action_inbox import router as action_inbox_router
     from app.api.routes.workspace_setup import router as workspace_setup_router
 
     app.include_router(accounts_router)
+    app.include_router(action_inbox_router)
     app.include_router(workspace_setup_router)
 
     @app.middleware("http")

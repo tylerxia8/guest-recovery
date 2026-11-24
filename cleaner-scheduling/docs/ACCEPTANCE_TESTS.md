@@ -452,3 +452,9 @@ M8 theme presentation check: Wada 268 palette (olive #253122, sienna CTA #a56321
 
 - The owner and an invited manager can both open private Guest Messages and Maintenance using Cleaner sign-in. They get distinct identities in the same workspace. A different workspace cannot see their records.
 - Removing the invited manager blocks their next authenticated request in all three tools. Existing cleaning and repair handoffs continue to validate the selected stay and company.
+
+### Shared action inbox
+
+- A workspace manager sees the available source queues with their next action and source link. A temporarily unavailable tool does not hide the other queues.
+- Two managers cannot claim the same revision of an item. The losing request receives a conflict, and handing off to another active manager records the new assignee and the actor.
+- A manager cannot claim work for a manager in another company or read its queue. Removing a manager revokes active shared inbox grants. Queue reads contain summaries and links.
