@@ -55,6 +55,7 @@ from app.services.reservation_sync import (
     execute_sync,
     publication_blocked,
 )
+from app.services.workspace_accounts import workspace_owner_id
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -346,6 +347,7 @@ def _repair_home(prop: Property, settings: Settings) -> dict[str, str] | None:
 
 @router.get(REPAIR_CONTEXT_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_repair_context(
+    request: Request,
     property_external_id: str = Query(min_length=1, max_length=120),
     reservation_external_id: str = Query(min_length=1, max_length=120),
     principal: Principal = Depends(require_manager),
@@ -368,6 +370,7 @@ def operations_repair_context(
     return JSONResponse(
         content={
             "account_id": principal.subject.removeprefix("manager:"),
+            "workspace_owner_id": str(workspace_owner_id(session, session.info["workspace_id"])),
             "workspace_id": str(session.info["workspace_id"]),
             "property_external_id": prop.external_id,
             "home": _repair_home(prop, settings),

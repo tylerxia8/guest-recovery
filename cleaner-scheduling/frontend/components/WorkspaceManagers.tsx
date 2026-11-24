@@ -51,7 +51,7 @@ export function WorkspaceManagers() {
 
   return <section className="workspace-card" aria-labelledby="workspace-managers-title">
     <h2 id="workspace-managers-title">Workspace managers</h2>
-    <p>Invite a manager to use your company’s Hospitable connection with their own sign-in.</p>
+    <p>Invite a manager to use your company’s Hospitable connection with their own sign-in across Cleaner, Guest Messages and Maintenance.</p>
     <form onSubmit={invite}>
       <label>Manager email<input type="email" maxLength={254} value={email} onChange={event => {setEmail(event.target.value); setLink("");}} required disabled={busy} /></label>
       <button disabled={busy}>Create invite link</button>

@@ -314,8 +314,8 @@ class Handler(BaseHTTPRequestHandler):
     def private_workspace(self, directory, origin, query):
         from auth import AuthError, cookie, new_session, require_csrf, session
         from operations_login import (
-            guest_messages, has_repair_access, has_touchup_access, redeem, remember_read_access, selected_workspace,
-            send_repair, send_touchup, start, stays, turnover_origin, workspace_cookie,
+            guest_messages, has_repair_access, has_touchup_access, redeem, remember_membership, remember_read_access, selected_workspace,
+            send_repair, send_touchup, start, stays, turnover_origin, verify_membership, workspace_cookie,
         )
         from workspace_database import provision
 
@@ -332,12 +332,14 @@ class Handler(BaseHTTPRequestHandler):
             identity, key = redeem(issuer, self.headers, query)
             workspace = identity.get('workspace_id')
             account = identity.get('account_id')
-            if not isinstance(workspace, str) or not isinstance(account, str):
+            owner = identity.get('workspace_owner_id')
+            if not all(isinstance(value, str) for value in (workspace, account, owner)):
                 raise AuthError(401, 'Shared sign-in did not return a workspace.')
-            database, user = provision(directory, workspace, account, initialize)
+            database, user = provision(directory, workspace, account, initialize, owner_id=owner)
             with connect(database) as db:
                 db.execute('BEGIN IMMEDIATE')
                 token = new_session(db, user, key)
+            remember_membership(token, identity.get('membership_token'))
             remember_read_access(token, identity)
             self.respond(303, b'', 'text/plain', [
                 ('Location', '/'), ('Set-Cookie', cookie(token, origin)),
@@ -356,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
             if database.is_file() and not database.is_symlink():
                 with connect(database) as db:
                     actor = session(db, self.headers, origin)
-        if not actor:
+        if not actor or not verify_membership(issuer, actor['token_hash'], workspace, actor['user_id']):
             self.respond(303, b'', 'text/plain', {'Location': '/auth/operations/start'})
             return
         from html import escape

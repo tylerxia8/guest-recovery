@@ -449,3 +449,6 @@ M8 theme presentation check: Wada 268 palette (olive #253122, sienna CTA #a56321
 - The joined manager sees the same setup and imported data, and the Hospitable credential is never returned. A second company cannot view or remove the manager.
 - The invite rejects a different email and cannot be used again after acceptance. An idempotent retry of the same signup can recover the original response.
 - A manager cannot replace the token or issue invitations. When the owner removes a manager, their sessions stop working and the workspace connection remains intact.
+
+- The owner and an invited manager can both open private Guest Messages and Maintenance using Cleaner sign-in. They get distinct identities in the same workspace. A different workspace cannot see their records.
+- Removing the invited manager blocks their next authenticated request in all three tools. Existing cleaning and repair handoffs continue to validate the selected stay and company.

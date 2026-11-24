@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import secrets
 import uuid
 
 import pytest
@@ -13,7 +16,13 @@ from fastapi.testclient import TestClient
 def test_invited_manager_shares_connection_and_can_be_removed(
     settings: Settings, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    hosted = settings.model_copy(update={"workspace_signup_enabled": True, "workspace_registration_enabled": True})
+    hosted = settings.model_copy(
+        update={
+            "workspace_signup_enabled": True,
+            "workspace_registration_enabled": True,
+            "operations_login_enabled": True,
+        }
+    )
     # Exercise real API authorization with loopback-only test services.
     monkeypatch.setattr("app.api.app_factory.validate_startup", lambda _: None)
     application = create_app(hosted, clock)
@@ -69,6 +78,27 @@ def test_invited_manager_shares_connection_and_can_be_removed(
         assert login.json()["workspace_id"] == str(workspace_id)
         assert login.json()["token"] != member["token"]
 
+        verifier = secrets.token_urlsafe(32)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        grant = client.post(
+            "/v1/accounts/operations/grants",
+            headers=auth(member),
+            json={"client": "maintenance", "challenge": challenge},
+        )
+        assert grant.status_code == 200, grant.text
+        exchange = client.post(
+            "/v1/accounts/operations/redeem",
+            json={"client": "maintenance", "code": grant.json()["code"], "verifier": verifier},
+        )
+        assert exchange.status_code == 200, exchange.text
+        claims = exchange.json()
+        membership_headers = {"Authorization": "Bearer " + claims["membership_token"]}
+        membership_url = "/v1/accounts/operations/membership"
+        assert client.get(membership_url, headers=membership_headers).json() == {
+            "workspace_id": str(workspace_id),
+            "account_id": claims["account_id"],
+        }
+
         setup = client.get("/v1/workspace/setup", headers=auth(member)).json()
         assert setup["completed"] is True
         assert setup["can_manage_connection"] is False
@@ -96,7 +126,10 @@ def test_invited_manager_shares_connection_and_can_be_removed(
         assert [row["email"] for row in managers] == ["member@example.test"]
         member_url = f"/v1/workspace/managers/{managers[0]['id']}"
         assert client.delete(member_url, headers=auth(other)).status_code == 404
+        assert claims["account_id"] == managers[0]["id"]
+        assert claims["workspace_owner_id"] != claims["account_id"]
         assert client.delete(member_url, headers=auth(owner)).status_code == 200
+        assert client.get(membership_url, headers=membership_headers).status_code == 401
         assert client.get("/v1/accounts/me", headers=auth(member)).status_code == 401
         assert client.get("/v1/accounts/me", headers=auth(login.json())).status_code == 401
         assert sign_up("member@example.test", code).status_code == 403

@@ -20,11 +20,13 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
     monkeypatch.setattr(accounts, "authenticate_session", authenticate)
     monkeypatch.setattr(accounts, "authenticate_session_digest", revalidate)
     monkeypatch.setattr(accounts, "account_rate_limit", Mock())
+    owner = uuid4()
+    monkeypatch.setattr(accounts, "workspace_owner_id", lambda *_: owner)
     cache = Mock()
     saved = {}
 
     def save(key, value, *, ex, nx):
-        assert ex in (60, 900) and nx is True
+        assert ex in (60, 900, 43200) and nx is True
         saved[key] = value
         return True
 
@@ -66,10 +68,17 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
     assert payload["account_id"] == str(identity.id)
     assert payload["workspace_id"] == str(identity.workspace_id)
     assert payload["read_token_expires_in"] == 900
+    assert payload["workspace_owner_id"] == str(owner)
     cache.get.side_effect = saved.get
     assert accounts.token_digest("manager-session") == read_session_digest(cache, payload["read_token"])
     assert all(payload["read_token"] not in key for key in saved)
     assert revalidate.call_args.args[1] == accounts.token_digest("manager-session")
+    membership_request = SimpleNamespace(headers={"authorization": "Bearer " + payload["membership_token"]})
+    status = accounts.operations_membership(membership_request, session, settings, clock, cache)
+    assert json.loads(status.body) == {"account_id": str(identity.id), "workspace_id": str(identity.workspace_id)}
+    revalidate.side_effect = AppError("invalid_session", "Sign in to continue.", 401)
+    with pytest.raises(AppError, match="Sign in to continue"):
+        accounts.operations_membership(membership_request, session, settings, clock, cache)
     with pytest.raises(AppError, match="Shared sign-in expired"):
         accounts.redeem_operations_grant(valid, session, settings, clock, cache)
 
@@ -81,6 +90,7 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
         ("POST", "/v1/workspace/operations/cleaning-touchup", True, b"ops_"),
         ("GET", "/v1/workspace/operations/stays", True, b"opc_"),
         ("GET", "/v1/workspace/setup", True, b"ops_"),
+        ("GET", "/v1/workspace/setup", True, b"opm_"),
         ("GET", "/v1/workspace/operations/stay-context", False, b"ops_"),
     ],
 )

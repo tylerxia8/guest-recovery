@@ -91,6 +91,19 @@ def create_session(session: Session, account: ManagerAccount, token: str, now: d
     )
 
 
+def workspace_owner_id(session: Session, workspace_id: uuid.UUID) -> uuid.UUID:
+    owner_id = session.scalar(
+        select(ManagerAccount.id).where(
+            ManagerAccount.workspace_id == workspace_id,
+            ManagerAccount.workspace_owner.is_(True),
+            ManagerAccount.deleted_at.is_(None),
+        )
+    )
+    if owner_id is None:
+        raise AppError("invalid_workspace", "This workspace is unavailable.", 401)
+    return owner_id
+
+
 def lock_active_workspace(session: Session, workspace_id: uuid.UUID) -> bool:
     return (
         session.scalar(
