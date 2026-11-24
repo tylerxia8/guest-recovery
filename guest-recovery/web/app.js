@@ -278,7 +278,48 @@ document.querySelector('#settings-toggle').onclick = () => {
   document.querySelector('#page-title').textContent = 'Guest inbox';
   document.querySelector('#page-subtitle').textContent = 'Read the conversation. Review the solution.';
 };
+function openReply(panel) {
+  if (!panel) return;
+  panel.open = true;
+  panel.querySelector('summary')?.focus({preventScroll: true});
+  panel.scrollIntoView({block: 'start'});
+}
+
+function renderReplyAttention() {
+  const section = document.querySelector('#reply-attention');
+  const list = section.querySelector('ul');
+  list.replaceChildren();
+  for (const issue of dataset.issues) {
+    if (issue.lane === 'likely_resolved') continue;
+    for (const draft of issue.guest_replies ?? []) {
+      if (draft.practice || !draft.updated_at || (draft.send && !['blocked', 'failed'].includes(draft.send.state))) continue;
+      const message = issue.evidence.find(item => item.id === draft.message_id);
+      if (!message) continue;
+      const item = node('li');
+      const label = node('div');
+      label.append(node('strong', issue.property), node('small', draft.stale ? 'Conversation changed since saving' : 'Saved reply needs review'));
+      const button = node('button', 'Review reply', 'secondary');
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Review reply for ' + issue.property);
+      button.onclick = () => {
+        selected = issue.reservation_id + ':' + message.id;
+        selectedIssueByText.set(selected, issue.id);
+        document.querySelector('#request-view').value = 'all';
+        document.querySelector('#search').value = '';
+        document.querySelector('#category').value = '';
+        showPhoneIssue();
+        render();
+        openReply(document.querySelector('#issues .guest-reply-panel'));
+      };
+      item.append(label, button);
+      list.append(item);
+    }
+  }
+  section.hidden = list.childElementCount === 0;
+}
+
 function render() {
+  renderReplyAttention();
   const search = document.querySelector('#search').value.trim().toLowerCase();
   const category = document.querySelector('#category').value;
   const view = document.querySelector('#request-view');
@@ -381,7 +422,6 @@ function render() {
   const nextStep = node('section', '', 'next-step');
   card.append(nextStep);
   const replyPanel = guestReplyPanel(issue, text.message);
-  card.append(replyPanel);
   const propertyDetails = node('details', '', 'property-details');
   propertyDetails.append(node('summary', 'Property details'));
   card.append(propertyDetails);
@@ -561,7 +601,7 @@ function render() {
   const actions = node('div', '', 'primary-actions');
   const reply = node('button', 'Reply draft', 'secondary');
   reply.type = 'button';
-  reply.onclick = () => { replyPanel.open = true; replyPanel.scrollIntoView({behavior: 'smooth', block: 'start'}); };
+  reply.onclick = () => openReply(replyPanel);
   actions.append(action, reply, next);
   nextStep.append(actions);
   if (text.issues.length > 1) {
@@ -583,7 +623,7 @@ function render() {
   managerHeading.append(back, node('h2', issue.property), next);
   const layout = node('div', '', 'manager-layout');
   const thread = node('section', '', 'manager-thread');
-  thread.append(node('h3', 'Text chain'), conversation);
+  thread.append(node('h3', 'Text chain'), conversation, replyPanel);
   const selectedMessage = conversation.children[issue.messages.findIndex(item => item.id === text.message.id)];
   if (selectedMessage) selectedMessage.classList.add('selected-message');
   const purchaseIssue = issue.category === 'Maintenance' ? issue : text.issues.find(item => item.category === 'Supplies') || issue;
