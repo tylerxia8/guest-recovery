@@ -458,3 +458,9 @@ M8 theme presentation check: Wada 268 palette (olive #253122, sienna CTA #a56321
 - A workspace manager sees the available source queues with their next action and source link. A temporarily unavailable tool does not hide the other queues.
 - Two managers cannot claim the same revision of an item. The losing request receives a conflict, and handing off to another active manager records the new assignee and the actor.
 - A manager cannot claim work for a manager in another company or read its queue. Removing a manager revokes active shared inbox grants. Queue reads contain summaries and links.
+
+### Existing account invitations
+
+- A manager signs in with the invited email, accepts the link once, and chooses the company from Switch workspace. Attempting to accept with a different signed-in email fails.
+- The new company issues a manager session. The previous session and its delegated tool grants stop working on switch. An uninvited company cannot be selected.
+- Removing an account's membership from one company preserves its other authorized memberships. Two-factor authentication still protects the single login.

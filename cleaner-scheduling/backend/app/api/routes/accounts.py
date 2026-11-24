@@ -6,6 +6,7 @@ import hmac
 import logging
 import re
 import secrets
+import uuid
 from collections.abc import Generator
 from typing import Annotated, Literal, cast
 
@@ -15,7 +16,8 @@ from app.clock import Clock
 from app.config import Settings
 from app.db import catalog_session_factory
 from app.domain.errors import AppError
-from app.models.accounts import ManagerAccount, ManagerSession
+from app.models import OperatorProfile
+from app.models.accounts import ManagerAccount, ManagerInvitation, ManagerSession
 from app.services.account_deletion import delete_account
 from app.services.email_addresses import normalize_email
 from app.services.manager_mfa import change_mfa
@@ -29,8 +31,10 @@ from app.services.operations_access import (
 )
 from app.services.security_alerts import queue_security_alert, record_failed_login
 from app.services.workspace_accounts import (
+    account_subject,
     authenticate_session,
     authenticate_session_digest,
+    lock_active_workspace,
     login_session,
     signup,
     token_digest,
@@ -41,7 +45,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from redis.exceptions import RedisError
-from sqlalchemy import select, text, update
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -153,13 +157,15 @@ def account_response(session: Session, account: ManagerAccount) -> dict[str, obj
     name = session.scalar(text("SELECT name FROM workspaces WHERE id = :id"), {"id": account.workspace_id})
     if not isinstance(name, str):
         raise RuntimeError("Account workspace is missing")
+    login = session.get(ManagerAccount, account.login_account_id) if account.login_account_id else account
     return {
-        "email": account.email,
+        "email": login.email if login is not None else "",
+        "primary_login": account.login_account_id is None,
         "workspace_id": str(account.workspace_id),
         "name": name,
         "workspace_owner": account.workspace_owner,
-        "mfa_enabled": account.mfa_secret is not None,
-        "recovery_codes_remaining": len(account.mfa_recovery_hashes),
+        "mfa_enabled": login is not None and login.mfa_secret is not None,
+        "recovery_codes_remaining": len(login.mfa_recovery_hashes) if login is not None else 0,
     }
 
 
@@ -223,7 +229,11 @@ def login(
     if re.fullmatch(r"[\x21-\x7E]{1,128}", key) is None:
         raise AppError("idempotency_key_invalid", "A valid Idempotency-Key is required.", 400)
     account_rate_limit(cache, f"login:{hashlib.sha256(payload.email.encode()).hexdigest()}", 10)
-    account = session.scalar(select(ManagerAccount).where(ManagerAccount.email == payload.email).with_for_update())
+    account = session.scalar(
+        select(ManagerAccount)
+        .where(ManagerAccount.email == payload.email, ManagerAccount.login_account_id.is_(None))
+        .with_for_update()
+    )
     valid = verify_password(payload.password, None if account is None else account.password_hash)
     if not valid or account is None or account.deleted_at is not None:
         logger.info("account.login_denied")
@@ -235,6 +245,21 @@ def login(
                 session.rollback()
                 logger.error("security_alert.login_record_failed")
         raise AppError("invalid_credentials", "Email or password is incorrect.", 401)
+    target = account
+    if account.home_access_revoked_at is not None:
+        fallback = session.scalar(
+            select(ManagerAccount)
+            .where(
+                ManagerAccount.login_account_id == account.id,
+                ManagerAccount.deleted_at.is_(None),
+                ManagerAccount.home_access_revoked_at.is_(None),
+            )
+            .order_by(ManagerAccount.created_at, ManagerAccount.id)
+            .limit(1)
+        )
+        if fallback is None:
+            raise AppError("invalid_credentials", "Email or password is incorrect.", 401)
+        target = fallback
     recovery_count = len(account.mfa_recovery_hashes)
     try:
         token = login_session(
@@ -245,6 +270,7 @@ def login(
             secret=settings.field_encryption_secret,
             now=clock.now(),
             second_factor=payload.second_factor,
+            target=target,
         )
     except AppError as error:
         if error.code == "invalid_second_factor":
@@ -252,8 +278,9 @@ def login(
             session.commit()
         raise
     if len(account.mfa_recovery_hashes) < recovery_count:
-        queue_security_alert(session, account.id, account.workspace_id, "recovery_code_used", settings, clock)
-    result = {**account_response(session, account), "token": token}
+        queue_security_alert(session, account.id, session.info["workspace_id"], "recovery_code_used", settings, clock)
+    selected = authenticate_session(session, token, clock.now())
+    result = {**account_response(session, selected), "token": token}
     session.commit()
     logger.info("account.login", extra={"workspace_id": str(account.workspace_id)})
     return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
@@ -402,6 +429,170 @@ def operations_inbox_identity(
     )
 
 
+class JoinWorkspaceWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    invitation_token: str = Field(pattern=r"^team_[A-Za-z0-9_-]{43}$", repr=False)
+
+
+class SwitchWorkspaceWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workspace_id: uuid.UUID
+
+
+@router.post("/join", include_in_schema=False)
+def join_workspace(
+    payload: JoinWorkspaceWrite,
+    request: Request,
+    session: Session = Depends(account_database),
+    clock: Clock = Depends(get_clock),
+) -> JSONResponse:
+    now = clock.now()
+    account = authenticate_session(session, bearer_token(request), now)
+    profile = session.scalar(select(OperatorProfile).where(OperatorProfile.auth_subject == account_subject(account)))
+    if profile is None:
+        raise AppError("invalid_session", "Sign in to continue.", 401)
+    login_id = account.login_account_id or account.id
+    login = session.scalar(
+        select(ManagerAccount)
+        .where(ManagerAccount.id == login_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    invitation_hash = token_digest(payload.invitation_token)
+    # Catalog lookup must not inherit the currently selected workspace's RLS context.
+    session.execute(text("SELECT set_config('app.workspace_id', '', true)"))
+    invite = session.get(ManagerInvitation, invitation_hash)
+    if (
+        login is None
+        or login.deleted_at is not None
+        or invite is None
+        or invite.email != login.email
+        or invite.expires_at <= now
+    ):
+        raise AppError("invitation_required", "This invitation is unavailable for your signed-in email.", 403)
+    workspace_id = invite.workspace_id
+    if not lock_active_workspace(session, workspace_id):
+        raise AppError("invitation_required", "This invitation is unavailable.", 403)
+    invite = session.get(ManagerInvitation, invitation_hash, populate_existing=True)
+    if invite is None or invite.expires_at <= now or invite.email != login.email:
+        raise AppError("invitation_required", "This invitation is unavailable.", 403)
+    if (
+        session.scalar(
+            select(ManagerAccount.id).where(
+                ManagerAccount.workspace_id == workspace_id,
+                ManagerAccount.deleted_at.is_(None),
+                ManagerAccount.home_access_revoked_at.is_(None),
+                or_(ManagerAccount.id == login_id, ManagerAccount.login_account_id == login_id),
+            )
+        )
+        is not None
+    ):
+        raise AppError("already_in_workspace", "You already belong to this workspace.", 409)
+    member_id = uuid.uuid4()
+    member = ManagerAccount(
+        id=member_id,
+        email=f"{member_id}@workspace.invalid",
+        password_hash="",
+        workspace_id=workspace_id,
+        workspace_owner=False,
+        login_account_id=login_id,
+        created_at=now,
+        signup_key_hash=token_digest(secrets.token_urlsafe(32)),
+        signup_request_hash="",
+    )
+    session.execute(text("SELECT set_config('app.workspace_id', :id, true)"), {"id": str(workspace_id)})
+    session.add(member)
+    session.add(
+        OperatorProfile(
+            id=uuid.uuid4(),
+            created_at=now,
+            updated_at=now,
+            version=1,
+            auth_subject=f"manager:{member_id}",
+            display_name=profile.display_name,
+            roles=["manager"],
+            active=True,
+        )
+    )
+    session.delete(invite)
+    session.commit()
+    return JSONResponse(content={"workspace_id": str(workspace_id)}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/workspaces", include_in_schema=False)
+def account_workspaces(
+    request: Request, session: Session = Depends(account_database), clock: Clock = Depends(get_clock)
+) -> JSONResponse:
+    account = authenticate_session(session, bearer_token(request), clock.now())
+    primary = account.login_account_id or account.id
+    rows = session.execute(
+        text("""
+        SELECT w.id, w.name FROM workspaces w JOIN manager_accounts a ON a.workspace_id=w.id
+        WHERE (a.id=:login OR a.login_account_id=:login) AND a.deleted_at IS NULL
+          AND a.home_access_revoked_at IS NULL AND w.deleted_at IS NULL
+        ORDER BY w.name, w.id
+    """),
+        {"login": primary},
+    ).mappings()
+    return JSONResponse(
+        content={
+            "current": str(account.workspace_id),
+            "items": [{"id": str(row["id"]), "name": row["name"]} for row in rows],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/switch-workspace", include_in_schema=False)
+def switch_workspace(
+    payload: SwitchWorkspaceWrite,
+    request: Request,
+    session: Session = Depends(account_database),
+    clock: Clock = Depends(get_clock),
+) -> JSONResponse:
+    now = clock.now()
+    digest = token_digest(bearer_token(request))
+    account = authenticate_session_digest(session, digest, now)
+    login_id = account.login_account_id or account.id
+    login = session.scalar(
+        select(ManagerAccount)
+        .where(ManagerAccount.id == login_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if login is None or login.deleted_at is not None:
+        raise AppError("invalid_session", "Sign in to continue.", 401)
+    source = session.scalar(select(ManagerSession).where(ManagerSession.token_hash == digest).with_for_update())
+    if source is None or source.revoked_at is not None or source.expires_at <= now:
+        raise AppError("invalid_session", "Sign in to continue.", 401)
+    authenticate_session_digest(session, digest, now)
+    target = session.scalar(
+        select(ManagerAccount).where(
+            ManagerAccount.workspace_id == payload.workspace_id,
+            ManagerAccount.deleted_at.is_(None),
+            ManagerAccount.home_access_revoked_at.is_(None),
+            or_(ManagerAccount.id == login_id, ManagerAccount.login_account_id == login_id),
+        )
+    )
+    if target is None:
+        raise AppError("workspace_unavailable", "This workspace is unavailable.", 403)
+    token = "mgr_" + secrets.token_urlsafe(32)
+    session.add(
+        ManagerSession(
+            token_hash=token_digest(token),
+            account_id=target.id,
+            created_at=now,
+            expires_at=source.expires_at,
+        )
+    )
+    session.flush()
+    authenticate_session(session, token, now)
+    source.revoked_at = now
+    result = {**account_response(session, target), "token": token}
+    session.commit()
+    return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/me")
 def current_account(
     request: Request,
@@ -439,20 +630,21 @@ def update_account(
         )
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
     account = authenticate_session(session, token, clock.now())
-    account_rate_limit(cache, f"mfa:{account.id}", 10)
-    session.scalar(
+    login_id = account.login_account_id or account.id
+    account_rate_limit(cache, f"mfa:{login_id}", 10)
+    login = session.scalar(
         select(ManagerAccount)
-        .where(ManagerAccount.id == account.id)
+        .where(ManagerAccount.id == login_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     authenticate_session(session, token, clock.now())
-    if not verify_password(payload.password, account.password_hash):
+    if login is None or login.deleted_at is not None or not verify_password(payload.password, login.password_hash):
         logger.info("account.mfa_denied")
         raise AppError("invalid_credentials", "Password is incorrect.", 401)
     result = change_mfa(
         session,
-        account=account,
+        account=login,
         action=payload.action,
         password=payload.password,
         second_factor=payload.second_factor if isinstance(payload, VerifyMfaWrite) else "",

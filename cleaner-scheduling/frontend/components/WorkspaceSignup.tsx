@@ -82,6 +82,10 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
           window.location.replace(resumeOperations);
           return;
         }
+        if (login && invitationLink?.startsWith("team_")) {
+          window.location.replace("/join#invite=" + encodeURIComponent(invitationLink));
+          return;
+        }
         router.replace("/signup"); router.refresh();
       } else if (step === 2) {
         keys.current.connection ||= crypto.randomUUID();

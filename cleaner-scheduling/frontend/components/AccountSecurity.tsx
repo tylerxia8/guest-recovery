@@ -1,14 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { WorkspaceManagers } from "./WorkspaceManagers";
 import { DeleteAccount } from "./DeleteAccount";
 
 type SecurityState = {stage: "disabled"} | {stage: "enabled"; remaining: number} | {stage: "setup"; secret: string; expiresAt: string} | {stage: "recovery"; codes: string[]};
 type PendingChange = {action: "begin_mfa" | "confirm_mfa" | "disable_mfa"; key: string; body: string};
-type SecurityResponse = {workspace_owner?: boolean; mfa_enabled?: boolean; recovery_codes_remaining?: number; secret?: string; expires_at?: string; recovery_codes?: string[]; error?: {message?: string}};
+type SecurityResponse = {workspace_owner?: boolean; primary_login?: boolean; mfa_enabled?: boolean; recovery_codes_remaining?: number; secret?: string; expires_at?: string; recovery_codes?: string[]; error?: {message?: string}};
 
 export function AccountSecurity() {
+  const [primaryLogin, setPrimaryLogin] = useState(true);
   const [workspaceOwner, setWorkspaceOwner] = useState(true);
   const [security, setSecurity] = useState<SecurityState | null>(null);
   const [password, setPassword] = useState("");
@@ -30,6 +32,7 @@ export function AccountSecurity() {
         const remaining = body.recovery_codes_remaining;
         if (typeof body.mfa_enabled !== "boolean" || typeof remaining !== "number" || !Number.isInteger(remaining) || remaining < 0 || remaining > 8) throw new Error("Could not load your security settings. Please try again.");
         if (!controller.signal.aborted) {
+          setPrimaryLogin(body.primary_login !== false);
           setWorkspaceOwner(body.workspace_owner !== false);
           setSecurity(body.mfa_enabled ? {stage: "enabled", remaining} : {stage: "disabled"});
         }
@@ -76,6 +79,7 @@ export function AccountSecurity() {
 
   return <main className="account-security">
     <h1>Account security</h1>
+    {!primaryLogin ? <p>To delete your login, return to your original workspace. <Link href="/workspaces">Switch workspace</Link></p> : null}
     <section className="workspace-card" aria-labelledby="mfa-title" hidden={deletionOpen}>
       <h2 id="mfa-title">Two-factor authentication</h2>
       {!security ? <>{error ? <button onClick={() => {setError(""); setReload(current => current + 1);}}>Try again</button> : <p role="status">Loading your security settings…</p>}</> : security.stage === "recovery" ? <>
@@ -106,7 +110,7 @@ export function AccountSecurity() {
       {message ? <p role="status">{message}</p> : null}
     </section>
     {security && workspaceOwner && !deletionOpen ? <WorkspaceManagers /> : null}
-    {security && ["enabled", "disabled"].includes(security.stage) && !pending && !busy ? <section className="workspace-card" aria-labelledby="delete-account-title">
+    {security && primaryLogin && ["enabled", "disabled"].includes(security.stage) && !pending && !busy ? <section className="workspace-card" aria-labelledby="delete-account-title">
       <h2 id="delete-account-title">Delete account</h2>
       {deletionOpen ? <DeleteAccount workspaceOwner={workspaceOwner} mfaEnabled={security.stage === "enabled"} onCancel={() => setDeletionOpen(false)} /> : <>
         <p>{workspaceOwner ? "Permanently close your account and stop automated workspace communications." : "Permanently remove your access to this workspace."}</p>

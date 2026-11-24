@@ -71,6 +71,17 @@ def delete_account(
             return {"deleted": True}
         raise AppError("invalid_session", "Sign in to continue.", 401)
     authenticate_session(session, token, now)
+    if account.login_account_id is not None:
+        raise AppError("primary_account_required", "Switch to your original workspace to delete your login.", 409)
+    if (
+        session.scalar(
+            select(ManagerAccount.id)
+            .where(ManagerAccount.login_account_id == account.id, ManagerAccount.deleted_at.is_(None))
+            .limit(1)
+        )
+        is not None
+    ):
+        raise AppError("primary_account_required", "Ask the other workspace owners to remove your access first.", 409)
     if not verify_password(password, account.password_hash):
         raise AppError("invalid_credentials", "Password is incorrect.", 401)
     if account.mfa_secret is not None:
@@ -95,6 +106,7 @@ def delete_account(
                     ManagerAccount.workspace_id == account.workspace_id,
                     ManagerAccount.workspace_owner.is_(False),
                     ManagerAccount.deleted_at.is_(None),
+                    ManagerAccount.home_access_revoked_at.is_(None),
                 )
                 .limit(1)
             )

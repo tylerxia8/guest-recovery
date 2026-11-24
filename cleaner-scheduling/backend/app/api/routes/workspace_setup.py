@@ -39,7 +39,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 router = APIRouter(prefix="/v1/workspace", tags=["workspace-setup"])
 
@@ -109,10 +109,17 @@ def invite_manager(
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
     workspace_id = session.info["workspace_id"]
+    login = aliased(ManagerAccount)
+    email = func.coalesce(login.email, ManagerAccount.email)
     if (
         session.scalar(
-            select(ManagerAccount.id).where(
-                ManagerAccount.workspace_id == workspace_id, ManagerAccount.email == payload.email
+            select(ManagerAccount.id)
+            .outerjoin(login, login.id == ManagerAccount.login_account_id)
+            .where(
+                ManagerAccount.workspace_id == workspace_id,
+                ManagerAccount.deleted_at.is_(None),
+                ManagerAccount.home_access_revoked_at.is_(None),
+                email == payload.email,
             )
         )
         is not None
@@ -141,16 +148,20 @@ def list_managers(
     _principal: Principal = Depends(require_owner),
     session: Session = Depends(get_db),
 ) -> dict[str, object]:
-    members = session.scalars(
-        select(ManagerAccount)
+    login = aliased(ManagerAccount)
+    email = func.coalesce(login.email, ManagerAccount.email)
+    members = session.execute(
+        select(ManagerAccount.id, email)
+        .outerjoin(login, login.id == ManagerAccount.login_account_id)
         .where(
             ManagerAccount.workspace_id == session.info["workspace_id"],
             ManagerAccount.workspace_owner.is_(False),
             ManagerAccount.deleted_at.is_(None),
+            ManagerAccount.home_access_revoked_at.is_(None),
         )
-        .order_by(ManagerAccount.email)
+        .order_by(email)
     )
-    return {"managers": [{"id": str(member.id), "email": member.email} for member in members]}
+    return {"managers": [{"id": str(member_id), "email": address} for member_id, address in members]}
 
 
 @router.delete("/managers/{manager_id}")
@@ -173,7 +184,7 @@ def remove_manager(
     )
     if member is None:
         raise AppError("manager_not_found", "Manager not found.", 404)
-    if member.deleted_at is None:
+    if member.deleted_at is None and member.home_access_revoked_at is None:
         now = clock.now()
         session.execute(update(ManagerSession).where(ManagerSession.account_id == member.id).values(revoked_at=now))
         session.execute(
@@ -183,8 +194,23 @@ def remove_manager(
             ),
             {"subject": f"manager:{member.id}"},
         )
-        scrub_account(member)
-        member.deleted_at = now
+        has_links = (
+            session.scalar(
+                select(ManagerAccount.id)
+                .where(
+                    ManagerAccount.login_account_id == member.id,
+                    ManagerAccount.deleted_at.is_(None),
+                    ManagerAccount.home_access_revoked_at.is_(None),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        if member.login_account_id is None and has_links:
+            member.home_access_revoked_at = now
+        else:
+            scrub_account(member)
+            member.deleted_at = now
         write_audit(
             session,
             clock=clock,

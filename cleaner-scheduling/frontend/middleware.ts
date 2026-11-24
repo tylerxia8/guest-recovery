@@ -40,7 +40,7 @@ async function workspaceAccess(request: NextRequest, requestHeaders: Headers) {
   const origin = requestOrigin(request);
   if (!origin) return new NextResponse("Access unavailable.", {status: 403});
   const path = request.nextUrl.pathname;
-  if (path.startsWith("/api/") || path.startsWith("/auth/") || ["/onboarding", "/cleaner"].includes(path)) return NextResponse.next({request: {headers: requestHeaders}});
+  if (path.startsWith("/api/") || path.startsWith("/auth/") || ["/onboarding", "/cleaner", "/join"].includes(path)) return NextResponse.next({request: {headers: requestHeaders}});
   const token = request.cookies.get("manager-session")?.value;
   const accountPage = path === "/" || path === "/signup" || path === "/login";
   if (!token) return accountPage ? NextResponse.next({request: {headers: requestHeaders}}) : NextResponse.redirect(new URL(workspaceRegistrationEnabled ? "/signup" : "/login", origin));
@@ -77,7 +77,7 @@ async function workspaceAccess(request: NextRequest, requestHeaders: Headers) {
   } catch {
     return new NextResponse("Your workspace is unavailable. Please refresh to try again.", {status: 503});
   }
-  if (!completed) return ["/signup", "/security"].includes(path) ? NextResponse.next({request: {headers: requestHeaders}}) : NextResponse.redirect(new URL("/signup", origin));
+  if (!completed) return ["/signup", "/security", "/workspaces"].includes(path) ? NextResponse.next({request: {headers: requestHeaders}}) : NextResponse.redirect(new URL("/signup", origin));
   if (accountPage) return NextResponse.redirect(new URL("/dashboard", origin));
   if (path === "/") return NextResponse.redirect(new URL("/dashboard", origin));
   return NextResponse.next({request: {headers: requestHeaders}});

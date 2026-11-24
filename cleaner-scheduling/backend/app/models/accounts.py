@@ -20,6 +20,8 @@ class ManagerAccount(AccountBase):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     workspace_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    home_access_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    login_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     signup_key_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     signup_request_hash: Mapped[str] = mapped_column(Text, nullable=False)

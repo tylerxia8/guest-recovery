@@ -53,11 +53,11 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
     {operationsTools.map(tool => <a key={tool.label} href={tool.href}>{tool.label}</a>)}
   </nav> : null;
 
-  if (pathname === "/signup") return <>{toolNavigation}{children}</>;
-  if (pathname === "/onboarding" || pathname === "/cleaner" || pathname === "/login") return <>{children}</>;
+  if (pathname === "/signup") return <>{toolNavigation}<p><Link href="/workspaces">Switch workspace</Link></p>{children}</>;
+  if (pathname === "/onboarding" || pathname === "/cleaner" || pathname === "/login" || pathname === "/join") return <>{children}</>;
 
   if (workspaceSignup) return <>
-    <header className="app-header"><Link href="/dashboard" className="brand"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Cleaner<small>Cleaning coordination</small></span></Link>{connected ? <div className="account-actions"><Link href="/security" aria-current={pathname === "/security" ? "page" : undefined}>Security</Link><button type="button" disabled={busy} onClick={async () => {
+    <header className="app-header"><Link href="/dashboard" className="brand"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Cleaner<small>Cleaning coordination</small></span></Link>{connected ? <div className="account-actions"><Link href="/workspaces">Switch workspace</Link><Link href="/security" aria-current={pathname === "/security" ? "page" : undefined}>Security</Link><button type="button" disabled={busy} onClick={async () => {
       setBusy(true); setMessage("");
       try {
         const response = await fetch("/auth/logout", {method: "POST", signal: AbortSignal.timeout(20000)});
