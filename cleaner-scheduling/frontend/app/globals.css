@@ -313,13 +313,33 @@ select[multiple] option:checked { background: var(--surface-mist); color: var(--
 .cleaner-onboarding .weekly-saved h3 { font-size: 25px; letter-spacing: -.6px; margin-bottom: 10px; }
 .cleaner-onboarding .weekly-saved button { border-radius: 9px; min-height: 44px; background: var(--surface); color: var(--ink); border-color: var(--line); }
 .cleaner-onboarding .onboarding-privacy { text-align: center; margin: 24px 0 0; color: var(--muted); font-size: 11px; }
-@media (max-width: 500px) {
-  .cleaner-onboarding { padding: 26px 14px 24px; }
-  .cleaner-onboarding .weekly-hours { padding: 24px 18px; border-radius: 18px; }
+@media (max-width: 600px) {
+  .cleaner-onboarding {
+    padding: 16px max(12px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  .cleaner-onboarding > header { text-align: start; margin-bottom: 18px; }
+  .cleaner-onboarding .onboarding-welcome-illustration { display: none; }
+  .cleaner-onboarding .onboarding-wordmark { margin-bottom: 14px; }
+  .cleaner-onboarding .cleaner-language-picker { margin-bottom: 14px; }
+  .cleaner-onboarding .weekly-hours { padding: 20px clamp(12px, 4vw, 20px); border-radius: 16px; }
+  .cleaner-onboarding .weekly-hours > p { margin-bottom: 20px; }
   .cleaner-onboarding .weekly-days > div { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
   .cleaner-onboarding .weekly-days label { min-height: 44px; }
-  .cleaner-onboarding .weekly-time-pair { gap: 12px; }
-  .onboarding-wordmark { margin-bottom: 22px; }
+  .cleaner-onboarding .weekly-time-pair { gap: 10px; }
+  .cleaner-onboarding .weekly-time-pair label,
+  .cleaner-onboarding .weekly-time-pair input { min-width: 0; }
+  .cleaner-onboarding input[type="time"],
+  .cleaner-onboarding .starting-address-field input,
+  .cleaner-onboarding .cleaner-language-picker select { font-size: 16px; }
+  .cleaner-onboarding .reading-language-options label { flex: 1 0 auto; }
+  .cleaner-onboarding .weekly-availability-fields details { padding-block: 0; }
+  .cleaner-onboarding .weekly-availability-fields summary { align-content: center; min-height: 44px; }
+  .cleaner-onboarding .weekly-availability-fields details[open] { padding-bottom: 12px; }
+  .cleaner-onboarding .weekly-availability-fields details[open] > summary { margin-bottom: 4px; }
+}
+@media (max-width: 410px) {
+  .cleaner-onboarding .weekly-time-pair { grid-template-columns: minmax(0, 1fr); }
+  .cleaner-onboarding .weekly-time-pair label { margin-bottom: 4px; }
 }
 
 .operation-setup { max-width: 1240px; }
