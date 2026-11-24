@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, type ApiError } from "../lib/api";
 import { OnboardingEmailNotice } from "./OnboardingEmailNotice";
 import { EarlyCheckout } from "./EarlyCheckout";
@@ -11,6 +11,15 @@ import { EmptyState } from "./EmptyState";
 export type TaskRow = { kind?: string; guest_scope?: string | null; version?: number; confirmed_checkout_at?: string | null; can_confirm_early_checkout?: boolean; duration_minutes?: number | null; id: string; property_name: string; cleaner_name: string | null; planned_start: string | null; planned_end: string | null; acknowledged: boolean; status: string; pending: boolean; deadline_at: string | null; release_at: string; cleaned?: boolean; completed_at?: string | null; overdue?: boolean; assignment_status?: string | null; needs_assignment?: boolean; deadline_conflict?: boolean; travel_before_seconds?: number | null; travel_from?: string | null; travel_source?: string | null };
 const time = (value: string | null) => value ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(value)) : "No deadline";
 const datedTime = (value: string | null | undefined) => value ? new Intl.DateTimeFormat("en-US", {timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}).format(new Date(value)) : "Not scheduled";
+const phoneLayoutQuery = "(max-width: 700px)";
+const isPhoneLayout = () => window.matchMedia(phoneLayoutQuery).matches;
+const serverPhoneLayout = () => false;
+function subscribeToPhoneLayout(listener: () => void) {
+  const query = window.matchMedia(phoneLayoutQuery);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
+
 function taskStatus(task: TaskRow) {
   if (task.status === "completed") return "Cleaned";
   if (task.status === "canceled") return "Canceled";
@@ -56,6 +65,7 @@ type Dashboard = {
 };
 
 export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = false}: {demo: boolean; canWrite: boolean; workspaceSignupEnabled?: boolean}) {
+  const phoneLayout = useSyncExternalStore(subscribeToPhoneLayout, isPhoneLayout, serverPhoneLayout);
   const [filter, setFilter] = useState("open");
   const [checkoutNotice, setCheckoutNotice] = useState("");
   const [search, setSearch] = useState("");
@@ -128,7 +138,7 @@ export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = f
     ].map(([label, count]) => <div className="cleaning-summary-card" key={label}><span>{label}</span><strong>{count}</strong></div>)}</div>
     <section id="cleaning-jobs" className="today-cleaning-board" tabIndex={-1} aria-label={isToday ? "Today’s houses" : "Selected day’s houses"}>
       <div className="cleaning-board-toolbar"><div className="cleaning-board-filters" role="group" aria-label="Show cleaning work">{[["open", "To clean"], ["unassigned", "Unassigned"], ["completed", "Cleaned"], ["all", "All"]].map(([value, label]) => <button type="button" aria-pressed={filter === value} className={filter === value ? "is-selected" : ""} key={value} onClick={() => setFilter(value)}>{label}</button>)}</div><label className="cleaning-board-search"><span className="visually-hidden">Find a house or cleaner</span><input type="search" placeholder="Find a house or cleaner" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
-      {loading ? <p className="cleaning-board-empty">Loading cleaning work…</p> : data && visible.length ? <><div className="today-cleaning-table-wrap" role="region" aria-label="Cleaning assignments" tabIndex={0}><table className="today-cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Assigned cleaner</th><th scope="col">Clean by</th><th scope="col">Status</th></tr></thead><tbody>{visible.map(task => {
+      {loading ? <p className="cleaning-board-empty">Loading cleaning work…</p> : data && visible.length ? <>{!phoneLayout ? <div className="today-cleaning-table-wrap" role="region" aria-label="Cleaning assignments" tabIndex={0}><table className="today-cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Assigned cleaner</th><th scope="col">Clean by</th><th scope="col">Status</th></tr></thead><tbody>{visible.map(task => {
         const done = task.status === "completed";
         const status = taskStatus(task);
         return <tr key={task.id} className={task.overdue ? "is-overdue" : ""}>
@@ -137,7 +147,7 @@ export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = f
           <td><span className={task.overdue ? "cleaning-deadline-overdue" : ""}>{task.deadline_at ? datedTime(task.deadline_at) : "Needs deadline"}</span>{task.overdue && status !== "Overdue" ? <small className="cleaning-deadline-overdue">Overdue</small> : null}{task.deadline_conflict && status !== "Deadline conflict" ? <small className="cleaning-deadline-overdue">Planned finish misses deadline</small> : null}</td>
           <td><span className={`cleaning-task-status${done ? " is-cleaned" : task.overdue || task.deadline_conflict || task.assignment_status === "blocked" ? " needs-review" : !task.cleaner_name ? " is-unassigned" : ""}${status === "Overdue" ? " is-overdue" : ""}`}>{status}</span>{task.completed_at ? <small>{datedTime(task.completed_at)}</small> : null}</td>
         </tr>;
-      })}</tbody></table></div>
+      })}</tbody></table></div> :
       <ul className="cleaning-phone-list" aria-label="Cleaning jobs">{visible.map(task => {
         const status = taskStatus(task);
         const needsReview = ["Overdue", "Blocked", "Deadline conflict", "Unassigned"].includes(status);
@@ -157,7 +167,7 @@ export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = f
           {task.confirmed_checkout_at ? <small>Guest departure confirmed</small> : task.can_confirm_early_checkout && task.version ? <EarlyCheckout taskId={task.id} version={task.version} onConfirmed={message => {setCheckoutNotice(message); setRefreshTick(value => value + 1);}} /> : null}
           {canWrite && needsReview ? <Link className="cleaning-phone-action" href={scheduleHref} aria-label={`Review schedule for ${task.property_name}`}>Review schedule</Link> : null}
         </li>;
-      })}</ul></> : data ? <EmptyState variant="dashboard" title={rows.length && filter === "open" && !query && !open.length ? "All cleaning is done" : rows.length ? "No matching cleans" : "No cleaning work on this date"} description={rows.length && filter === "open" && !query && !open.length ? "Open Cleaned to review finished work." : rows.length ? "Try another filter or search." : "Imported cleaning work will appear here."} /> : null}
+      })}</ul>}</> : data ? <EmptyState variant="dashboard" title={rows.length && filter === "open" && !query && !open.length ? "All cleaning is done" : rows.length ? "No matching cleans" : "No cleaning work on this date"} description={rows.length && filter === "open" && !query && !open.length ? "Open Cleaned to review finished work." : rows.length ? "Try another filter or search." : "Imported cleaning work will appear here."} /> : null}
       <div className="cleaning-board-footer"><span>{data ? `${visible.length} cleans${isToday && data.overdue?.length ? " · includes overdue work" : ""}` : ""}</span>{data?.mode === "hospitable_read_only" ? <Link href="/cleaners">Manage cleaners →</Link> : canWrite ? <Link href="/schedules">Review assignments →</Link> : <Link href="/setup">Setup →</Link>}</div>
     </section>
     <div className="cleaning-dashboard-status"><span>{snapshot?.checkedAt ? `Updated ${time(snapshot.checkedAt)} ET · Auto-refresh 30s` : "Waiting for an update"} <button type="button" onClick={() => setRefreshTick(value => value + 1)}>Refresh</button></span><div>{data?.mode === "hospitable_read_only" && !data.email_automation?.enabled ? <span>Automation paused</span> : null}{data?.sync_health.publication_blocked ? <Link href="/exceptions">Imports need review</Link> : null}</div></div>
