@@ -25,7 +25,7 @@ router = APIRouter(responses=ERROR_RESPONSES)
 @router.post("/auth/local/login", response_model=LoginOut)
 def local_login(body: LoginBody, request: Request, session: Session = Depends(get_session, scope="function")) -> dict:
     settings = request.app.state.settings
-    if not settings.allows_local_auth:
+    if not settings.allows_local_password_login:
         problem(404, "NOT_FOUND", "Not found.")
     rows = session.execute(
         text(
@@ -67,7 +67,7 @@ def local_login(body: LoginBody, request: Request, session: Session = Depends(ge
 
 @router.post("/auth/local/step-up", response_model=StepUpOut)
 def local_step_up(body: LoginBody, request: Request, principal: Principal = Depends(get_principal), session: Session = Depends(get_session, scope="function")) -> dict:
-    if not request.app.state.settings.allows_local_auth:
+    if not request.app.state.settings.allows_local_password_login:
         problem(404, "NOT_FOUND", "Not found.")
     if body.subject != "" and body.password == "":
         problem(401, "UNAUTHENTICATED", "Step-up requires the local password.")
@@ -143,6 +143,7 @@ def operations_login(
         organization_id=organization,
         environment=settings.app_env,
         ttl_seconds=settings.local_token_ttl_seconds,
+        method="operations",
     )
     # Resolve the existing user and current grants through the same checks as a normal session.
     scope = {**request.scope, "headers": [(b"authorization", ("Bearer " + token).encode("ascii"))]}

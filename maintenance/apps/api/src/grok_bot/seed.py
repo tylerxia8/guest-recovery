@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import create_engine, text
 
-from grok_bot.auth.constants import LOCAL_DEV_ISSUER
+from grok_bot.auth.constants import DEMO_ORG, LOCAL_DEV_ISSUER
 
 E2E_ORG = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
 E2E_ADMIN = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2")
@@ -342,7 +342,6 @@ def _grant(conn, user_id: UUID, role: str) -> None:
     )
 
 
-DEMO_ORG = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1")
 DEMO_ADMIN = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2")
 DEMO_MANAGER = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3")
 DEMO_ACCOUNTING = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb4")

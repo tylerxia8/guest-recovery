@@ -1,10 +1,13 @@
 """The fixture role switch exists only for grok_demo_sample."""
 
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 from grok_bot.api.app import create_app
+from grok_bot.auth.tokens import mint_local_token
 from grok_bot.migrate import upgrade
 from grok_bot.seed import ensure_demo_statement, seed_demo
 from grok_bot.settings import Settings
@@ -40,13 +43,26 @@ def test_demo_session_refuses_other_databases_and_production(migrator_engine):
     assert other.allows_demo_session is False
 
 
-def test_sample_database_can_switch_roles_without_a_password():
+def test_sample_database_can_switch_roles_without_a_password(monkeypatch):
+    monkeypatch.setenv('RAILWAY_ENVIRONMENT_ID', 'fixture-hosted')
     psql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'grok_demo_sample' AND pid <> pg_backend_pid()")
     psql("DROP DATABASE IF EXISTS grok_demo_sample")
     recreate_database("grok_demo_sample")
     url = database_url("grok_migrator", "grok_demo_sample")
     upgrade(url)
     seed_demo(url, "test", SESSION_SECRET)
+    private_org, private_manager = uuid4(), uuid4()
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        assert conn.scalar(
+            text("SELECT public.app_provision_operations_workspace(:org, :manager, :grant)"),
+            {"org": private_org, "manager": private_manager, "grant": uuid4()},
+        )
+        conn.execute(
+            text("UPDATE users SET display_name = 'Earlier Private Manager' WHERE id = :id"),
+            {"id": private_manager},
+        )
+    engine.dispose()
     settings = Settings(
         app_env="test",
         database_url=database_url("grok_app", "grok_demo_sample"),
@@ -77,7 +93,6 @@ def test_sample_database_can_switch_roles_without_a_password():
             assert accounts["1030"] == 0
             # Existing demo installs gain the owner walkthrough without a reset
             # or duplicate statements, and without changing available funds.
-            from sqlalchemy import create_engine
             upgrade_engine = create_engine(url)
             ensure_demo_statement(upgrade_engine, "test")
             ensure_demo_statement(upgrade_engine, "test")
@@ -90,6 +105,19 @@ def test_sample_database_can_switch_roles_without_a_password():
             assert len(statements.json()["items"]) == 1
             assert statements.json()["items"][0]["unrestricted_cents"] == 0
             manager = demo.post("/v1/demo/session", json={"role": "property_manager"})
+            assert manager.status_code == 200, manager.text
+            assert manager.json()["display_name"] == "Fixture Manager"
+            for method, status in (("local_dev", 401), ("operations", 200)):
+                private_token = mint_local_token(
+                    secret=SESSION_SECRET,
+                    user_id=private_manager,
+                    organization_id=private_org,
+                    environment="test",
+                    ttl_seconds=60,
+                    method=method,
+                )
+                private = demo.get("/v1/me", headers={"Authorization": f"Bearer {private_token}"})
+                assert private.status_code == status, private.text
             switches = demo.get("/v1/kill-switches", headers={"Authorization": f"Bearer {manager.json()['token']}"})
             assert switches.status_code == 200, switches.text
             assert switches.json() == {

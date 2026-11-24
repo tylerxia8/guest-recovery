@@ -17,9 +17,10 @@ def mint_local_token(
     organization_id: UUID,
     environment: str,
     ttl_seconds: int,
+    method: str = "local_dev",
 ) -> str:
     payload = {
-        "amr": "local_dev",
+        "amr": method,
         "env": environment,
         "exp": int(time.time()) + ttl_seconds,
         "org": str(organization_id),
