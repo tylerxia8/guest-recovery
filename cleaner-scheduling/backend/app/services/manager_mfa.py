@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Literal, cast
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.clock import Clock
@@ -151,7 +151,11 @@ def change_mfa(
         session.execute(
             update(ManagerSession)
             .where(
-                ManagerSession.account_id == account.id,
+                ManagerSession.account_id.in_(
+                    select(ManagerAccount.id).where(
+                        (ManagerAccount.id == account.id) | (ManagerAccount.login_account_id == account.id)
+                    )
+                ),
                 ManagerSession.token_hash != session_digest,
                 ManagerSession.revoked_at.is_(None),
             )
@@ -171,9 +175,13 @@ def change_mfa(
         request_id=request_id,
     )
     if action == "confirm_mfa":
-        queue_security_alert(session, account.id, account.workspace_id, "mfa_enabled", settings, clock)
+        queue_security_alert(
+            session, account.id, session.info.get("workspace_id", account.workspace_id), "mfa_enabled", settings, clock
+        )
     elif action == "disable_mfa":
-        queue_security_alert(session, account.id, account.workspace_id, "mfa_disabled", settings, clock)
+        queue_security_alert(
+            session, account.id, session.info.get("workspace_id", account.workspace_id), "mfa_disabled", settings, clock
+        )
     snapshot = {
         "body": result,
         "expires_at": (now + timedelta(minutes=10)).isoformat(),

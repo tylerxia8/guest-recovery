@@ -162,10 +162,65 @@ def test_invited_manager_shares_connection_and_can_be_removed(
         assert client.delete(member_url, headers=auth(other)).status_code == 404
         assert claims["account_id"] == managers[0]["id"]
         assert claims["workspace_owner_id"] != claims["account_id"]
+        another_invite = client.post(
+            "/v1/workspace/manager-invitations", headers=auth(other), json={"email": "member@example.test"}
+        )
+        assert another_invite.status_code == 201
+        a_second_company = client.post(
+            "/v1/accounts/join",
+            headers=auth(member),
+            json={"invitation_token": another_invite.json()["invitation_token"]},
+        )
+        assert a_second_company.status_code == 200, a_second_company.text
         assert client.delete(member_url, headers=auth(owner)).status_code == 200
         assert client.get(membership_url, headers=membership_headers).status_code == 401
         assert client.get(queue_identity, headers=queue_headers).status_code == 401
         assert client.get("/v1/accounts/me", headers=auth(member)).status_code == 401
         assert client.get("/v1/accounts/me", headers=auth(login.json())).status_code == 401
-        assert sign_up("member@example.test", code).status_code == 403
+        assert sign_up("member@example.test", code).status_code in {403, 409}
+        login_after_removal = client.post(
+            "/v1/accounts/login",
+            headers={"Idempotency-Key": str(uuid.uuid4())},
+            json={"email": "member@example.test", "password": "a-test-only-password"},
+        )
+        assert login_after_removal.status_code == 200, login_after_removal.text
+        assert login_after_removal.json()["workspace_id"] == other["workspace_id"]
         assert client.get("/v1/workspace/setup", headers=auth(owner)).json()["completed"] is True
+
+        existing_invite = client.post(
+            "/v1/workspace/manager-invitations", headers=auth(owner), json={"email": "other@example.test"}
+        )
+        assert existing_invite.status_code == 201, existing_invite.text
+        invite_body = {"invitation_token": existing_invite.json()["invitation_token"]}
+        assert client.post("/v1/accounts/join", headers=auth(owner), json=invite_body).status_code == 403
+        joined = client.post("/v1/accounts/join", headers=auth(other), json=invite_body)
+        assert joined.status_code == 200, joined.text
+        assert client.post("/v1/accounts/join", headers=auth(other), json=invite_body).status_code == 403
+        workspaces = client.get("/v1/accounts/workspaces", headers=auth(other)).json()
+        assert workspaces["current"] == other["workspace_id"]
+        assert {item["id"] for item in workspaces["items"]} == {owner["workspace_id"], other["workspace_id"]}
+        switch_path = "/v1/accounts/switch-workspace"
+        assert (
+            client.post(switch_path, headers=auth(other), json={"workspace_id": str(uuid.uuid4())}).status_code == 403
+        )
+        switched = client.post(switch_path, headers=auth(other), json={"workspace_id": owner["workspace_id"]})
+        assert switched.status_code == 200, switched.text
+        alias = switched.json()
+        assert alias["workspace_owner"] is False and alias["primary_login"] is False
+        assert alias["email"] == "other@example.test"
+        assert client.get("/v1/accounts/me", headers=auth(other)).status_code == 401
+        assert client.get(inbox, headers=auth(alias)).json()["claims"][0]["version"] == 2
+        returned = client.post(switch_path, headers=auth(alias), json={"workspace_id": other["workspace_id"]})
+        assert returned.status_code == 200, returned.text
+        assert returned.json()["workspace_owner"] is True
+        assert client.get("/v1/accounts/me", headers=auth(alias)).status_code == 401
+        teammate = client.get("/v1/workspace/managers", headers=auth(owner)).json()["managers"][0]
+        assert teammate["email"] == "other@example.test"
+        assert client.delete("/v1/workspace/managers/" + teammate["id"], headers=auth(owner)).status_code == 200
+        assert client.get("/v1/accounts/me", headers=auth(returned.json())).status_code == 200
+        assert (
+            client.post(
+                switch_path, headers=auth(returned.json()), json={"workspace_id": owner["workspace_id"]}
+            ).status_code
+            == 403
+        )

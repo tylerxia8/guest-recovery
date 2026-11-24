@@ -8,9 +8,10 @@ import { sessionTokenCookie, sessionRoleCookie, workspaceSignupEnabled } from ".
 async function accountRequest(request: NextRequest, context: {params: Promise<{action: string}>}) {
   const {action} = await context.params;
   const security = action === "security";
+  const workspaceRequest = ["workspaces", "join", "switch-workspace"].includes(action);
   const method = request.method;
   const responseHeaders = {"Cache-Control": "no-store"};
-  if (!workspaceSignupEnabled || !(security ? ["GET", "PATCH"].includes(method) : method === "POST" && ["signup", "login", "logout"].includes(action))) return NextResponse.json({error: {message: "Not found."}}, {status: 404, headers: responseHeaders});
+  if (!workspaceSignupEnabled || !(security ? ["GET", "PATCH"].includes(method) : action === "workspaces" ? method === "GET" : method === "POST" && ["signup", "login", "logout", "join", "switch-workspace"].includes(action))) return NextResponse.json({error: {message: "Not found."}}, {status: 404, headers: responseHeaders});
   const origin = requestOrigin(request);
   if (!origin || method !== "GET" && request.headers.get("origin") !== origin) return NextResponse.json({error: {message: "Same-origin access required."}}, {status: 403, headers: responseHeaders});
   const upstreamOrigin = apiOrigin(origin);
@@ -21,7 +22,7 @@ async function accountRequest(request: NextRequest, context: {params: Promise<{a
   headers.set("Content-Type", "application/json");
   const key = request.headers.get("idempotency-key");
   if (key) headers.set("idempotency-key", key);
-  if (action === "logout" || security) {
+  if (action === "logout" || security || workspaceRequest) {
     const token = (await cookies()).get(sessionTokenCookie)?.value;
     if (!token) return NextResponse.json({error: {message: "Sign in to continue."}}, {status: 401, headers: responseHeaders});
     headers.set("authorization", `Bearer ${token}`);
@@ -51,12 +52,22 @@ async function accountRequest(request: NextRequest, context: {params: Promise<{a
       if (security && upstream.status === 409 && failure?.error?.code === "workspace_has_managers") {
         return NextResponse.json({error: {message: "Remove the other managers before closing your workspace."}}, {status: 409, headers: responseHeaders});
       }
+      if (workspaceRequest || failure?.error?.code === "primary_account_required") {
+        const messages: Record<string, string> = {
+          invitation_required: "This invitation is unavailable for your signed-in email. Ask the owner for a new link.",
+          already_in_workspace: "You already belong to this workspace.",
+          workspace_unavailable: "This workspace is unavailable.",
+          primary_account_required: "Manage your login from your original workspace and remove other workspace access before deleting it.",
+        };
+        return NextResponse.json({error: {message: messages[failure?.error?.code ?? ""] ?? "Could not complete this workspace request."}}, {status: upstream.status, headers: responseHeaders});
+      }
       const code = upstream.status === 401 && ["mfa_required", "invalid_second_factor"].includes(failure?.error?.code ?? "") ? failure?.error?.code : undefined;
       const message = code === "mfa_required" ? "Enter your authenticator code or a recovery code." : code === "invalid_second_factor" ? "That verification code is incorrect or has expired. Try again." : upstream.status === 401 ? security ? "Password or verification code is incorrect. Sign in again if your session expired." : "Email or password is incorrect." : upstream.status === 403 && action === "signup" && failure?.error?.code === "invitation_required" ? "This invitation is unavailable or expired. Ask for a new invitation and use the invited email address." : upstream.status === 409 ? security ? "Your security settings changed. Refresh the page and try again." : "An account already exists for this email. Sign in instead." : upstream.status === 429 ? "Too many attempts. Please wait and try again." : "Could not complete this request. Check your details and try again.";
       return NextResponse.json({error: {message, ...(code ? {code} : {})}}, {status: upstream.status, headers: responseHeaders});
     }
+    if (action === "workspaces" || action === "join") return NextResponse.json(await upstream.json(), {headers: responseHeaders});
     if (security) {
-      const body = await upstream.json() as {deleted?: boolean; workspace_owner?: boolean; mfa_enabled?: boolean; recovery_codes_remaining?: number; secret?: string; expires_at?: string; recovery_codes?: string[]};
+      const body = await upstream.json() as {deleted?: boolean; workspace_owner?: boolean; primary_login?: boolean; mfa_enabled?: boolean; recovery_codes_remaining?: number; secret?: string; expires_at?: string; recovery_codes?: string[]};
       if (method === "PATCH" && body.deleted === true) {
         const response = NextResponse.json({deleted: true}, {headers: responseHeaders});
         const options = {httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax" as const, path: "/", maxAge: 0};
@@ -65,7 +76,7 @@ async function accountRequest(request: NextRequest, context: {params: Promise<{a
         return response;
       }
       if (typeof body.mfa_enabled !== "boolean") throw new Error("Invalid security response");
-      return NextResponse.json({mfa_enabled: body.mfa_enabled, workspace_owner: body.workspace_owner, recovery_codes_remaining: body.recovery_codes_remaining, ...(method === "PATCH" ? {secret: body.secret, expires_at: body.expires_at, recovery_codes: body.recovery_codes} : {})}, {headers: responseHeaders});
+      return NextResponse.json({mfa_enabled: body.mfa_enabled, workspace_owner: body.workspace_owner, primary_login: body.primary_login, recovery_codes_remaining: body.recovery_codes_remaining, ...(method === "PATCH" ? {secret: body.secret, expires_at: body.expires_at, recovery_codes: body.recovery_codes} : {})}, {headers: responseHeaders});
     }
     const body = action === "logout" ? null : await upstream.json() as {token?: string; workspace_owner?: boolean};
     if (action !== "logout" && !body?.token) return NextResponse.json({error: {message: "Sign-in unavailable."}}, {status: 502, headers: responseHeaders});

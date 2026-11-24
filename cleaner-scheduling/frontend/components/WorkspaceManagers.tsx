@@ -28,7 +28,7 @@ export function WorkspaceManagers() {
       const result = await api<{invitation_token: string}>("/workspace/manager-invitations", {
         method: "POST", body: JSON.stringify({email}),
       });
-      setLink(new URL(`/signup#invite=${encodeURIComponent(result.invitation_token)}`, window.location.origin).href);
+      setLink(new URL(`/join#invite=${encodeURIComponent(result.invitation_token)}`, window.location.origin).href);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Could not create the invitation.");
     } finally {

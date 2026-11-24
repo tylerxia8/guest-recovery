@@ -61,6 +61,7 @@ def authenticate_session_digest(session: Session, digest: str, now: datetime) ->
         .join(ManagerSession, ManagerSession.account_id == ManagerAccount.id)
         .where(
             ManagerAccount.deleted_at.is_(None),
+            ManagerAccount.home_access_revoked_at.is_(None),
             ManagerSession.token_hash == digest,
             ManagerSession.revoked_at.is_(None),
             ManagerSession.expires_at > now,
@@ -68,6 +69,10 @@ def authenticate_session_digest(session: Session, digest: str, now: datetime) ->
     )
     if account is None:
         raise AppError("invalid_session", "Sign in to continue.", 401)
+    if account.login_account_id is not None:
+        login = session.get(ManagerAccount, account.login_account_id)
+        if login is None or login.deleted_at is not None:
+            raise AppError("invalid_session", "Sign in to continue.", 401)
     session.info["workspace_id"] = account.workspace_id
     session.execute(
         text("SELECT set_config('app.workspace_id', :workspace, true)"),
@@ -210,6 +215,7 @@ def login_session(
     secret: str,
     now: datetime,
     second_factor: str = "",
+    target: ManagerAccount | None = None,
 ) -> str:
     session.scalar(
         select(ManagerAccount)
@@ -238,7 +244,7 @@ def login_session(
         session.add(
             ManagerSession(
                 token_hash=token_digest(token),
-                account_id=account.id,
+                account_id=(target or account).id,
                 created_at=now,
                 expires_at=now + timedelta(hours=12),
                 revoked_at=None,
