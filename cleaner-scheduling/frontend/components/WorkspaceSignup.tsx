@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } fro
 import { api, type ApiError } from "../lib/api";
 import { readingLanguages } from "./ReadingLanguages";
 
-type Setup = {connected: boolean; house_count: number; cleaner_count: number; completed: boolean};
+type Setup = {can_manage_connection?: boolean; connected: boolean; house_count: number; cleaner_count: number; completed: boolean};
 type Cleaner = {key: string; name: string; email: string; preferred_language: string; saved: boolean; submitted: boolean};
 type SavedCleaner = {id: string; name: string; email: string | null; preferred_language: string | null};
 
@@ -69,7 +69,7 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
     event.preventDefault(); setBusy(true); setError("");
     try {
       if (step === 1) {
-        if (!login && !registrationEnabled && (!inviteSignupEnabled || !invitation)) throw new Error("Open your private invitation link to create an account.");
+        if (!login && !registrationEnabled && (!invitation || (!inviteSignupEnabled && !invitation.startsWith("team_")))) throw new Error("Open your private invitation link to create an account.");
         keys.current.account ||= crypto.randomUUID();
         const response = await fetch(`/auth/${login ? "login" : "signup"}`, {method: "POST", headers: {"Content-Type": "application/json", "Idempotency-Key": keys.current.account}, body: JSON.stringify(login ? {email, password, ...(secondFactor ? {second_factor: secondFactor} : {})} : {name, email, password, ...(invitationToken ? {invitation_token: invitationToken} : {})}), signal: AbortSignal.timeout(25000)});
         if (!response.ok) {
@@ -114,8 +114,8 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
   return <main className="workspace-signup">
     {authenticated ? <p><Link href="/security">Account settings</Link></p> : null}
     <section className={`workspace-card${step === 1 && !login && !accountOpen || step === 2 && !connectionOpen ? " workspace-card-action" : ""}${step === 2 && internalConnection && connectionOpen ? " workspace-connection" : ""}`}>
-      {invitationRequired && (!inviteSignupEnabled || !invitation) ? <><h2>{invitation === null ? "Opening your invitation…" : "Invitation required"}</h2>{invitation === null ? <p role="status">Checking your invitation link.</p> : <><p>Open your private invitation link to create an account.</p><Link href="/login">Sign in</Link></>}</> : authenticated && !setup ? <><h2>Opening your workspace…</h2>{error ? <><p role="alert">{error}</p><button onClick={() => {setError(""); setReload(current => current + 1);}}>Try again</button></> : <p role="status">Loading your saved progress.</p>}</> : <>
-      <form onSubmit={submit}>
+      {invitationRequired && (!invitation || (!inviteSignupEnabled && !invitation.startsWith("team_"))) ? <><h2>{invitation === null ? "Opening your invitation…" : "Invitation required"}</h2>{invitation === null ? <p role="status">Checking your invitation link.</p> : <><p>Open your private invitation link to create an account.</p><Link href="/login">Sign in</Link></>}</> : authenticated && !setup ? <><h2>Opening your workspace…</h2>{error ? <><p role="alert">{error}</p><button onClick={() => {setError(""); setReload(current => current + 1);}}>Try again</button></> : <p role="status">Loading your saved progress.</p>}</> : <>
+      {authenticated && setup?.can_manage_connection === false ? <><h2>Waiting for workspace setup</h2><p>Your workspace owner needs to finish connecting Hospitable and setting up Cleaner.</p><button type="button" onClick={() => setReload(current => current + 1)}>Check again</button></> : <form onSubmit={submit}>
         {step === 1 && !login && !accountOpen ? <><Image src="/illustrations/G11-manager-first-run-light.svg" width={320} height={200} alt="" aria-hidden="true" className="workspace-welcome-illustration" /><button type="button" onClick={() => {
           setInvitationToken(invitationLink ?? "");
           if (invitationLink) window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
@@ -145,7 +145,7 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
         </> : null}
         {step === 3 ? <><h2>Add your cleaners</h2><p>Add names and emails. We’ll email each cleaner a link to set their hours, breaks and starting location when you create cleaners and finish setup.</p><div className="workspace-cleaners">{cleaners.map((cleaner, index) => <fieldset key={cleaner.key} disabled={busy || cleaner.saved || cleaner.submitted}><legend>Cleaner {index + 1}</legend><div className="workspace-cleaner-fields"><label>Name<input autoComplete="off" value={cleaner.name} maxLength={80} required={Boolean(cleaner.email)} onChange={event => setCleaners(current => current.map(row => row.key === cleaner.key ? {...row, name: event.target.value} : row))} /></label><label>Email<input type="email" autoComplete="off" value={cleaner.email} maxLength={254} required={Boolean(cleaner.name)} onChange={event => setCleaners(current => current.map(row => row.key === cleaner.key ? {...row, email: event.target.value} : row))} /></label><label>Email language<select value={cleaner.preferred_language} onChange={event => setCleaners(current => current.map(row => row.key === cleaner.key ? {...row, preferred_language: event.target.value} : row))}><option value="">English (default)</option>{readingLanguages.map(([code, label]) => <option key={code} value={code} lang={code}>{label}</option>)}</select></label>{!cleaner.saved && !cleaner.submitted ? <button type="button" className="workspace-remove" aria-label={`Remove cleaner ${index + 1}`} onClick={() => setCleaners(current => current.filter(row => row.key !== cleaner.key))}>Remove</button> : null}</div>{cleaner.submitted && !busy ? <small role="status">Save not confirmed. Retry below to finish saving these details safely.</small> : null}</fieldset>)}</div><button type="button" className="workspace-secondary" disabled={busy} onClick={() => setCleaners(current => [...current, {key: crypto.randomUUID(), name: "", email: "", preferred_language: "", saved: false, submitted: false}])}>+ Add another cleaner</button></> : null}
       {step === 3 ? <><p className="workspace-finish-note">Finish setup enables standard cleaning times and automatic assignments.</p><button className="workspace-finish" disabled={busy || (!unsaved && !saved)}>{busy ? "Finishing setup…" : cleaners.some(row => row.submitted) ? "Retry & finish setup" : "Create cleaners & finish"}</button>{!saved && !unsaved ? <small>Add at least one cleaner to finish setup.</small> : null}</> : null}
-      </form>
+      </form>}
       {error ? <p role="alert">{error}</p> : null}</>}
     </section>
   </main>;

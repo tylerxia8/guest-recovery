@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 
-export function DeleteAccount({mfaEnabled, onCancel}: {mfaEnabled: boolean; onCancel: () => void}) {
+export function DeleteAccount({workspaceOwner, mfaEnabled, onCancel}: {workspaceOwner: boolean; mfaEnabled: boolean; onCancel: () => void}) {
   const [password, setPassword] = useState("");
   const [secondFactor, setSecondFactor] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -35,7 +35,7 @@ export function DeleteAccount({mfaEnabled, onCancel}: {mfaEnabled: boolean; onCa
 
   return <>
     <h3>Are you sure?</h3>
-    <p>Deleting your account permanently removes your access to this workspace and signs out all your sessions. Automatic workspace activity and future automated emails and text messages will stop. Messages already sent cannot be recalled.</p>
+    <p>Deleting your account permanently removes your access to this workspace and signs out all your sessions.{workspaceOwner ? " Automatic workspace activity and future automated emails and text messages will stop. Messages already sent cannot be recalled." : ""}</p>
     <p>Some historical operational and audit records are retained. This action cannot be undone.</p>
     <form onSubmit={submit}>
       <label>Current password<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" maxLength={128} required disabled={busy || Boolean(pending)} /></label>

@@ -1,6 +1,6 @@
 import { proxyIdentityHeaders } from "./lib/proxy-identity";
 import { apiOrigin, requestOrigin } from "./lib/request-boundary";
-import { workspaceRegistrationEnabled, workspaceInviteSignupEnabled } from "./lib/session";
+import { workspaceRegistrationEnabled } from "./lib/session";
 import { NextRequest, NextResponse } from "next/server";
 
 const PUBLIC_PATHS = [
@@ -43,7 +43,7 @@ async function workspaceAccess(request: NextRequest, requestHeaders: Headers) {
   if (path.startsWith("/api/") || path.startsWith("/auth/") || ["/onboarding", "/cleaner"].includes(path)) return NextResponse.next({request: {headers: requestHeaders}});
   const token = request.cookies.get("manager-session")?.value;
   const accountPage = path === "/" || path === "/signup" || path === "/login";
-  if (!token) return accountPage && (path !== "/signup" || workspaceRegistrationEnabled || workspaceInviteSignupEnabled) ? NextResponse.next({request: {headers: requestHeaders}}) : NextResponse.redirect(new URL(workspaceRegistrationEnabled ? "/signup" : "/login", origin));
+  if (!token) return accountPage ? NextResponse.next({request: {headers: requestHeaders}}) : NextResponse.redirect(new URL(workspaceRegistrationEnabled ? "/signup" : "/login", origin));
   const upstreamOrigin = apiOrigin(origin);
   if (!upstreamOrigin) return new NextResponse("Your workspace is unavailable. Please refresh to try again.", {status: 503});
   const proxyHeaders = await proxyIdentityHeaders(request, "GET", "/v1/workspace/setup");

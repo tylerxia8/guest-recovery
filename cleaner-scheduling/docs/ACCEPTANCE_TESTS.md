@@ -441,3 +441,11 @@ M8 theme presentation check: Wada 268 palette (olive #253122, sienna CTA #a56321
 
 - Action: release an unstarted, unlocked assignment through the cleaner portal.
 - Pass/fail: Turnover shows the house, service date and cleaner in a manager alert while the offer is open. A claim or cancellation clears the alert. Expiry replaces it with an unclaimed coverage alert.
+
+
+### Shared Hospitable workspace
+
+- An owner creates an email-bound link in Account security. An invited manager can join with their own password even when general registration is closed.
+- The joined manager sees the same setup and imported data, and the Hospitable credential is never returned. A second company cannot view or remove the manager.
+- The invite rejects a different email and cannot be used again after acceptance. An idempotent retry of the same signup can recover the original response.
+- A manager cannot replace the token or issue invitations. When the owner removes a manager, their sessions stop working and the workspace connection remains intact.

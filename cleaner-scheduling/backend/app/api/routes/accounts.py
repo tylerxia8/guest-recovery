@@ -149,6 +149,7 @@ def account_response(session: Session, account: ManagerAccount) -> dict[str, obj
         "email": account.email,
         "workspace_id": str(account.workspace_id),
         "name": name,
+        "workspace_owner": account.workspace_owner,
         "mfa_enabled": account.mfa_secret is not None,
         "recovery_codes_remaining": len(account.mfa_recovery_hashes),
     }
@@ -162,7 +163,8 @@ def create_account(
     settings: Settings = Depends(get_settings),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
-    if not settings.workspace_registration_enabled:
+    team_invite = payload.invitation_token if (payload.invitation_token or "").startswith("team_") else None
+    if not settings.workspace_registration_enabled and team_invite is None:
         invitation_matches = hmac.compare_digest(
             hashlib.sha256((payload.invitation_token or "").encode()).hexdigest(), settings.workspace_invite_token_hash
         )
@@ -189,6 +191,7 @@ def create_account(
             key=key,
             secret=settings.field_encryption_secret,
             now=clock.now(),
+            team_invite=team_invite,
         )
         result = {**account_response(session, account), "token": token}
         session.commit()
