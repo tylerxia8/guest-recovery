@@ -9,7 +9,7 @@
     "dev": "next dev --webpack --hostname 127.0.0.1 --port 3000",
     "build": "next build --webpack",
     "start": "next start --hostname 0.0.0.0 --port \"${PORT:-3000}\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node node_modules/typescript-native/bin/tsc --noEmit",
     "lint": "eslint .",
     "test:e2e": "playwright test"
   },
@@ -29,6 +29,7 @@
     "@types/react-dom": "^19.3.0",
     "eslint": "^10.15.0",
     "eslint-config-next": "^16.4.6",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-native": "npm:typescript@7.0.2"
   }
 }
