@@ -27,8 +27,13 @@ test("manager uses one source for houses and bookings without duplicate entry", 
   await expect(nav.getByRole("link")).toHaveCount(3);
   await expect(nav.getByRole("link", {name: "Properties", exact: true})).toHaveCount(0);
   await page.getByRole("link", {name: "Hospitable", exact: true}).click();
-  await page.locator("summary:has-text('Connection details')").click();
-  await expect(page.getByText("1 active houses", {exact: false})).toBeVisible({timeout: 10000});
-  await expect(page.getByRole("button", {name: "Add synthetic bookings"})).toBeHidden();
-  await expect(page.getByText("Mock reservation source", {exact: false})).toBeVisible();
+  await expect(page).toHaveURL(/\/reservations$/);
+  const details = page.locator("details.daily-source-tools");
+  const summary = details.locator(":scope > summary");
+  await expect(async () => {
+    if (await details.getAttribute("open") === null) await summary.press("Enter");
+    await expect(details.getByText("1 active houses", {exact: false})).toBeVisible({timeout: 750});
+  }).toPass({timeout: 10000});
+  await expect(details.getByRole("button", {name: "Add synthetic bookings"})).toBeHidden();
+  await expect(details.getByText("Mock reservation source", {exact: false})).toBeVisible();
 });
