@@ -165,7 +165,7 @@ export function OperationalDashboard({demo, canWrite, workspaceSignupEnabled = f
           </dl>
           {task.deadline_conflict && status !== "Deadline conflict" ? <small className="cleaning-deadline-overdue">Planned finish misses deadline</small> : null}
           {task.confirmed_checkout_at ? <small>Guest departure confirmed</small> : task.can_confirm_early_checkout && task.version ? <EarlyCheckout taskId={task.id} version={task.version} onConfirmed={message => {setCheckoutNotice(message); setRefreshTick(value => value + 1);}} /> : null}
-          {canWrite && needsReview ? <Link className="cleaning-phone-action" href={scheduleHref} aria-label={`Review schedule for ${task.property_name}`}>Review schedule</Link> : null}
+          {canWrite && needsReview ? <a className="cleaning-phone-action" href={scheduleHref} aria-label={`Review schedule for ${task.property_name}`}>Review schedule</a> : null}
         </li>;
       })}</ul>}</> : data ? <EmptyState variant="dashboard" title={rows.length && filter === "open" && !query && !open.length ? "All cleaning is done" : rows.length ? "No matching cleans" : "No cleaning work on this date"} description={rows.length && filter === "open" && !query && !open.length ? "Open Cleaned to review finished work." : rows.length ? "Try another filter or search." : "Imported cleaning work will appear here."} /> : null}
       <div className="cleaning-board-footer"><span>{data ? `${visible.length} cleans${isToday && data.overdue?.length ? " · includes overdue work" : ""}` : ""}</span>{data?.mode === "hospitable_read_only" ? <Link href="/cleaners">Manage cleaners →</Link> : canWrite ? <Link href="/schedules">Review assignments →</Link> : <Link href="/setup">Setup →</Link>}</div>
