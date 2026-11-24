@@ -25,6 +25,10 @@
 <main id="main-content" tabindex="-1">
 <div class="page-heading"><div><h1 id="page-title">Guest inbox</h1><p id="page-subtitle">Review conversations and respond to guest requests.</p></div><button id="refresh" type="button" class="secondary">Refresh</button></div>
 <div id="connection" class="connection" role="status">Connecting to Hospitable…</div><p id="notice" role="status"></p>
+<section id="reply-attention" class="reply-attention" aria-labelledby="reply-attention-title" hidden>
+<h2 id="reply-attention-title">Replies to review</h2>
+<ul></ul>
+</section>
 <details id="issue-summary" class="data-details"><summary>Issue breakdown</summary><div id="issue-counts"></div></details>
 <div class="workspace" id="inbox-workspace">
 <aside aria-label="Guest requests"><div class="inbox-heading"><h2>Messages</h2><span id="result-count"></span></div><label class="search-label"><span class="sr-only">Search requests</span><input id="search" type="search" placeholder="Search texts or properties…"></label><label><span class="sr-only">Request view</span><select id="request-view"><option value="all">All saved texts</option><option value="needs_attention">Needs attention</option><option value="likely_resolved">Likely resolved</option><option value="practice">Practice</option></select></label><label>Problem type<select id="category"><option value="">All problems</option><option value="Maintenance">Maintenance</option><option value="Supplies">Missing supplies</option><option value="Cleaning">Cleaning</option><option value="Check-in &amp; checkout">Check-in &amp; checkout</option><option value="Instructions">Property instructions</option><option value="Safety">Safety</option></select></label><nav id="requests" aria-label="Choose a request"></nav></aside>
