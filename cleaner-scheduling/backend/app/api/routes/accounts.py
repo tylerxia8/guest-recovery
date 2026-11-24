@@ -360,6 +360,48 @@ def operations_membership(
     )
 
 
+@router.post("/operations/inbox-grant", include_in_schema=False)
+def operations_inbox_grant(
+    request: Request,
+    session: Session = Depends(account_database),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    if not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+    token = bearer_token(request)
+    authenticate_session(session, token, clock.now())
+    return JSONResponse(
+        content={"token": issue_access(cache, token_digest(token), "opq_", ttl=60)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/operations/inbox-identity", include_in_schema=False)
+def operations_inbox_identity(
+    request: Request,
+    session: Session = Depends(account_database),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    if not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+    token = bearer_token(request)
+    if re.fullmatch(r"opq_[A-Za-z0-9_-]{43}", token) is None:
+        raise AppError("invalid_session", "Sign in to continue.", 401)
+    account = authenticate_session_digest(session, read_session_digest(cache, token), clock.now())
+    return JSONResponse(
+        content={
+            "workspace_id": str(account.workspace_id),
+            "account_id": str(account.id),
+            "workspace_owner_id": str(workspace_owner_id(session, account.workspace_id)),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/me")
 def current_account(
     request: Request,

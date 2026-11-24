@@ -124,12 +124,47 @@ def test_invited_manager_shares_connection_and_can_be_removed(
         )
         managers = client.get("/v1/workspace/managers", headers=auth(owner)).json()["managers"]
         assert [row["email"] for row in managers] == ["member@example.test"]
+        inbox = "/v1/workspace/action-inbox"
+        claim_path = inbox + "/claim"
+        member_subject = "manager:" + managers[0]["id"]
+        candidate = {
+            "source": "maintenance",
+            "item_id": str(uuid.uuid4()),
+            "assignee_subject": member_subject,
+            "version": 0,
+        }
+        assert client.patch(claim_path, headers=auth(other), json=candidate).status_code == 422
+        claim = client.patch(claim_path, headers=auth(member), json=candidate)
+        assert claim.status_code == 200, claim.text
+        assert client.patch(claim_path, headers=auth(owner), json=candidate).status_code == 409
+        assert client.get(inbox, headers=auth(other)).json()["claims"] == []
+        shared_queue = client.get(inbox, headers=auth(owner)).json()
+        assert shared_queue["claims"][0]["assignee_subject"] == member_subject
+        handed_off = client.patch(
+            claim_path,
+            headers=auth(member),
+            json={
+                **candidate,
+                "version": 1,
+                "assignee_subject": shared_queue["current_manager"],
+            },
+        )
+        assert handed_off.status_code == 200, handed_off.text
+        assert handed_off.json()["version"] == 2
+        queue_grant = client.post("/v1/accounts/operations/inbox-grant", headers=auth(member))
+        assert queue_grant.status_code == 200, queue_grant.text
+        queue_headers = {"Authorization": "Bearer " + queue_grant.json()["token"]}
+        queue_identity = "/v1/accounts/operations/inbox-identity"
+        assert client.get(queue_identity, headers=queue_headers).json()["workspace_id"] == str(workspace_id)
+        assert client.get(membership_url, headers=queue_headers).status_code == 401
+
         member_url = f"/v1/workspace/managers/{managers[0]['id']}"
         assert client.delete(member_url, headers=auth(other)).status_code == 404
         assert claims["account_id"] == managers[0]["id"]
         assert claims["workspace_owner_id"] != claims["account_id"]
         assert client.delete(member_url, headers=auth(owner)).status_code == 200
         assert client.get(membership_url, headers=membership_headers).status_code == 401
+        assert client.get(queue_identity, headers=queue_headers).status_code == 401
         assert client.get("/v1/accounts/me", headers=auth(member)).status_code == 401
         assert client.get("/v1/accounts/me", headers=auth(login.json())).status_code == 401
         assert sign_up("member@example.test", code).status_code == 403

@@ -324,6 +324,10 @@ class Handler(BaseHTTPRequestHandler):
             raise AuthError(503, 'Private Guest Messages is unavailable.')
         if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
             raise AuthError(405, 'This action is not available in the shared workspace yet.')
+        if self.path == '/api/action-inbox':
+            from action_inbox import items
+            self.respond(200, {'items': items(directory, issuer, self.headers.get('Authorization', ''))})
+            return
         if self.path == '/auth/operations/start':
             target, state_cookie = start(issuer)
             self.respond(303, b'', 'text/plain', {'Location': target, 'Set-Cookie': state_cookie})

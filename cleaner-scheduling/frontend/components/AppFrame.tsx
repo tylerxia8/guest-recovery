@@ -47,8 +47,9 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
     }
   }
 
-  const toolNavigation = operationsTools.length > 0 ? <nav aria-label="Workspace tools">
+  const toolNavigation = connected && workspaceSignup ? <nav aria-label="Workspace tools">
     <Link href={pathname === "/signup" ? "/signup" : "/dashboard"} aria-current="page">Cleaner</Link>
+    <Link href="/action-inbox" aria-current={pathname === "/action-inbox" ? "page" : undefined}>Action inbox</Link>
     {operationsTools.map(tool => <a key={tool.label} href={tool.href}>{tool.label}</a>)}
   </nav> : null;
 
