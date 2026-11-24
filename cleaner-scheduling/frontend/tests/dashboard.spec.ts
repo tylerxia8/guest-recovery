@@ -140,12 +140,12 @@ test("dashboard refreshes automatically and labels retained data after a failed 
   });
   await page.clock.install();
   await page.goto("/dashboard");
-  await expect(page.getByText("First synthetic turnover", {exact: true})).toBeVisible();
+  await expect(page.locator(".today-cleaning-table").getByText("First synthetic turnover", {exact: true})).toBeVisible();
   label = "Updated synthetic turnover";
   await page.clock.fastForward(30000);
-  await expect(page.getByText("Updated synthetic turnover", {exact: true})).toBeVisible();
+  await expect(page.locator(".today-cleaning-table").getByText("Updated synthetic turnover", {exact: true})).toBeVisible();
   fail = true;
   await page.clock.fastForward(30000);
   await expect(page.getByRole("main").getByRole("alert")).toContainText("displayed information may be out of date");
-  await expect(page.getByText("Updated synthetic turnover", {exact: true})).toBeVisible();
+  await expect(page.locator(".today-cleaning-table").getByText("Updated synthetic turnover", {exact: true})).toBeVisible();
 });

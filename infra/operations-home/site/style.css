@@ -141,3 +141,24 @@ main { width: var(--frame); margin-inline: auto; padding-bottom: 56px; }
 @media (prefers-reduced-motion: reduce) {
   .card { transition: none; }
 }
+
+.attention-preview {
+  margin-bottom: 16px;
+  padding-inline: clamp(14px, 3vw, 24px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.attention-preview summary { padding-block: 12px; cursor: pointer; font-weight: 700; }
+.attention-preview summary span { margin-inline-start: 8px; color: var(--muted); font-size: .8125rem; font-weight: 500; }
+.attention-preview ul { margin: 0; padding: 0; list-style: none; }
+.attention-preview li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  column-gap: 16px;
+  min-height: 52px;
+  border-top: 1px solid var(--line);
+}
+.attention-preview a { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); text-underline-offset: 4px; }

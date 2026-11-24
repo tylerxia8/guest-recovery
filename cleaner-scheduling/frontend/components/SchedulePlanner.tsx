@@ -53,10 +53,10 @@ const subscribeToReadiness = () => () => {};
 const clientReady = () => true;
 const serverReady = () => false;
 
-export function SchedulePlanner({ demo, canWrite, canApprove = false, sourceMode = "mock" }: { demo: boolean; canWrite: boolean; canApprove?: boolean; sourceMode?: WorkspaceMode }) {
+export function SchedulePlanner({ demo, canWrite, canApprove = false, initialDate, sourceMode = "mock" }: { demo: boolean; canWrite: boolean; canApprove?: boolean; initialDate?: string; sourceMode?: WorkspaceMode }) {
   const local = sourceMode === "hospitable_read_only";
   const hydrated = useSyncExternalStore(subscribeToReadiness, clientReady, serverReady);
-  const [day, setDay] = useState(local ? "" : "2026-11-10");
+  const [day, setDay] = useState(initialDate ?? (local ? "" : "2026-11-10"));
   const [today, setToday] = useState(local ? "" : "2026-11-10");
   const [policyApproved, setPolicyApproved] = useState<boolean | null>(null);
   const [run, setRun] = useState<Run | null>(null);
@@ -78,7 +78,7 @@ export function SchedulePlanner({ demo, canWrite, canApprove = false, sourceMode
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const setup = await api<{business_date: string; tomorrow_date: string; policy_approved: boolean}>("/setup", {signal: AbortSignal.timeout(20000)});
-          if (active) {setDay(setup.tomorrow_date); setToday(setup.business_date); setPolicyApproved(setup.policy_approved);}
+          if (active) {setDay(initialDate ?? setup.tomorrow_date); setToday(setup.business_date); setPolicyApproved(setup.policy_approved);}
           return;
         } catch (reason) {
           const failure = reason as ApiError;
@@ -94,7 +94,7 @@ export function SchedulePlanner({ demo, canWrite, canApprove = false, sourceMode
     }
     void loadSetup();
     return () => {active = false;};
-  }, [local]);
+  }, [local, initialDate]);
   function chooseDay(value: string) {setDay(value); setRun(null); setLoaded(false); setReplies([]); setAssignments([]); setReassignTarget(null); setError(""); setNotice("");}
   function moveDay(offset: number) {if (day) chooseDay(new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10));}
   async function refreshReplies() { if (demo && canWrite) setReplies((await api<{items: ReplyRow[]}>("/demo/assignments")).items); }
