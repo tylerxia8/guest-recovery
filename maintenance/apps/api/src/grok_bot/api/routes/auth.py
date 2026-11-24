@@ -1,7 +1,7 @@
 import json
 from urllib.error import URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
+from urllib.request import Request as UrlRequest, build_opener
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +14,7 @@ from grok_bot.api.deps import get_principal, get_session, principal_from_request
 from grok_bot.api.schemas import LoginBody
 from grok_bot.auth.constants import LOCAL_DEV_ISSUER
 from grok_bot.auth.permissions import Principal
+from grok_bot.auth.operations import MEMBERSHIP_TOKEN, NoOperationsRedirect
 from grok_bot.auth.tokens import mint_local_token
 from grok_bot.domain.distributions import record_step_up
 from grok_bot.errors import problem
@@ -88,10 +89,6 @@ class OperationsLoginBody(BaseModel):
     verifier: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$", repr=False)
 
 
-class NoOperationsRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
 
 @router.post("/auth/operations/redeem", include_in_schema=False, response_model=LoginOut)
 def operations_login(
@@ -122,15 +119,20 @@ def operations_login(
         problem(401, "UNAUTHENTICATED", "Shared sign-in could not be completed.")
     if not isinstance(identity, dict):
         problem(401, "UNAUTHENTICATED", "Shared sign-in could not be completed.")
+    membership = None
     if settings.operations_workspace_provisioning:
         try:
             organization = UUID(str(identity.get("workspace_id")))
             user = UUID(str(identity.get("account_id")))
+            owner = UUID(str(identity.get("workspace_owner_id")))
         except ValueError:
             problem(401, "UNAUTHENTICATED", "Shared sign-in did not return a workspace.")
+        membership = identity.get("membership_token")
+        if not isinstance(membership, str) or MEMBERSHIP_TOKEN.fullmatch(membership) is None:
+            problem(401, "UNAUTHENTICATED", "Shared sign-in did not return a membership.")
         provisioned = session.scalar(
-            text("SELECT public.app_provision_operations_workspace(:workspace, :account, :grant_id)"),
-            {"workspace": organization, "account": user, "grant_id": uuid4()},
+            text("SELECT public.app_provision_operations_manager(:workspace, :owner, :account, :grant_id)"),
+            {"workspace": organization, "owner": owner, "account": user, "grant_id": uuid4()},
         )
         if not provisioned:
             problem(403, "FORBIDDEN", "This Lucena account is not linked to Maintenance.")
@@ -143,7 +145,8 @@ def operations_login(
         organization_id=organization,
         environment=settings.app_env,
         ttl_seconds=settings.local_token_ttl_seconds,
-        method="operations",
+        method="operations_member" if membership is not None else "operations",
+        membership=membership,
     )
     # Resolve the existing user and current grants through the same checks as a normal session.
     scope = {**request.scope, "headers": [(b"authorization", ("Bearer " + token).encode("ascii"))]}

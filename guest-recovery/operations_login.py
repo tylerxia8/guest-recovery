@@ -25,6 +25,8 @@ READ_TOKEN = re.compile(r'ops_[A-Za-z0-9_-]{43}')
 TOUCHUP_TOKEN = re.compile(r'opc_[A-Za-z0-9_-]{43}')
 REPAIR_TOKEN = re.compile(r'opr_[A-Za-z0-9_-]{43}')
 READ_SESSIONS = {}
+MEMBERSHIP_SESSIONS = {}
+MEMBERSHIP_TOKEN = re.compile(r'opm_[A-Za-z0-9_-]{43}')
 READ_LOCK = threading.Lock()
 
 
@@ -116,6 +118,44 @@ def remember_read_access(token, identity):
             if not isinstance(repair, str) or not REPAIR_TOKEN.fullmatch(repair):
                 repair = ''
             READ_SESSIONS[hashlib.sha256(token.encode()).hexdigest()] = (now + expires_in, read_token, touchup, repair)
+
+
+def remember_membership(session_token, membership):
+    if not isinstance(membership, str) or not MEMBERSHIP_TOKEN.fullmatch(membership):
+        raise AuthError(503, 'Shared workspace membership is unavailable.')
+    now = time.monotonic()
+    with READ_LOCK:
+        for key, (expires, _) in list(MEMBERSHIP_SESSIONS.items()):
+            if expires <= now:
+                del MEMBERSHIP_SESSIONS[key]
+        if len(MEMBERSHIP_SESSIONS) >= 100:
+            MEMBERSHIP_SESSIONS.pop(next(iter(MEMBERSHIP_SESSIONS)))
+        MEMBERSHIP_SESSIONS[hashlib.sha256(session_token.encode()).hexdigest()] = (now + 43200, membership)
+
+
+def verify_membership(issuer, session_hash, workspace, account):
+    with READ_LOCK:
+        expires, membership = MEMBERSHIP_SESSIONS.get(session_hash, (0, ''))
+    if expires <= time.monotonic():
+        return False
+    request = Request(
+        issuer + '/auth/operations/membership',
+        headers={'Authorization': 'Bearer ' + membership, 'Accept': 'application/json'},
+    )
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=8) as response:
+            identity = json.loads(response.read(4096))
+    except HTTPError as error:
+        status = error.code
+        error.close()
+        if status in (401, 403):
+            with READ_LOCK:
+                MEMBERSHIP_SESSIONS.pop(session_hash, None)
+            return False
+        raise AuthError(503, 'Shared workspace membership is temporarily unavailable.') from None
+    except (URLError, OSError, ValueError):
+        raise AuthError(503, 'Shared workspace membership is temporarily unavailable.') from None
+    return isinstance(identity, dict) and identity.get('workspace_id') == workspace and identity.get('account_id') == account
 
 
 def has_read_access(session_hash):

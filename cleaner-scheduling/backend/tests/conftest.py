@@ -77,6 +77,7 @@ TEST_CLOCK = FrozenClock(datetime(2026, 11, 10, 14, 0, tzinfo=UTC))
 
 TABLES = (
     "workspace_connections",
+    "manager_invitations",
     "manager_sessions",
     "manager_accounts",
     "email_deliveries",

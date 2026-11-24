@@ -30,10 +30,10 @@ def issue_repair_access(cache: redis.Redis, session_digest: str) -> str:
     return issue_access(cache, session_digest, "opr_")
 
 
-def issue_access(cache: redis.Redis, session_digest: str, prefix: str) -> str:
+def issue_access(cache: redis.Redis, session_digest: str, prefix: str, *, ttl: int = ACCESS_SECONDS) -> str:
     token = prefix + secrets.token_urlsafe(32)
     try:
-        saved = cache.set(f"operations-access:{token_digest(token)}", session_digest, ex=ACCESS_SECONDS, nx=True)
+        saved = cache.set(f"operations-access:{token_digest(token)}", session_digest, ex=ttl, nx=True)
     except RedisError as exc:
         raise AppError("dependency_unavailable", "Shared workspace access is temporarily unavailable.", 503) from exc
     if not saved:
@@ -42,7 +42,7 @@ def issue_access(cache: redis.Redis, session_digest: str, prefix: str) -> str:
 
 
 def read_session_digest(cache: redis.Redis, token: str) -> str:
-    if re.fullmatch(r"(?:ops|opc|opr)_[A-Za-z0-9_-]{43}", token) is None:
+    if re.fullmatch(r"(?:ops|opc|opr|opm)_[A-Za-z0-9_-]{43}", token) is None:
         raise AppError("invalid_session", "Sign in to continue.", 401)
     try:
         value = cache.get(f"operations-access:{token_digest(token)}")

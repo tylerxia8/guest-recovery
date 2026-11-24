@@ -18,6 +18,7 @@ def mint_local_token(
     environment: str,
     ttl_seconds: int,
     method: str = "local_dev",
+    membership: str | None = None,
 ) -> str:
     payload = {
         "amr": method,
@@ -26,6 +27,7 @@ def mint_local_token(
         "org": str(organization_id),
         "sub": str(user_id),
         "v": 1,
+        **({"membership": membership} if membership is not None else {}),
     }
     return _sign(payload, secret)
 

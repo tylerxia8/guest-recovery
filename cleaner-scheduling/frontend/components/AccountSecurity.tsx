@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { WorkspaceManagers } from "./WorkspaceManagers";
 import { DeleteAccount } from "./DeleteAccount";
 
 type SecurityState = {stage: "disabled"} | {stage: "enabled"; remaining: number} | {stage: "setup"; secret: string; expiresAt: string} | {stage: "recovery"; codes: string[]};
 type PendingChange = {action: "begin_mfa" | "confirm_mfa" | "disable_mfa"; key: string; body: string};
-type SecurityResponse = {mfa_enabled?: boolean; recovery_codes_remaining?: number; secret?: string; expires_at?: string; recovery_codes?: string[]; error?: {message?: string}};
+type SecurityResponse = {workspace_owner?: boolean; mfa_enabled?: boolean; recovery_codes_remaining?: number; secret?: string; expires_at?: string; recovery_codes?: string[]; error?: {message?: string}};
 
 export function AccountSecurity() {
+  const [workspaceOwner, setWorkspaceOwner] = useState(true);
   const [security, setSecurity] = useState<SecurityState | null>(null);
   const [password, setPassword] = useState("");
   const [secondFactor, setSecondFactor] = useState("");
@@ -27,7 +29,10 @@ export function AccountSecurity() {
         const body = await response.json() as SecurityResponse;
         const remaining = body.recovery_codes_remaining;
         if (typeof body.mfa_enabled !== "boolean" || typeof remaining !== "number" || !Number.isInteger(remaining) || remaining < 0 || remaining > 8) throw new Error("Could not load your security settings. Please try again.");
-        if (!controller.signal.aborted) setSecurity(body.mfa_enabled ? {stage: "enabled", remaining} : {stage: "disabled"});
+        if (!controller.signal.aborted) {
+          setWorkspaceOwner(body.workspace_owner !== false);
+          setSecurity(body.mfa_enabled ? {stage: "enabled", remaining} : {stage: "disabled"});
+        }
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Could not load your security settings. Please try again.");
       }
@@ -100,10 +105,11 @@ export function AccountSecurity() {
       {error ? <p role="alert">{error}</p> : null}
       {message ? <p role="status">{message}</p> : null}
     </section>
+    {security && workspaceOwner && !deletionOpen ? <WorkspaceManagers /> : null}
     {security && ["enabled", "disabled"].includes(security.stage) && !pending && !busy ? <section className="workspace-card" aria-labelledby="delete-account-title">
       <h2 id="delete-account-title">Delete account</h2>
-      {deletionOpen ? <DeleteAccount mfaEnabled={security.stage === "enabled"} onCancel={() => setDeletionOpen(false)} /> : <>
-        <p>Permanently close your account and stop automated workspace communications.</p>
+      {deletionOpen ? <DeleteAccount workspaceOwner={workspaceOwner} mfaEnabled={security.stage === "enabled"} onCancel={() => setDeletionOpen(false)} /> : <>
+        <p>{workspaceOwner ? "Permanently close your account and stop automated workspace communications." : "Permanently remove your access to this workspace."}</p>
         <button type="button" onClick={() => {setPassword(""); setSecondFactor(""); setDeletionOpen(true);}}>Delete account</button>
       </>}
     </section> : null}

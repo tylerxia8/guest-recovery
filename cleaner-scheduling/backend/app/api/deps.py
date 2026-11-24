@@ -69,7 +69,7 @@ def get_db(request: Request) -> Generator[Session, None, None]:
             if not hmac.compare_digest(expected, token):
                 raise AppError("link_unavailable", "Open your original private cleaner link.", 401)
         else:
-            delegated = token.startswith(("ops_", "opc_", "opr_"))
+            delegated = token.startswith(("ops_", "opc_", "opr_", "opm_"))
             if delegated:
                 allowed_read = (
                     token.startswith("ops_") and request.method == "GET" and request.url.path in OPERATIONS_READ_PATHS

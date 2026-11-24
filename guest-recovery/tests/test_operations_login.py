@@ -74,3 +74,27 @@ class OperationsLoginTests(unittest.TestCase):
             self.assertEqual(result['reservation']['hospitable_id'], 'booking')
             request = opener.return_value.open.call_args.args[0]
             self.assertEqual(request.get_header('Authorization'), 'Bearer ' + access)
+
+
+    def test_membership_requires_the_original_workspace_and_account(self):
+        import hashlib
+        from urllib.error import HTTPError
+
+        token = 'separate-guest-session'
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        membership = 'opm_' + 'A' * 43
+        operations_login.remember_membership(token, membership)
+        self.addCleanup(operations_login.MEMBERSHIP_SESSIONS.pop, digest, None)
+        response = MagicMock()
+        response.read.return_value = json.dumps({
+            'workspace_id': self.workspace, 'account_id': self.account,
+        }).encode()
+        with patch.object(operations_login, 'build_opener') as opener:
+            remote = opener.return_value.open
+            remote.return_value = nullcontext(response)
+            self.assertFalse(operations_login.verify_membership(self.issuer, digest, self.workspace, self.user))
+            self.assertTrue(operations_login.verify_membership(self.issuer, digest, self.workspace, self.account))
+            self.assertEqual(remote.call_args.args[0].get_header('Authorization'), 'Bearer ' + membership)
+            remote.side_effect = HTTPError(self.issuer, 401, 'Revoked', {}, None)
+            self.assertFalse(operations_login.verify_membership(self.issuer, digest, self.workspace, self.account))
+            self.assertNotIn(digest, operations_login.MEMBERSHIP_SESSIONS)

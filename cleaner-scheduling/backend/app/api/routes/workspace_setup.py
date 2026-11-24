@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import secrets
 import uuid
 from datetime import timedelta
 
-from app.api.deps import get_clock, get_db, get_settings, require_manager, require_manager_idempotency_key
+from app.api.deps import (
+    get_clock,
+    get_db,
+    get_settings,
+    require_manager,
+    require_manager_idempotency_key,
+    require_owner,
+)
 from app.api.languages import PreferredLanguage, ReadingLanguages
 from app.api.routes.local_scheduling import proposed_settings
 from app.api.routes.onboarding import onboarding_token
@@ -15,8 +23,9 @@ from app.config import Settings
 from app.domain.errors import AppError
 from app.domain.principal import Principal
 from app.models import Cleaner, CleanerAccessLink, PolicyVersion, Property, ReservationSyncRun
-from app.models.accounts import ManagerAccount
+from app.models.accounts import ManagerAccount, ManagerInvitation, ManagerSession
 from app.models.workspace_connection import WorkspaceConnection
+from app.services.account_deletion import scrub_account
 from app.services.audit import write_audit
 from app.services.email_addresses import normalize_email
 from app.services.field_cipher import protect_text, reveal_text
@@ -24,10 +33,12 @@ from app.services.hospitable_sync import sync_hospitable
 from app.services.onboarding_email import onboarding_email_status, queue_onboarding_emails
 from app.services.policy import approve_policy, create_policy
 from app.services.task_generation import recompute_property_tasks
+from app.services.workspace_accounts import token_digest
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/v1/workspace", tags=["workspace-setup"])
@@ -77,9 +88,123 @@ def enabled(settings: Settings = Depends(get_settings)) -> None:
 router.dependencies.append(Depends(enabled))
 
 
+class ManagerInviteWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str) -> str:
+        normalized = normalize_email(value)
+        if normalized is None:
+            raise ValueError("Enter a valid email address.")
+        return normalized.lower()
+
+
+@router.post("/manager-invitations", status_code=201)
+def invite_manager(
+    payload: ManagerInviteWrite,
+    _principal: Principal = Depends(require_owner),
+    session: Session = Depends(get_db),
+    clock: Clock = Depends(get_clock),
+) -> JSONResponse:
+    workspace_id = session.info["workspace_id"]
+    if (
+        session.scalar(
+            select(ManagerAccount.id).where(
+                ManagerAccount.workspace_id == workspace_id, ManagerAccount.email == payload.email
+            )
+        )
+        is not None
+    ):
+        raise AppError("already_in_workspace", "This manager already belongs to your workspace.", 409)
+    token = "team_" + secrets.token_urlsafe(32)
+    digest = token_digest(token)
+    expires_at = clock.now() + timedelta(hours=24)
+    session.execute(
+        insert(ManagerInvitation)
+        .values(token_hash=digest, workspace_id=workspace_id, email=payload.email, expires_at=expires_at)
+        .on_conflict_do_update(
+            index_elements=["workspace_id", "email"], set_={"token_hash": digest, "expires_at": expires_at}
+        )
+    )
+    session.commit()
+    return JSONResponse(
+        status_code=201,
+        content={"invitation_token": token, "expires_at": expires_at.isoformat()},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/managers")
+def list_managers(
+    _principal: Principal = Depends(require_owner),
+    session: Session = Depends(get_db),
+) -> dict[str, object]:
+    members = session.scalars(
+        select(ManagerAccount)
+        .where(
+            ManagerAccount.workspace_id == session.info["workspace_id"],
+            ManagerAccount.workspace_owner.is_(False),
+            ManagerAccount.deleted_at.is_(None),
+        )
+        .order_by(ManagerAccount.email)
+    )
+    return {"managers": [{"id": str(member.id), "email": member.email} for member in members]}
+
+
+@router.delete("/managers/{manager_id}")
+def remove_manager(
+    manager_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(require_owner),
+    session: Session = Depends(get_db),
+    clock: Clock = Depends(get_clock),
+) -> dict[str, bool]:
+    workspace_id = session.info["workspace_id"]
+    member = session.scalar(
+        select(ManagerAccount)
+        .where(
+            ManagerAccount.id == manager_id,
+            ManagerAccount.workspace_id == workspace_id,
+            ManagerAccount.workspace_owner.is_(False),
+        )
+        .with_for_update()
+    )
+    if member is None:
+        raise AppError("manager_not_found", "Manager not found.", 404)
+    if member.deleted_at is None:
+        now = clock.now()
+        session.execute(update(ManagerSession).where(ManagerSession.account_id == member.id).values(revoked_at=now))
+        session.execute(
+            text(
+                "UPDATE operator_profiles SET active = false, display_name = 'Removed manager', "
+                "version = version + 1 WHERE auth_subject = :subject"
+            ),
+            {"subject": f"manager:{member.id}"},
+        )
+        scrub_account(member)
+        member.deleted_at = now
+        write_audit(
+            session,
+            clock=clock,
+            actor_type="operator",
+            actor_subject=principal.subject,
+            action="workspace.manager_removed",
+            entity_type="manager_account",
+            entity_id=manager_id,
+            correlation_id=uuid.UUID(request.state.request_id),
+            reason=None,
+            redacted_changes={"sessions_revoked": True},
+            request_id=request.state.request_id,
+        )
+        session.commit()
+    return {"removed": True}
+
+
 @router.get("/setup")
 def setup_status(
-    _principal: Principal = Depends(require_manager),
+    principal: Principal = Depends(require_manager),
     session: Session = Depends(get_db),
 ) -> dict[str, object]:
     connection = session.get(WorkspaceConnection, session.info["workspace_id"])
@@ -92,6 +217,7 @@ def setup_status(
     connected = connection is not None and latest is not None and latest.status == "succeeded"
     return {
         "connected": connected,
+        "can_manage_connection": "owner" in principal.roles,
         "house_count": session.scalar(select(func.count()).select_from(Property).where(Property.active.is_(True))),
         "cleaner_count": session.scalar(select(func.count()).select_from(Cleaner).where(Cleaner.active.is_(True))),
         "completed": connection is not None and connection.completed_at is not None,
@@ -102,7 +228,7 @@ def setup_status(
 def connect_hospitable(
     payload: ConnectionWrite,
     request: Request,
-    principal: Principal = Depends(require_manager),
+    principal: Principal = Depends(require_owner),
     session: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     clock: Clock = Depends(get_clock),
@@ -112,7 +238,9 @@ def connect_hospitable(
         if not settings.workspace_pilot_pat_enabled:
             raise AppError("connection_not_configured", "Hospitable partner authorization is not configured yet.", 503)
         email = session.scalar(
-            select(ManagerAccount.email).where(ManagerAccount.workspace_id == session.info["workspace_id"])
+            select(ManagerAccount.email).where(
+                ManagerAccount.workspace_id == session.info["workspace_id"], ManagerAccount.workspace_owner.is_(True)
+            )
         )
         if email != settings.workspace_invite_email:
             raise AppError("connection_not_available", "This workspace is not enrolled in the private pilot.", 403)
@@ -299,7 +427,7 @@ def add_cleaner(
 @router.post("/complete")
 def complete_setup(
     request: Request,
-    principal: Principal = Depends(require_manager),
+    principal: Principal = Depends(require_owner),
     session: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     clock: Clock = Depends(get_clock),

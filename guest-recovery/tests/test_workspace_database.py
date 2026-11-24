@@ -26,6 +26,16 @@ class WorkspaceDatabaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'different account'):
                 provision(directory, workspace_a, account_b, initialize)
 
+    def test_invited_manager_uses_the_existing_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace, owner, manager = (str(uuid4()) for _ in range(3))
+            path, _ = provision(directory, workspace, owner, initialize)
+            shared_path, member = provision(directory, workspace, manager, initialize, owner_id=owner)
+            self.assertEqual(shared_path, path)
+            self.assertEqual(member['id'], manager)
+            with sqlite3.connect(path) as db:
+                self.assertEqual({row[0] for row in db.execute('SELECT id FROM users')}, {owner, manager})
+
     def test_refuses_existing_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace, account = (str(uuid4()) for _ in range(2))
@@ -51,13 +61,17 @@ class WorkspaceDatabaseTests(unittest.TestCase):
             handler.respond = Mock()
             workspace, account = (str(uuid4()) for _ in range(2))
             with patch('operations_login.redeem', return_value=(
-                {'workspace_id': workspace, 'account_id': account}, 'fixture-login',
+                {'workspace_id': workspace, 'account_id': account, 'workspace_owner_id': account,
+                 'membership_token': 'opm_' + 'a' * 43}, 'fixture-login',
             )):
                 handler.private_workspace(directory, 'https://recovery.example', {})
             headers = handler.respond.call_args.args[3]
             cookies = [value.split(';', 1)[0] for name, value in headers if name == 'Set-Cookie']
             handler.path = '/'
             handler.headers = {'Cookie': '; '.join(cookies)}
+            membership = patch('operations_login.verify_membership', return_value=True)
+            access = membership.start()
+            self.addCleanup(membership.stop)
             with patch('operations_login.stays', return_value={
                 'stays': [{'property_name': '<b>Fixture House</b>', 'checkin_at': 'Arrival', 'checkout_at': 'Departure'}],
             }) as read_stays:
@@ -74,6 +88,10 @@ class WorkspaceDatabaseTests(unittest.TestCase):
                 handler.private_workspace(directory, 'https://recovery.example', query)
                 read_messages.assert_called_once()
             self.assertIn(b'&lt;script&gt;Fixture guest text&lt;/script&gt;', handler.respond.call_args.args[1])
+            access.return_value = False
+            handler.private_workspace(directory, 'https://recovery.example', query)
+            self.assertEqual(handler.respond.call_args.args[0], 303)
+            access.return_value = True
 
             handler.path = '/'
             other_workspace, other_account = (str(uuid4()) for _ in range(2))

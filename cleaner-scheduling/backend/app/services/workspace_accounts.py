@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.errors import AppError
 from app.models import OperatorProfile
-from app.models.accounts import ManagerAccount, ManagerSession
+from app.models.accounts import ManagerAccount, ManagerInvitation, ManagerSession
 from app.services.manager_mfa import consume_second_factor
 
 _PASSWORD_SLOTS = BoundedSemaphore(2)
@@ -91,6 +91,29 @@ def create_session(session: Session, account: ManagerAccount, token: str, now: d
     )
 
 
+def workspace_owner_id(session: Session, workspace_id: uuid.UUID) -> uuid.UUID:
+    owner_id = session.scalar(
+        select(ManagerAccount.id).where(
+            ManagerAccount.workspace_id == workspace_id,
+            ManagerAccount.workspace_owner.is_(True),
+            ManagerAccount.deleted_at.is_(None),
+        )
+    )
+    if owner_id is None:
+        raise AppError("invalid_workspace", "This workspace is unavailable.", 401)
+    return owner_id
+
+
+def lock_active_workspace(session: Session, workspace_id: uuid.UUID) -> bool:
+    return (
+        session.scalar(
+            text("SELECT deleted_at IS NULL FROM workspaces WHERE id = :id FOR UPDATE"),
+            {"id": workspace_id},
+        )
+        is True
+    )
+
+
 def signup(
     session: Session,
     *,
@@ -100,11 +123,14 @@ def signup(
     key: str,
     secret: str,
     now: datetime,
+    team_invite: str | None = None,
 ) -> tuple[ManagerAccount, str]:
     key_hash = token_digest(key)
     request_hash = hmac.new(
         secret.encode(),
-        json.dumps([email, password, name], ensure_ascii=True).encode(),
+        json.dumps(
+            [email, password, name] if team_invite is None else [email, password, name, team_invite], ensure_ascii=True
+        ).encode(),
         hashlib.sha256,
     ).hexdigest()
     session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key_hash})
@@ -122,24 +148,41 @@ def signup(
     encoded = password_hash(password)
     if session.scalar(select(ManagerAccount.id).where(ManagerAccount.email == email)) is not None:
         raise AppError("signup_unavailable", "Unable to create this account. Try signing in.", 409)
-    workspace_id = uuid.uuid4()
-    session.execute(
-        text("INSERT INTO workspaces (id, created_at, name) VALUES (:id, :now, :name)"),
-        {"id": workspace_id, "now": now, "name": name},
-    )
+    if team_invite is None:
+        workspace_id = uuid.uuid4()
+        session.execute(
+            text("INSERT INTO workspaces (id, created_at, name) VALUES (:id, :now, :name)"),
+            {"id": workspace_id, "now": now, "name": name},
+        )
+    else:
+        invitation_hash = token_digest(team_invite)
+        invited_workspace = session.scalar(
+            select(ManagerInvitation.workspace_id).where(ManagerInvitation.token_hash == invitation_hash)
+        )
+        if invited_workspace is None or not lock_active_workspace(session, invited_workspace):
+            raise AppError("invitation_required", "This invitation is unavailable.", 403)
+        workspace_id = invited_workspace
+        invitation = session.get(ManagerInvitation, invitation_hash)
+        if invitation is None or invitation.email != email or invitation.expires_at <= now:
+            raise AppError("invitation_required", "This invitation is unavailable.", 403)
+        session.delete(invitation)
     account = ManagerAccount(
         id=uuid.uuid4(),
         email=email,
         password_hash=encoded,
         workspace_id=workspace_id,
+        workspace_owner=team_invite is None,
         created_at=now,
         signup_key_hash=key_hash,
         signup_request_hash=request_hash,
     )
+    session.info["workspace_id"] = workspace_id
+    with session.no_autoflush:
+        session.execute(
+            text("SELECT set_config('app.workspace_id', :workspace, true)"), {"workspace": str(workspace_id)}
+        )
     session.add(account)
     session.flush()
-    session.info["workspace_id"] = workspace_id
-    session.execute(text("SELECT set_config('app.workspace_id', :workspace, true)"), {"workspace": str(workspace_id)})
     session.add(
         OperatorProfile(
             id=uuid.uuid4(),
@@ -148,7 +191,7 @@ def signup(
             version=1,
             auth_subject=account_subject(account),
             display_name=name,
-            roles=["owner", "manager"],
+            roles=["owner", "manager"] if team_invite is None else ["manager"],
             active=True,
         )
     )

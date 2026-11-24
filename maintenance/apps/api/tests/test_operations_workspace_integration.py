@@ -6,6 +6,7 @@ from uuid import uuid4
 from sqlalchemy import text
 
 from grok_bot.api.routes import auth, maintenance_bridge
+from grok_bot.auth import operations
 
 
 def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, app, migrator_engine, monkeypatch):
@@ -14,13 +15,34 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
     monkeypatch.setattr(settings, "operations_repair_handoff_enabled", True)
     monkeypatch.setattr(settings, "operations_turnover_origin", "https://turnover.example")
     pairs = {code * 43: (uuid4(), uuid4()) for code in ("a", "b")}
+    first_workspace, _ = pairs["a" * 43]
+    teammate_code = "m" * 43
+    pairs[teammate_code] = (first_workspace, uuid4())
+    owners = {workspace: account for workspace, account in list(pairs.values())[:2]}
+    active = {f"opm_{code}": identity for code, identity in pairs.items()}
 
     def redeem(request, **_):
-        workspace, account = pairs[json.loads(request.data)["code"]]
-        payload = json.dumps({"workspace_id": str(workspace), "account_id": str(account)}).encode()
+        code = json.loads(request.data)["code"]
+        workspace, account = pairs[code]
+        payload = json.dumps({
+            "workspace_id": str(workspace), "account_id": str(account),
+            "workspace_owner_id": str(owners[workspace]), "membership_token": f"opm_{code}",
+        }).encode()
         return nullcontext(SimpleNamespace(read=lambda _: payload))
 
     monkeypatch.setattr(auth, "build_opener", lambda _: SimpleNamespace(open=redeem))
+
+    def verify_membership(request, **_):
+        from urllib.error import HTTPError
+
+        identity = active.get(request.get_header("Authorization").removeprefix("Bearer "))
+        if identity is None:
+            raise HTTPError(request.full_url, 401, "Inactive", {}, None)
+        workspace, account = identity
+        payload = json.dumps({"workspace_id": str(workspace), "account_id": str(account)}).encode()
+        return nullcontext(SimpleNamespace(read=lambda _: payload))
+
+    monkeypatch.setattr(operations, "build_opener", lambda _: SimpleNamespace(open=verify_membership))
 
     def sign_in(code):
         response = client.post("/v1/auth/operations/redeem", json={"code": code, "verifier": "c" * 43})
@@ -34,11 +56,12 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
         return client.post(path, headers={**headers, "Idempotency-Key": str(uuid4())}, json=payload)
 
     external_property = str(uuid4())
-    manager_a, manager_b = [sign_in(code) for code in pairs]
+    teammate = sign_in(teammate_code)
+    manager_a, manager_b = (sign_in(letter * 43) for letter in ("a", "b"))
     sign_in("a" * 43)
     assert client.get("/v1/me", headers=manager_a).json()["roles"] == ["property_manager"]
     bridges = []
-    for index, (manager, (workspace, account)) in enumerate(zip((manager_a, manager_b), pairs.values(), strict=True)):
+    for index, (manager, (workspace, account)) in enumerate(zip((manager_a, manager_b), list(pairs.values())[:2], strict=True)):
         if index == 0:
             home, unit = uuid4(), uuid4()
             with migrator_engine.begin() as db:
@@ -68,7 +91,7 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
     }
     path = "/v1/maintenance-bridge/requests"
     repair_tokens = [f"Bearer opr_{letter * 43}" for letter in ("a", "b")]
-    grants = dict(zip(repair_tokens, pairs.values(), strict=True))
+    grants = dict(zip(repair_tokens, list(pairs.values())[:2], strict=True))
 
     def verify_stay(upstream, **_):
         from urllib.parse import parse_qs, urlsplit
@@ -77,6 +100,7 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
         query = parse_qs(urlsplit(upstream.full_url).query)
         payload = json.dumps({
             "workspace_id": str(workspace), "account_id": str(account),
+            "workspace_owner_id": str(owners[workspace]),
             "property_external_id": query["property_external_id"][0],
             "reservation_external_id": query["reservation_external_id"][0],
             "home": {
@@ -119,3 +143,9 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
     answered = post(answers, {"Authorization": repair_tokens[0]}, answer)
     assert answered.status_code == 200, answered.text
     assert answered.json()["ticket_id"] == result_a.json()["ticket_id"]
+    teammate_homes = client.get("/v1/maintenance-workspace", headers=teammate)
+    assert teammate_homes.status_code == 200, teammate_homes.text
+    assert [home["name"] for home in teammate_homes.json()["properties"]] == ["Fixture House 0"]
+    del active["opm_" + teammate_code]
+    assert client.get("/v1/maintenance-workspace", headers=teammate).status_code == 401
+    assert client.get("/v1/maintenance-workspace", headers=manager_a).status_code == 200

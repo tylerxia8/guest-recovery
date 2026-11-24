@@ -19,7 +19,14 @@ from app.models.accounts import ManagerAccount, ManagerSession
 from app.services.account_deletion import delete_account
 from app.services.email_addresses import normalize_email
 from app.services.manager_mfa import change_mfa
-from app.services.operations_access import ACCESS_SECONDS, issue_read_access, issue_repair_access, issue_touchup_access
+from app.services.operations_access import (
+    ACCESS_SECONDS,
+    issue_access,
+    issue_read_access,
+    issue_repair_access,
+    issue_touchup_access,
+    read_session_digest,
+)
 from app.services.security_alerts import queue_security_alert, record_failed_login
 from app.services.workspace_accounts import (
     authenticate_session,
@@ -28,6 +35,7 @@ from app.services.workspace_accounts import (
     signup,
     token_digest,
     verify_password,
+    workspace_owner_id,
 )
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -149,6 +157,7 @@ def account_response(session: Session, account: ManagerAccount) -> dict[str, obj
         "email": account.email,
         "workspace_id": str(account.workspace_id),
         "name": name,
+        "workspace_owner": account.workspace_owner,
         "mfa_enabled": account.mfa_secret is not None,
         "recovery_codes_remaining": len(account.mfa_recovery_hashes),
     }
@@ -162,7 +171,8 @@ def create_account(
     settings: Settings = Depends(get_settings),
     clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
-    if not settings.workspace_registration_enabled:
+    team_invite = payload.invitation_token if (payload.invitation_token or "").startswith("team_") else None
+    if not settings.workspace_registration_enabled and team_invite is None:
         invitation_matches = hmac.compare_digest(
             hashlib.sha256((payload.invitation_token or "").encode()).hexdigest(), settings.workspace_invite_token_hash
         )
@@ -189,6 +199,7 @@ def create_account(
             key=key,
             secret=settings.field_encryption_secret,
             now=clock.now(),
+            team_invite=team_invite,
         )
         result = {**account_response(session, account), "token": token}
         session.commit()
@@ -302,10 +313,13 @@ def redeem_operations_grant(
     if not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
         raise AppError("invalid_grant", "Shared sign-in expired. Start again.", 401)
     account = authenticate_session_digest(session, digest, clock.now())
+    owner = workspace_owner_id(session, account.workspace_id)
     return JSONResponse(
         content={
             "account_id": str(account.id),
             "workspace_id": str(account.workspace_id),
+            "workspace_owner_id": str(owner),
+            "membership_token": issue_access(cache, digest, "opm_", ttl=43200),
             **(
                 {"read_token": issue_read_access(cache, digest), "read_token_expires_in": ACCESS_SECONDS}
                 if payload.client == "guest-recovery"
@@ -322,6 +336,26 @@ def redeem_operations_grant(
                 else {}
             ),
         },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/operations/membership", include_in_schema=False)
+def operations_membership(
+    request: Request,
+    session: Session = Depends(account_database),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    if not settings.operations_login_enabled:
+        raise AppError("not_found", "Not found.", 404)
+    token = bearer_token(request)
+    if re.fullmatch(r"opm_[A-Za-z0-9_-]{43}", token) is None:
+        raise AppError("invalid_session", "Sign in to continue.", 401)
+    account = authenticate_session_digest(session, read_session_digest(cache, token), clock.now())
+    return JSONResponse(
+        content={"workspace_id": str(account.workspace_id), "account_id": str(account.id)},
         headers={"Cache-Control": "no-store"},
     )
 

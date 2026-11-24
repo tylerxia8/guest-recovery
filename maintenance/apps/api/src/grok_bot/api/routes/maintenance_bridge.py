@@ -382,11 +382,12 @@ def verify_operations_repair(request, session, property_id, reservation_id):
             raise ValueError("Mismatched stay")
         organization = UUID(identity["workspace_id"])
         user = UUID(identity["account_id"])
+        owner = UUID(identity["workspace_owner_id"])
     except (URLError, OSError, ValueError, KeyError, TypeError):
         problem(403, "FORBIDDEN", "Turnover could not verify this workspace and stay.")
     if not session.scalar(
-        text("SELECT public.app_provision_operations_workspace(:workspace, :account, :grant_id)"),
-        {"workspace": organization, "account": user, "grant_id": uuid4()},
+        text("SELECT public.app_provision_operations_manager(:workspace, :owner, :account, :grant_id)"),
+        {"workspace": organization, "owner": owner, "account": user, "grant_id": uuid4()},
     ):
         problem(403, "FORBIDDEN", "This Lucena account is not linked to Maintenance.")
     set_tenant(session, organization, user)
