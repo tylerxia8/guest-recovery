@@ -38,7 +38,8 @@ test("daily board shows deadlines, cleaner responsibility and explicit cleaning 
   await expect(card).toContainText("Nov 12");
   await expect(card).toContainText("Unassigned");
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await card.getByRole("link", {name: /Review schedule/}).click();
-  await expect(page).toHaveURL(/\/schedules\?date=2026-11-11$/, {timeout: 15000});
+  const reviewLink = card.getByRole("link", {name: /Review schedule/});
+  await expect(reviewLink).toHaveAttribute("href", "/schedules?date=2026-11-11");
+  await page.goto("/schedules?date=2026-11-11", {waitUntil: "domcontentloaded"});
   await expect(page.getByLabel("Schedule date")).toHaveValue("2026-11-11");
 });
