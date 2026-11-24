@@ -12,7 +12,7 @@ export type TaskRow = { kind?: string; guest_scope?: string | null; version?: nu
 const time = (value: string | null) => value ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(value)) : "No deadline";
 const datedTime = (value: string | null | undefined) => value ? new Intl.DateTimeFormat("en-US", {timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}).format(new Date(value)) : "Not scheduled";
 export function TaskList({ tasks }: { tasks: TaskRow[] }) {
-  return <div className="cleaning-table-wrap"><table className="cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Ready to clean</th><th scope="col">Cleaning deadline</th><th scope="col">Drive before cleaning</th><th scope="col">Assigned cleaner / planned time</th><th scope="col">Cleaned?</th></tr></thead>
+  return <div className="cleaning-table-wrap" role="region" aria-label="Upcoming cleaning assignments" tabIndex={0}><table className="cleaning-table"><thead><tr><th scope="col">House</th><th scope="col">Ready to clean</th><th scope="col">Cleaning deadline</th><th scope="col">Drive before cleaning</th><th scope="col">Assigned cleaner / planned time</th><th scope="col">Cleaned?</th></tr></thead>
     <tbody>{tasks.map(task => <tr key={task.id} className={task.overdue ? "cleaning-overdue" : ""}>
       <th scope="row">{task.property_name}</th><td>{datedTime(task.release_at)}</td>
       <td>{datedTime(task.deadline_at)}{task.deadline_conflict ? <strong className="deadline-alert">Planned finish misses deadline</strong> : null}{task.overdue ? <strong className="deadline-alert">Overdue: manager action needed</strong> : null}</td>
