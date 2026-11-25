@@ -1,0 +1,20 @@
+name: Railway SSH reachability
+on:
+  push:
+    branches: [railway-recovery-check]
+permissions: {}
+jobs:
+  reachability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the Railway SSH service
+        run: |
+          python3 - <<'PY'
+          import socket
+          with socket.create_connection(("ssh.railway.com", 22), timeout=8) as connection:
+              connection.settimeout(8)
+              if not connection.recv(128).startswith(b"SSH-"):
+                  raise SystemExit("The server did not return an SSH greeting.")
+          print("Railway SSH endpoint reachable.")
+          PY
