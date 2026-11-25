@@ -1,20 +1,43 @@
-name: Railway SSH reachability
+name: Railway migration recovery
 on:
   push:
     branches: [railway-recovery-check]
-permissions: {}
+permissions:
+  contents: read
 jobs:
-  reachability:
+  recovery:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 7
     steps:
-      - name: Check the Railway SSH service
+      - uses: actions/checkout@v7
+      - run: |
+          umask 077
+          ssh-keygen -q -t ed25519 -N '' -C "cleaner-migration-recovery-${GITHUB_RUN_ID}" -f "$RUNNER_TEMP/recovery"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: recovery-public-key
+          path: ${{ runner.temp }}/recovery.pub
+          retention-days: 1
+      - name: Retrieve and encrypt the authorized migration only
+        env:
+          TARGET: 49a04266-437f-4f51-8e58-0af78a967856@ssh.railway.com
         run: |
-          python3 - <<'PY'
-          import socket
-          with socket.create_connection(("ssh.railway.com", 22), timeout=8) as connection:
-              connection.settimeout(8)
-              if not connection.recv(128).startswith(b"SSH-"):
-                  raise SystemExit("The server did not return an SSH greeting.")
-          print("Railway SSH endpoint reachable.")
-          PY
+          set -eu
+          umask 077
+          trap 'rm -f "$RUNNER_TEMP/recovery" "$RUNNER_TEMP/migration.py"' EXIT
+          for attempt in $(seq 1 36); do
+            if ssh -nT -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "$RUNNER_TEMP/recovery" "$TARGET" 'cat /app/migrations/versions/0030_stay_connections.py' > "$RUNNER_TEMP/migration.py" 2>"$RUNNER_TEMP/recovery-error"; then
+              if grep -q '0030_stay_connections' "$RUNNER_TEMP/migration.py" && grep -q 'def upgrade(' "$RUNNER_TEMP/migration.py"; then
+                openssl cms -encrypt -aes256 -binary -in "$RUNNER_TEMP/migration.py" -outform DER -out "$RUNNER_TEMP/migration.der" .github/railway-recovery-recipient.pem
+                exit 0
+              fi
+            fi
+            sleep 7
+          done
+          tail -4 "$RUNNER_TEMP/recovery-error" >&2
+          exit 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: encrypted-cleaner-migration
+          path: ${{ runner.temp }}/migration.der
+          retention-days: 1
