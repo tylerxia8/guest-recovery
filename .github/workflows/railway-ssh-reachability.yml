@@ -26,8 +26,8 @@ jobs:
           umask 077
           trap 'rm -f "$RUNNER_TEMP/recovery" "$RUNNER_TEMP/migration.py"' EXIT
           for attempt in $(seq 1 36); do
-            if ssh -nT -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "$RUNNER_TEMP/recovery" "$TARGET" 'cat /app/migrations/versions/0030_stay_connections.py' > "$RUNNER_TEMP/migration.py" 2>"$RUNNER_TEMP/recovery-error"; then
-              if grep -q '0030_stay_connections' "$RUNNER_TEMP/migration.py" && grep -q 'def upgrade(' "$RUNNER_TEMP/migration.py"; then
+            if ssh -nT -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "$RUNNER_TEMP/recovery" "$TARGET" 'cat /app/migrations/versions/0029_stay_adjustments.py' > "$RUNNER_TEMP/migration.py" 2>"$RUNNER_TEMP/recovery-error"; then
+              if grep -q '0029_stay_adjustments' "$RUNNER_TEMP/migration.py" && grep -q 'def upgrade(' "$RUNNER_TEMP/migration.py"; then
                 openssl cms -encrypt -aes256 -binary -in "$RUNNER_TEMP/migration.py" -outform DER -out "$RUNNER_TEMP/migration.der" .github/railway-recovery-recipient.pem
                 exit 0
               fi
