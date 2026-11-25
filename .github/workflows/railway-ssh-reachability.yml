@@ -20,14 +20,18 @@ jobs:
           retention-days: 1
       - name: Retrieve and encrypt the authorized migration only
         env:
+          KNOWN: '["0009_cleaner_inputs","0012_standard_cleaning_time","0018_workspace_isolation","0020_workspace_connections","0019_workspace_accounts","0017_offer_emails","0021_onboarding_emails","0028_guest_touchups","0029_stay_times","0014_automatic_email","0016_cleaning_offers","0032_account_workspaces","0024_manager_mfa","0027_submitting_at","0031_action_inbox_claims","0010_default_eligibility","0015_email_delivery_permissions","0025_account_deletion","0013_cleaner_email","0008_weekly_hours","0030_manager_invitations","0022_cleaner_reading_languages","0023_cleaner_preferred_language","0026_confirmed_checkout","0011_cleaner_onboarding"]'
           TARGET: 49a04266-437f-4f51-8e58-0af78a967856@ssh.railway.com
         run: |
           set -eu
           umask 077
           trap 'rm -f "$RUNNER_TEMP/recovery" "$RUNNER_TEMP/migration.py"' EXIT
           for attempt in $(seq 1 36); do
-            if ssh -nT -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "$RUNNER_TEMP/recovery" "$TARGET" 'cat /app/migrations/versions/0029_stay_adjustments.py' > "$RUNNER_TEMP/migration.py" 2>"$RUNNER_TEMP/recovery-error"; then
-              if grep -q '0029_stay_adjustments' "$RUNNER_TEMP/migration.py" && grep -q 'def upgrade(' "$RUNNER_TEMP/migration.py"; then
+            script=aW1wb3J0IGFzdCwgYmFzZTY0LCBqc29uLCBwYXRobGliLCByZSwgc3lzCmtub3duID0ganNvbi5sb2FkcyhiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2WzFdKSkKcm9vdCA9IHBhdGhsaWIuUGF0aCgnL2FwcC9taWdyYXRpb25zL3ZlcnNpb25zJykKY3VycmVudCA9ICcwMDI4X2NsZWFuZXJfcmV0dXJucycKcmVzdWx0ID0ge30Kd2hpbGUgY3VycmVudCBub3QgaW4ga25vd246CiAgICBhc3NlcnQgaXNpbnN0YW5jZShjdXJyZW50LCBzdHIpIGFuZCByZS5mdWxsbWF0Y2gocidbYS16QS1aMC05X10rJywgY3VycmVudCkKICAgIGFzc2VydCBjdXJyZW50IG5vdCBpbiByZXN1bHQgYW5kIGxlbihyZXN1bHQpIDwgMzAKICAgIHBhdGgsID0gcm9vdC5nbG9iKGN1cnJlbnQgKyAnKi5weScpCiAgICBzb3VyY2UgPSBwYXRoLnJlYWRfdGV4dCgpCiAgICBtZXRhZGF0YSA9IHtub2RlLnRhcmdldHNbMF0uaWQ6IGFzdC5saXRlcmFsX2V2YWwobm9kZS52YWx1ZSkKICAgICAgICBmb3Igbm9kZSBpbiBhc3QucGFyc2Uoc291cmNlKS5ib2R5IGlmIGlzaW5zdGFuY2Uobm9kZSwgYXN0LkFzc2lnbikKICAgICAgICBhbmQgaXNpbnN0YW5jZShub2RlLnRhcmdldHNbMF0sIGFzdC5OYW1lKQogICAgICAgIGFuZCBub2RlLnRhcmdldHNbMF0uaWQgaW4gKCdyZXZpc2lvbicsICdkb3duX3JldmlzaW9uJyl9CiAgICBhc3NlcnQgbWV0YWRhdGFbJ3JldmlzaW9uJ10gPT0gY3VycmVudAogICAgcmVzdWx0W2N1cnJlbnRdID0gc291cmNlCiAgICBjdXJyZW50ID0gbWV0YWRhdGFbJ2Rvd25fcmV2aXNpb24nXQpwcmludChqc29uLmR1bXBzKHsnYmFzZSc6IGN1cnJlbnQsICdtaWdyYXRpb25zJzogcmVzdWx0fSkpCg==
+            known_b64=$(printf '%s' "$KNOWN" | base64 -w0)
+            remote="python -c 'import base64; exec(base64.b64decode(\"$script\"))' '$known_b64'"
+            if ssh -nT -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i "$RUNNER_TEMP/recovery" "$TARGET" "$remote" > "$RUNNER_TEMP/migration.py" 2>"$RUNNER_TEMP/recovery-error"; then
+              if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["base"] and "0028_cleaner_returns" in d["migrations"]' "$RUNNER_TEMP/migration.py" 2>/dev/null; then
                 openssl cms -encrypt -aes256 -binary -in "$RUNNER_TEMP/migration.py" -outform DER -out "$RUNNER_TEMP/migration.der" .github/railway-recovery-recipient.pem
                 exit 0
               fi
