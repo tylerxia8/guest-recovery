@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     app_env: str = "production"
     database_url: str
-    migration_database_url: str
+    migration_database_url: str = Field(default="", repr=False)
     operations_repair_handoff_enabled: bool = False
     operations_workspace_provisioning: bool = False
     operations_turnover_origin: str = ""
