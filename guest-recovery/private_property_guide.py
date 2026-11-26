@@ -85,10 +85,12 @@ def guide_form(csrf, fields, message_id, draft, guide):
         for name, value in values.items()
     )
     title = 'Edit property instruction' if guide['version'] else 'Add property instruction'
+    label = 'guide-' + hashlib.sha256((message_id + ':' + guide['intent']).encode()).hexdigest()[:20]
     return (
         '<details><summary>' + title + '</summary><form action="/property-guide" method="post">' + inputs
-        + '<label>' + escape(QUESTIONS[guide['intent']])
-        + '<textarea name="body" maxlength="2000" required>' + escape(guide['body']) + '</textarea></label>'
+        + f'<label><span id="{label}">' + escape(QUESTIONS[guide['intent']]) + '</span>'
+        + f'<textarea name="body" aria-labelledby="{label}" maxlength="2000" required>'
+        + escape(guide['body']) + '</textarea></label>'
         + '<label class="entry-confirmation"><input type="checkbox" name="approved" value="yes" required>'
         + ' Use this answer for future guests at this property</label>'
         + '<button type="submit">Save property instruction</button></form></details>'
