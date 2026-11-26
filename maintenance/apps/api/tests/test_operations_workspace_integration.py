@@ -127,6 +127,16 @@ def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, ap
     homes = client.get("/v1/maintenance-workspace", headers=manager_b)
     assert homes.status_code == 200, homes.text
     assert [home["name"] for home in homes.json()["properties"]] == ["Imported Fixture House"]
+    status_path = "/v1/maintenance-bridge/operations-status"
+    status_query = {key: request[key] for key in ("issue_id", "external_property_id", "reservation_id")}
+    assert client.get(status_path, params=status_query, headers=bridges[0]).status_code == 401
+    current = client.get(status_path, params=status_query, headers={"Authorization": repair_tokens[0]})
+    assert current.status_code == 200, current.text
+    assert current.json()["ticket_id"] == result_a.json()["ticket_id"]
+    wrong_stay = client.get(
+        status_path, params={**status_query, "reservation_id": "other-stay"}, headers={"Authorization": repair_tokens[0]},
+    )
+    assert wrong_stay.status_code == 404, wrong_stay.text
     question = result_a.json()["next_question"]
     assert question is not None
     answer = {

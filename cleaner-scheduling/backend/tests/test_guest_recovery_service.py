@@ -20,7 +20,8 @@ def test_touchup_is_separate_and_idempotent(monkeypatch):
     monkeypatch.setattr(service, "_reservation", lambda *_: reservation)
     monkeypatch.setattr(service, "acquire_workspace_lock", lambda *_: None)
     rows = {}
-    session.get.side_effect = lambda table, key: rows.get(key)
+    session.get.side_effect = lambda table, key, **kwargs: rows.get(key)
+    session.scalar.return_value = None
     session.add.side_effect = lambda task: rows.update({task.id: task})
     body = {
         "external_request_id": str(uuid4()),

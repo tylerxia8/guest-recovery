@@ -231,6 +231,7 @@ class CleaningTask(Base):
     property_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_reservation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False, default="departure")
+    external_return_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     guest_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_reservation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     release_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

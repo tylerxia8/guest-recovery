@@ -2,12 +2,18 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from app.api.routes.ingestion import OperationsTouchupWrite, operations_cleaning_touchup, operations_stays
+from app.api.routes.ingestion import (
+    OperationsTouchupWrite,
+    operations_cleaning_status,
+    operations_cleaning_touchup,
+    operations_stays,
+)
 from app.config import get_settings
 from app.db import get_engine, session_factory
+from app.domain.errors import AppError
 from app.services import guest_recovery
 from sqlalchemy import text
 
@@ -97,12 +103,21 @@ def check_cleaning_handoff_isolation(settings, migrator):
     with second.begin() as session:
         with pytest.raises(LookupError):
             guest_recovery.handle(session, "GET", read_path, None)
+        with pytest.raises(AppError) as missing:
+            operations_cleaning_status(UUID(request), property_source, booking, None, session, touchup_settings)
+        assert missing.value.status_code == 404
         task_b = guest_recovery.handle(session, "POST", root, body)
     assert task_a["task_id"] != task_b["task_id"]
     with first.begin() as session:
         assert guest_recovery.handle(session, "GET", read_path, None) == task_a
+        result = operations_cleaning_status(UUID(request), property_source, booking, None, session, touchup_settings)
+        assert json.loads(result.body) == task_a
     with second.begin() as session:
         assert guest_recovery.handle(session, "GET", read_path, None) == task_b
+        with pytest.raises(AppError):
+            operations_cleaning_status(
+                UUID(request), property_source, "unrelated-stay", None, session, touchup_settings
+            )
 
 
 def test_cleaning_handoff_isolation():

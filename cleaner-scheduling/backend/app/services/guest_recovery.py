@@ -44,9 +44,19 @@ def _touchup_id(session: Session, identifier: str) -> UUID:
     return uuid5(get_workspace_id(session), f"guest-touchup:{UUID(identifier)}")
 
 
-def _touchup_status(session: Session, identifier: str) -> dict[str, object]:
-    task = session.get(CleaningTask, _touchup_id(session, identifier))
-    if not task or task.kind != "guest_touchup":
+def _find_touchup(session: Session, identifier: str, *, lock: bool = False) -> CleaningTask | None:
+    task = session.get(CleaningTask, _touchup_id(session, identifier), with_for_update=lock)
+    if task is not None:
+        return task
+    query = select(CleaningTask).where(
+        CleaningTask.external_return_request_id == UUID(identifier), CleaningTask.kind == "guest_touchup"
+    )
+    return session.scalar(query.with_for_update() if lock else query)
+
+
+def touchup_status(session: Session, identifier: str, *, reservation_id: UUID | None = None) -> dict[str, object]:
+    task = _find_touchup(session, identifier)
+    if not task or task.kind != "guest_touchup" or (reservation_id and task.source_reservation_id != reservation_id):
         raise LookupError(identifier)
     result: dict[str, object] = {
         "task_id": str(task.id),
@@ -58,7 +68,7 @@ def _touchup_status(session: Session, identifier: str) -> dict[str, object]:
     elif task.status == "assigned":
         assignment = session.scalar(
             select(Assignment)
-            .where(Assignment.task_id == task.id, Assignment.status.in_(("planned", "published", "acknowledged")))
+            .where(Assignment.task_id == task.id, Assignment.status.in_(("published", "acknowledged")))
             .order_by(Assignment.assignment_version.desc())
             .limit(1)
         )
@@ -84,7 +94,7 @@ def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]
     start, end = _time(body["release_at"]), _time(body["deadline_at"])
     scope = body["scope"].strip()
     duration = body["duration_minutes"]
-    existing = session.get(CleaningTask, key)
+    existing = _find_touchup(session, identifier, lock=True)
     if existing:
         previous = (
             existing.source_reservation_id,
@@ -95,7 +105,7 @@ def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]
         )
         if previous != (reservation.id, start, end, duration, scope):
             raise ValueError("This touch-up was already created with different details.")
-        return _touchup_status(session, identifier)
+        return touchup_status(session, identifier)
     now = datetime.now(UTC)
     if (
         body.get("guest_access_confirmed") is not True
@@ -124,12 +134,12 @@ def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]
         )
     )
     session.flush()
-    return _touchup_status(session, identifier)
+    return touchup_status(session, identifier)
 
 
 def _withdraw_touchup(session: Session, identifier: str) -> dict[str, object]:
     acquire_workspace_lock(session, get_workspace_id(session), SCHEDULE_PUBLICATION_LOCK)
-    task = session.get(CleaningTask, _touchup_id(session, identifier), with_for_update=True)
+    task = _find_touchup(session, identifier, lock=True)
     if task is None or task.kind != "guest_touchup":
         raise LookupError(identifier)
     if task.status not in {"completed", "canceled"}:
@@ -146,7 +156,7 @@ def _withdraw_touchup(session: Session, identifier: str) -> dict[str, object]:
             "reservation-sync",
         )
         session.flush()
-    return _touchup_status(session, identifier)
+    return touchup_status(session, identifier)
 
 
 def handle(session: Session, method: str, path: str, body: dict[str, Any] | None) -> dict[str, object]:
@@ -167,5 +177,5 @@ def handle(session: Session, method: str, path: str, body: dict[str, Any] | None
                 session, reservation, body["request_id"], body["kind"], _time(body["target_at"]), datetime.now(UTC)
             )
     if method == "GET" and path.startswith("/v1/cleaner-returns/"):
-        return _touchup_status(session, path.rsplit("/", 1)[1])
+        return touchup_status(session, path.rsplit("/", 1)[1])
     raise ValueError("Use Cleaner Scheduling to review this operation.")

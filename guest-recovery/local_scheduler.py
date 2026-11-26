@@ -15,6 +15,18 @@ def origin(workspace):
     return 'internal-scheduler:' + workspace
 
 
+def resolve_origin(saved_origin, current_origin):
+    if not saved_origin or saved_origin == current_origin:
+        return current_origin
+    workspace = workspace_id()
+    previous_workspace = os.environ.get('CLEANER_SCHEDULER_WORKSPACE_ID', '')
+    previous_origin = os.environ.get('CLEANER_SCHEDULER_URL', '').rstrip('/')
+    if (workspace and current_origin == origin(workspace) and previous_workspace == workspace
+            and previous_origin.startswith('https://') and saved_origin == previous_origin):
+        return current_origin
+    raise ValueError('The scheduler connection changed. Review this request before continuing.')
+
+
 @lru_cache(maxsize=1)
 def _service(workspace):
     directory = Path(os.environ.get('INTERNAL_SCHEDULER_BACKEND',

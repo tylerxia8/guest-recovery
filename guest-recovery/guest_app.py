@@ -100,6 +100,8 @@ def initialize(database=None):
         initialize_safety(db)
         from stay_adjustments import initialize as initialize_stay_policy
         initialize_stay_policy(db)
+        from private_handoffs import initialize as initialize_handoffs
+        initialize_handoffs(db)
         if 'offer' not in {row['name'] for row in db.execute('PRAGMA table_info(purchase_requests)')}:
             db.execute('ALTER TABLE purchase_requests ADD COLUMN offer TEXT')
     os.chmod(database, 0o600)
@@ -107,6 +109,19 @@ def initialize(database=None):
 
 def now():
     return dt.datetime.now(dt.UTC).isoformat()
+
+
+def stay_time(value):
+    if not isinstance(value, str):
+        return ''
+    try:
+        timestamp = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    if timestamp.tzinfo is None:
+        return value
+    eastern = timestamp.astimezone(ZoneInfo('America/New_York'))
+    return eastern.strftime('%b %d, %I:%M %p %Z').replace(' 0', ' ')
 
 
 def required(data, field, maximum=200):
@@ -314,7 +329,8 @@ class Handler(BaseHTTPRequestHandler):
     def private_workspace(self, directory, origin, query):
         from auth import AuthError, cookie, new_session, require_csrf, session
         from operations_login import (
-            guest_messages, has_repair_access, has_touchup_access, redeem, remember_membership, remember_read_access, selected_workspace,
+            cleaning_status, guest_messages, has_repair_access, has_touchup_access, redeem, remember_membership, remember_read_access,
+            repair_status, selected_workspace,
             send_repair, send_touchup, start, stays, turnover_origin, verify_membership, workspace_cookie,
         )
         from workspace_database import provision
@@ -353,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/style.css':
             self.respond(200, (ROOT / 'web' / 'style.css').read_bytes(), 'text/css')
             return
-        if self.path not in ('/', '/login', '/messages', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
             raise AuthError(404, 'Not found.')
         workspace = selected_workspace(self.headers)
         actor = None
@@ -366,10 +382,27 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(303, b'', 'text/plain', {'Location': '/auth/operations/start'})
             return
         from html import escape
+        from urllib.parse import urlencode
 
         page = (ROOT / 'web' / 'private-workspace.html').read_text().replace(
             '<!-- turnover-link -->', '<a href="' + escape(issuer, quote=True) + '">Back to Cleaner</a>'
         )
+        from private_handoffs import case_links, lookup as lookup_handoff, remember as remember_handoff, render_status
+
+        if self.path == '/handoff-status':
+            with connect(database) as db:
+                handoff = lookup_handoff(db, query)
+            payload = {
+                'issue_id': handoff['request_id'], 'external_property_id': handoff['property_id'],
+                'reservation_id': handoff['reservation_id'],
+            }
+            if handoff['kind'] == 'cleaning':
+                result = cleaning_status(issuer, actor['token_hash'], payload)
+            else:
+                result = repair_status(actor['token_hash'], payload)
+            content = render_status(handoff['kind'], result, actor['csrf'], payload)
+            self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+            return
         if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
             if self.command != 'POST':
                 raise AuthError(405, 'Submit the request from the guest case.')
@@ -387,7 +420,6 @@ class Handler(BaseHTTPRequestHandler):
                 from private_replies import save
                 with connect(database) as db:
                     save(db, parsed)
-                from urllib.parse import urlencode
                 back = escape(urlencode({
                     name: parsed[name] for name in ('property_external_id', 'reservation_external_id')
                 }))
@@ -397,32 +429,41 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == '/cleaning-touchup':
                 from private_touchup import cleaning_payload
-                result = send_touchup(issuer, actor['token_hash'], cleaning_payload(parsed))
-                content = '<h2>Cleaning request saved</h2><p>Cleaner task ' + escape(str(result['task_id'])) + '</p>'
+                payload = cleaning_payload(parsed)
+                send_touchup(issuer, actor['token_hash'], payload)
+                kind = 'cleaning'
+                identifier = payload['external_request_id']
             else:
-                from private_repair import answer_form, answer_payload, repair_payload
+                from private_repair import answer_payload, repair_payload
                 answering = self.path == '/repair-answer'
                 payload = answer_payload(parsed) if answering else repair_payload(parsed)
-                result = send_repair(actor['token_hash'], payload, answer=answering)
-                content = '<h2>Repair request saved</h2><p>Maintenance ticket ' + escape(str(result.get('ticket_number', result['ticket_id']))) + '</p>'
-                next_question = result.get('next_question')
-                if isinstance(next_question, dict) and isinstance(next_question.get('body'), str):
-                    content += '<h3>Next intake question</h3><p>' + escape(next_question['body']) + '</p>'
-                    if isinstance(next_question.get('field_key'), str):
-                        content += answer_form(actor['csrf'], payload, next_question)
-            content += '<p>Current status · ' + escape(str(result.get('status', '')).replace('_', ' ')) + '</p>'
-            content += '<p><a href="/">Back to stays</a></p>'
-            self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+                send_repair(actor['token_hash'], payload, answer=answering)
+                kind = 'repair'
+                identifier = payload['issue_id']
+            property_id = parsed['property_external_id']
+            reservation_id = parsed['reservation_external_id']
+            with connect(database) as db:
+                remember_handoff(db, kind, identifier, property_id, reservation_id)
+            target = '/handoff-status?' + urlencode({'kind': kind, 'request_id': identifier})
+            self.respond(303, b'', 'text/plain', {'Location': target})
             return
+        case_history = ''
         try:
             if self.path == '/messages':
+                fields = {}
+                for name in ('property_external_id', 'reservation_external_id'):
+                    values = query.get(name, [])
+                    if len(values) != 1 or not 1 <= len(values[0]) <= 120:
+                        raise AuthError(400, 'Choose a property and reservation.')
+                    fields[name] = values[0]
+                with connect(database) as db:
+                    case_history = case_links(db, fields['property_external_id'], fields['reservation_external_id'])
                 data = guest_messages(issuer, actor['token_hash'], query)
                 messages = data.get('messages')
                 if not isinstance(messages, list) or len(messages) > 10 or any(not isinstance(item, dict) for item in messages):
                     raise AuthError(503, 'Guest messages are temporarily unavailable.')
                 from private_replies import form as reply_form, observe_messages
 
-                fields = {name: query[name][0] for name in ('property_external_id', 'reservation_external_id')}
                 with connect(database) as db:
                     drafts = observe_messages(db, fields, messages)
                 rows = ''.join(
@@ -438,6 +479,7 @@ class Handler(BaseHTTPRequestHandler):
                 content += '<ul>' + rows + '</ul>' if rows else '<p>No plain-text guest messages for this stay.</p>'
                 if data.get('has_older') is True:
                     content += '<p>Showing the latest 10 guest messages.</p>'
+                content += case_history
                 if has_touchup_access(actor['token_hash']):
                     from private_touchup import cleaning_form
                     content += cleaning_form(actor['csrf'], query)
@@ -451,12 +493,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise AuthError(503, 'Cleaner stays are temporarily unavailable.')
                 if any(not isinstance(stay, dict) for stay in records):
                     raise AuthError(503, 'Cleaner stays are temporarily unavailable.')
-                from urllib.parse import urlencode
-
                 rows = ''.join(
                     '<li><strong>' + escape(str(stay.get('property_name', ''))) + '</strong> · '
-                    + escape(str(stay.get('checkin_at', ''))) + ' to '
-                    + escape(str(stay.get('checkout_at', ''))) + ' · <a href="/messages?'
+                    + escape(stay_time(stay.get('checkin_at'))) + ' to '
+                    + escape(stay_time(stay.get('checkout_at'))) + ' · <a href="/messages?'
                     + escape(urlencode({
                         'property_external_id': stay.get('property_external_id', ''),
                         'reservation_external_id': stay.get('reservation_external_id', ''),
@@ -469,6 +509,8 @@ class Handler(BaseHTTPRequestHandler):
                     content += '<p>Showing the first 100 stays.</p>'
         except AuthError as error:
             content = '<p>' + escape(str(error)) + '</p>'
+            if error.status in (429, 503):
+                content += case_history
             if error.status == 401:
                 content += '<p><a href="/auth/operations/start">Reconnect with Cleaner</a></p>'
         self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
@@ -878,12 +920,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def poll_hospitable():
-    from hospitable import research
+    from hospitable import configured_token, research
     finished = None
     while not SYNC_STOP.is_set():
         if finished is not None and SYNC_STOP.wait(max(0, 60 - (time.monotonic() - finished))):
             return
         SYNC_WAKE.clear()
+        if not configured_token():
+            SYNC_WAKE.wait(300)
+            continue
         with connect() as db:
             db.execute("INSERT INTO integration_state VALUES (1, 'syncing', ?, NULL, NULL) ON CONFLICT(id) DO UPDATE SET status = 'syncing', last_attempt = excluded.last_attempt, error = NULL", (now(),))
         try:

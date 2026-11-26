@@ -325,7 +325,7 @@ def schedule_action(db, path, data, timestamp):
         raise ValueError('Refresh before reviewing this schedule proposal')
     issue, live = context(db, row['issue_id'], timestamp)
     plan = json.loads(row['body'])
-    if (plan.get('scheduler_url') or '').startswith('internal-scheduler:'):
+    if configuration().get('internal'):
         raise ValueError('Manage this touch-up in Cleaner Scheduling.')
     fingerprint = guest_context_fingerprint(issue)
     if not live or data.get('source_fingerprint') != fingerprint:
@@ -431,10 +431,23 @@ def synchronize(connect, stop):
             attempted = row['attempted_at'] is not None
             plan = json.loads(row['body'])
             try:
+                settings = configuration()
+                scheduler_url = local_scheduler.resolve_origin(plan['scheduler_url'], settings['url'])
+                if settings.get('internal'):
+                    if scheduler_url != plan['scheduler_url'] and attempted:
+                        plan['previous_submission_unverified'] = True
+                    plan['scheduler_url'] = scheduler_url
+                    if plan.pop('refresh_proposal', False):
+                        plan['review_previous_proposal'] = True
+                    for action in ('approval', 'notice_retry'):
+                        if plan.get(action, {}).get('state') in ('queued', 'uncertain'):
+                            plan[action]['state'] = 'blocked'
                 if row['state'] == 'queued':
                     try:
                         result = request(plan['scheduler_url'], 'GET', '/v1/cleaner-returns/' + row['id'])
                     except SchedulerNotFound:
+                        if plan.get('previous_submission_unverified'):
+                            raise ValueError('The previous scheduler may have received this visit. Check Cleaner before creating another visit.') from None
                         with connect() as db:
                             issue, live = context(db, row['issue_id'], timestamp)
                             fingerprint = guest_context_fingerprint(issue)
@@ -466,7 +479,7 @@ def synchronize(connect, stop):
                         approval['state'] = 'uncertain'
                         result = request(plan['scheduler_url'], 'POST', '/v1/cleaner-returns/' + row['id'] + '/approve', approval['request'], approval['key'])
                         approval['state'] = 'confirmed'
-                elif (result.get('status') == 'awaiting_schedule' and not result.get('proposal_failure') or plan.get('refresh_proposal')) and not result.get('assignment'):
+                elif not settings.get('internal') and (result.get('status') == 'awaiting_schedule' and not result.get('proposal_failure') or plan.get('refresh_proposal')) and not result.get('assignment'):
                     with connect() as db:
                         issue, live = context(db, row['issue_id'], dt.datetime.now(dt.UTC).isoformat())
                         if not live or guest_context_fingerprint(issue) != plan['source_fingerprint']:
@@ -489,8 +502,16 @@ def synchronize(connect, stop):
                         notice['state'] = 'confirmed'
                 if result.get('status') not in ('awaiting_schedule', 'awaiting_approval', 'scheduled', 'accepted', 'completed', 'cancelled', 'needs_manager') or not isinstance(result.get('task_id'), str):
                     raise ValueError('Scheduler response did not contain a valid visit status')
+                plan.pop('previous_submission_unverified', None)
                 state = 'completed' if result['status'] == 'completed' else 'cancelled' if result['status'] == 'cancelled' else 'submitted'
                 error = None
+                if settings.get('internal') and state == 'submitted':
+                    if result['status'] not in ('scheduled', 'accepted') and (
+                        plan.get('review_previous_proposal') or plan.get('approval', {}).get('state') == 'blocked'
+                    ):
+                        error = 'Review the previous visit proposal or approval in Cleaner.'
+                    if result['status'] != 'accepted' and plan.get('notice_retry', {}).get('state') == 'blocked':
+                        error = ((error + ' ') if error else '') + 'Check the previous cleaner notification in Cleaner before sending another.'
             except Exception as failure:
                 logging.getLogger(__name__).exception(json.dumps({'event': 'cleaner_return_sync_failed', 'request_id': row['id'], 'error_type': type(failure).__name__}))
                 result = json.loads(row['remote']) if row['remote'] else None

@@ -212,3 +212,17 @@ body:has(#inbox-workspace[hidden]) #reply-attention { display: none; }
   body:has(#inbox-workspace[data-phone-view="detail"]) #reply-attention { display: none; }
   .guest-reply-panel > summary { min-height: 44px; }
 }
+
+.shared-inbox{max-width:800px;margin:32px auto;padding:0 20px}
+.shared-inbox .detail-card{overflow-wrap:anywhere}
+.shared-inbox nav{margin-bottom:24px}
+.shared-inbox ul{display:grid;gap:10px;margin:12px 0 22px;padding:0;list-style:none}
+.shared-inbox li,.shared-inbox form{padding:16px;border:1px solid var(--line-subtle);border-radius:12px}
+.shared-inbox form{display:grid;gap:14px;margin:14px 0}
+.shared-inbox form h2{margin:0}
+.shared-inbox form input:not([type=checkbox]),.shared-inbox form textarea{width:100%;min-width:0}
+.shared-inbox form label{min-width:0}
+.shared-inbox a,.shared-inbox form button{min-height:44px}
+.shared-inbox a{display:inline-flex;align-items:center}
+.shared-inbox form button{justify-self:start}
+@media(max-width:500px){.shared-inbox{margin:12px auto;padding:0 12px}.shared-inbox .detail-card{padding:14px}.shared-inbox li,.shared-inbox form{padding:12px}.shared-inbox form button{width:100%}}

@@ -63,6 +63,7 @@ def authenticate_session_digest(session: Session, digest: str, now: datetime) ->
             ManagerAccount.deleted_at.is_(None),
             ManagerAccount.home_access_revoked_at.is_(None),
             ManagerSession.token_hash == digest,
+            ManagerSession.scope == "manager",
             ManagerSession.revoked_at.is_(None),
             ManagerSession.expires_at > now,
         )

@@ -2,6 +2,8 @@ import base64
 import hashlib
 import secrets
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from app.api.app_factory import create_app
@@ -14,18 +16,30 @@ from fastapi.testclient import TestClient
 
 
 def test_invited_manager_shares_connection_and_can_be_removed(
-    settings: Settings, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    field_key = tmp_path / "field-key"
+    field_key.write_text("fixture-only-key-for-shared-workspace-test-1234")
+    field_key.chmod(0o600)
     hosted = settings.model_copy(
         update={
             "workspace_signup_enabled": True,
             "workspace_registration_enabled": True,
             "operations_login_enabled": True,
+            "hospitable_read_only": True,
+            "api_allowed_hosts": "testserver",
+            "field_encryption_key_file": str(field_key),
         }
     )
     # Exercise real API authorization with loopback-only test services.
     monkeypatch.setattr("app.api.app_factory.validate_startup", lambda _: None)
     application = create_app(hosted, clock)
+
+    @asynccontextmanager
+    async def no_background_workers(_application):
+        yield
+
+    application.router.lifespan_context = no_background_workers
 
     def sign_up(email: str, invite: str | None = None, key: str | None = None):
         payload = {"email": email, "name": "Manager", "password": "a-test-only-password"}

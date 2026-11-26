@@ -187,6 +187,15 @@ def read_stay(issuer, session_hash, query, resource):
     return read_turnover(issuer, session_hash, resource + '?' + urlencode(payload))
 
 
+def cleaning_status(issuer, session_hash, payload):
+    query = urlencode({
+        'property_external_id': payload['external_property_id'],
+        'reservation_external_id': payload['reservation_id'],
+        'request_id': payload['issue_id'],
+    })
+    return read_turnover(issuer, session_hash, '/cleaning-status?' + query)
+
+
 def stays(issuer, session_hash):
     return read_turnover(issuer, session_hash, '/stays')
 
@@ -212,6 +221,8 @@ def read_turnover(issuer, session_hash, path):
         if status in (401, 403):
             forget_read_access(session_hash)
             raise AuthError(401, 'Sign in with Cleaner again to view shared stay details.') from None
+        if status == 429:
+            raise AuthError(429, 'Wait a moment before refreshing guest messages.') from None
         if status == 404:
             raise AuthError(404, 'This Hospitable stay was not found in your workspace.') from None
         raise AuthError(503, 'Cleaner stay details are temporarily unavailable.') from None
@@ -282,21 +293,29 @@ def has_repair_access(session_hash):
 
 
 def send_repair(session_hash, payload, *, answer=False):
+    resource = 'operations-answers' if answer else 'operations-requests'
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() if answer else payload['issue_id']
+    return request_repair(session_hash, resource, payload, key)
+
+
+def repair_status(session_hash, payload):
+    return request_repair(session_hash, 'operations-status?' + urlencode(payload))
+
+
+def request_repair(session_hash, resource, payload=None, key=None):
     origin = maintenance_origin()
     with READ_LOCK:
         expiry, _, _, token = READ_SESSIONS.get(session_hash, (0, '', '', ''))
     if not origin or not token or expiry <= time.monotonic():
         raise AuthError(401, 'Reconnect with Cleaner to send a repair request.')
     authorization = 'Bearer ' + token
-    resource = 'operations-answers' if answer else 'operations-requests'
-    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() if answer else payload['issue_id']
+    headers = {'Authorization': authorization, 'X-Grok-Authorization': authorization, 'Accept': 'application/json'}
+    if payload is not None:
+        headers.update({'Content-Type': 'application/json', 'Idempotency-Key': key})
     request = Request(
         origin + '/v1/maintenance-bridge/' + resource,
-        data=json.dumps(payload).encode(),
-        headers={
-            'Authorization': authorization, 'X-Grok-Authorization': authorization,
-            'Content-Type': 'application/json', 'Idempotency-Key': key,
-        },
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers=headers,
     )
     try:
         with build_opener(NoRedirect()).open(request, timeout=12) as response:
@@ -306,6 +325,8 @@ def send_repair(session_hash, payload, *, answer=False):
     except HTTPError as error:
         status = error.code
         error.close()
+        if status == 404:
+            raise AuthError(404, 'This repair was not found for the verified stay.') from None
         if status == 409:
             raise AuthError(409, 'Maintenance could not accept this case. Check the property link and whether the case requires the safety workflow.') from None
         if status in (401, 403):

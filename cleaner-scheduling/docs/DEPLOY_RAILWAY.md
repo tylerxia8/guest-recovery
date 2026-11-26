@@ -86,6 +86,17 @@ The existing `cleaning_app` role is a LOGIN role with:
 The app validates it is connecting as exactly `cleaning_app` and that this role
 has no dangerous privileges.
 
+### Cleaner legacy schema cutover
+
+The deployed database can report `0030_stay_connections` while the replacement
+expects `0034_legacy_return_lookup`. The backend image packages
+`scripts/reconcile_hosted_schema.py`. Use `--check` to verify the revision and
+schema shape, and run `--dry-run` against an isolated restored copy to exercise
+the data transformation in a rolled-back transaction. Dry runs acquire database
+locks. Use `--apply` only during a coordinated cutover with a verified restore
+point. The previous Cleaner image expects its original revision, so rolling
+back only the image after applying the migration is insufficient.
+
 ### What to Watch After Deploy
 
 1. **Check the role validation log line** (shown above) in the api service logs

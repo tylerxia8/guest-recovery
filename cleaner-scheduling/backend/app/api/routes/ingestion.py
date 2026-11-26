@@ -48,6 +48,7 @@ from app.services.operations_access import (
     STAY_CONTEXT_PATH,
     STAYS_PATH,
     TOUCHUP_PATH,
+    TOUCHUP_STATUS_PATH,
 )
 from app.services.reservation_sync import (
     apply_normalized,
@@ -411,6 +412,27 @@ def operations_cleaning_touchup(
     except (ValueError, LookupError) as exc:
         raise AppError("touchup_unavailable", str(exc), 422) from exc
     session.commit()
+    return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+
+@router.get(TOUCHUP_STATUS_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_cleaning_status(
+    request_id: uuid.UUID,
+    property_external_id: str = Query(min_length=1, max_length=120),
+    reservation_external_id: str = Query(min_length=1, max_length=120),
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    if not (
+        settings.workspace_signup_enabled and settings.operations_login_enabled and settings.operations_touchup_enabled
+    ):
+        raise AppError("not_found", "Cleaning handoff is unavailable.", 404)
+    _, reservation = _operations_stay(session, property_external_id, reservation_external_id)
+    try:
+        result = guest_recovery.touchup_status(session, str(request_id), reservation_id=reservation.id)
+    except LookupError as exc:
+        raise AppError("not_found", "This cleaning request does not match the stay.", 404) from exc
     return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
 

@@ -5,7 +5,7 @@ import { workspaceSignupEnabled } from "./session";
 
 const privateHeaders = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"};
 
-export async function readOperationsStay(request: NextRequest, resource: "stay-context" | "guest-messages" | "repair-context") {
+export async function readOperationsStay(request: NextRequest, resource: "stay-context" | "guest-messages" | "repair-context" | "cleaning-status") {
   const contextPath = "/v1/workspace/operations/" + resource;
   const origin = requestOrigin(request);
   if (!workspaceSignupEnabled || process.env.OPERATIONS_LOGIN_ENABLED !== "true" || !origin) {
@@ -23,6 +23,13 @@ export async function readOperationsStay(request: NextRequest, resource: "stay-c
       return new NextResponse("A property and reservation are required.", {status: 400, headers: privateHeaders});
     }
     query.set(name, values[0]);
+  }
+  if (resource === "cleaning-status") {
+    const ids = request.nextUrl.searchParams.getAll("request_id");
+    if (ids.length !== 1 || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(ids[0])) {
+      return new NextResponse("A cleaning request is required.", {status: 400, headers: privateHeaders});
+    }
+    query.set("request_id", ids[0]);
   }
   const upstream = apiOrigin(origin);
   const headers = await proxyIdentityHeaders(request, "GET", contextPath);

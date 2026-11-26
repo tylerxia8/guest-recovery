@@ -12,7 +12,8 @@ from app.services.workspace_accounts import token_digest
 STAY_CONTEXT_PATH = "/v1/workspace/operations/stay-context"
 STAYS_PATH = "/v1/workspace/operations/stays"
 MESSAGES_PATH = "/v1/workspace/operations/guest-messages"
-OPERATIONS_READ_PATHS = frozenset({STAY_CONTEXT_PATH, STAYS_PATH, MESSAGES_PATH})
+TOUCHUP_STATUS_PATH = "/v1/workspace/operations/cleaning-status"
+OPERATIONS_READ_PATHS = frozenset({STAY_CONTEXT_PATH, STAYS_PATH, MESSAGES_PATH, TOUCHUP_STATUS_PATH})
 REPAIR_CONTEXT_PATH = "/v1/workspace/operations/repair-context"
 TOUCHUP_PATH = "/v1/workspace/operations/cleaning-touchup"
 ACCESS_SECONDS = 900
