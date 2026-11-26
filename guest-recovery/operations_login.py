@@ -251,30 +251,38 @@ def has_touchup_access(session_hash):
 
 
 def send_touchup(issuer, session_hash, payload):
+    return post_schedule_change(issuer, session_hash, 'cleaning-touchup', payload, 'task_id')
+
+
+def send_stay_change(issuer, session_hash, payload):
+    return post_schedule_change(issuer, session_hash, 'stay-change', payload, 'request_id')
+
+
+def post_schedule_change(issuer, session_hash, operation, payload, result_key):
     with READ_LOCK:
         expiry, _, token, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
     if not token or expiry <= time.monotonic():
-        raise AuthError(401, 'Reconnect with Cleaner to send a cleaning request.')
+        raise AuthError(401, 'Reconnect with Cleaner to request a schedule change.')
     request = Request(
-        issuer + '/auth/operations/cleaning-touchup',
+        issuer + '/auth/operations/' + operation,
         data=json.dumps(payload).encode(),
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
     )
     try:
         with build_opener(NoRedirect()).open(request, timeout=12) as response:
             result = json.loads(response.read(8192))
-        if not isinstance(result, dict) or not result.get('task_id'):
-            raise ValueError('Invalid cleaning task response')
+        if not isinstance(result, dict) or not result.get(result_key):
+            raise ValueError('Invalid scheduling response')
     except HTTPError as error:
         status = error.code
         error.close()
         if status in (401, 403):
-            raise AuthError(401, 'Reconnect with Cleaner to send a cleaning request.') from None
+            raise AuthError(401, 'Reconnect with Cleaner to request a schedule change.') from None
         if status == 422:
-            raise AuthError(422, 'Cleaner could not validate the booking or proposed cleaning window.') from None
-        raise AuthError(503, 'Cleaner could not confirm the cleaning request.') from None
+            raise AuthError(422, 'Cleaner could not verify the stay or the requested time. Refresh the case and try again.') from None
+        raise AuthError(503, 'Cleaner could not confirm the scheduling request.') from None
     except (URLError, OSError, ValueError):
-        raise AuthError(503, 'Cleaner could not confirm the cleaning request.') from None
+        raise AuthError(503, 'Cleaner could not confirm the scheduling request.') from None
     return result
 
 

@@ -11,6 +11,7 @@ from app.api.routes.ingestion import (
     operations_cleaning_touchup,
     operations_stays,
 )
+from app.clock import FrozenClock
 from app.config import get_settings
 from app.db import get_engine, session_factory
 from app.domain.errors import AppError
@@ -97,6 +98,7 @@ def check_cleaning_handoff_isolation(settings, migrator):
                 None,
                 session,
                 touchup_settings,
+                FrozenClock(now),
             ).body
         )
         assert guest_recovery.handle(session, "POST", root, body) == task_a
@@ -135,3 +137,224 @@ def check_cleaning_handoff_isolation(settings, migrator):
 
 def test_cleaning_handoff_isolation():
     check_cleaning_handoff_isolation(get_settings(), get_engine(os.environ["MIGRATION_DATABASE_URL"]))
+
+
+def test_touchup_lifecycle_shares_schedule_email_acceptance_and_completion(
+    client, session, settings, clock, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from app.models.tables import Assignment, Cleaner, EmailDelivery, Property, Reservation
+    from app.services import cleaner_coordination, email_automation
+    from app.services.field_cipher import protect_text
+    from app.workspaces import LEGACY_WORKSPACE_ID
+    from sqlalchemy import select
+    from tests.test_scheduling import _approve, _available, _cleaner, _preview, _publish, _sync
+
+    _approve(client)
+    _sync(client, [], "handoff-fixture-sync")
+    starts = clock.now() + timedelta(hours=1)
+    ends = starts + timedelta(hours=3)
+    day = starts.date()
+    home = Property(
+        id=uuid4(),
+        created_at=clock.now(),
+        updated_at=clock.now(),
+        provider="hospitable",
+        external_id="fixture-handoff-house",
+        name="Fixture handoff house",
+        timezone="America/New_York",
+        bedrooms=2,
+        location_ciphertext=protect_text(
+            json.dumps({"display_address": "100 Fixture Lane"}), settings.field_encryption_secret
+        ),
+        geocode_status="synthetic",
+        active=True,
+    )
+    session.add(home)
+    session.flush()
+    stay = Reservation(
+        id=uuid4(),
+        created_at=clock.now(),
+        updated_at=clock.now(),
+        provider="hospitable",
+        property_id=home.id,
+        external_id="fixture-handoff-booking",
+        status="active",
+        checkin_at=clock.now() - timedelta(days=1),
+        checkout_at=clock.now() + timedelta(days=1),
+        observed_at=clock.now(),
+        timestamp_provenance="source",
+        payload_digest="a" * 64,
+    )
+    session.add(stay)
+    session.commit()
+    cleaner_id = UUID(
+        _cleaner(
+            client, name="Fixture cleaner", phone="+15555550116", properties=[home.external_id], key="handoff-cleaner"
+        )
+    )
+    _available(client, str(cleaner_id), day.isoformat(), "synthetic:fixture-origin", key="handoff-availability")
+    cleaner = session.get(Cleaner, cleaner_id)
+    assert cleaner is not None
+    cleaner.email_ciphertext = protect_text("cleaner@example.test", settings.field_encryption_secret)
+    token = cleaner_coordination.issue_portal_link(session, settings, clock, cleaner_id)
+    session.commit()
+
+    shared = settings.model_copy(
+        update={
+            "workspace_signup_enabled": True,
+            "operations_login_enabled": True,
+            "operations_touchup_enabled": True,
+            "local_scheduling_enabled": True,
+        }
+    )
+    request_id = uuid4()
+    touchup = OperationsTouchupWrite(
+        external_request_id=request_id,
+        property_external_id=home.external_id,
+        reservation_external_id=stay.external_id,
+        release_at=starts,
+        deadline_at=ends,
+        scope="Replace bedding",
+        duration_minutes=30,
+        guest_access_confirmed=True,
+    )
+    created = operations_cleaning_touchup(touchup, None, session, shared, clock)
+    task_id = json.loads(created.body)["task_id"]
+
+    def current_status():
+        return json.loads(
+            operations_cleaning_status(request_id, home.external_id, stay.external_id, None, session, shared).body
+        )
+
+    assert current_status()["status"] == "needs_manager"
+    preview = _preview(client, day.isoformat(), "handoff-preview")
+    assert current_status()["status"] == "needs_manager"
+    session.commit()
+    assert _publish(client, preview, "handoff-publish")["uncovered"] == []
+    assignment = session.scalar(select(Assignment).where(Assignment.task_id == UUID(task_id)))
+    assert assignment is not None
+    status = current_status()
+    assert status["status"] == "scheduled"
+    assert status["assignment"]["cleaner_name"] == "Fixture cleaner"
+    assert status["schedule_email_status"] is None
+
+    assert email_automation._finalize_planning(session, clock, day, None)
+    assert email_automation._queue(session, settings, clock, day) == 1
+    session.flush()
+    assert current_status()["schedule_email_status"] == "queued"
+    session.commit()
+
+    smtp = Mock()
+    send = Mock()
+    monkeypatch.setattr(email_automation, "connect", lambda _path: (smtp, "sender@example.test"))
+    monkeypatch.setattr(email_automation, "send_connected_email", send)
+    factory = session_factory(settings, workspace_id=LEGACY_WORKSPACE_ID)
+    assert email_automation._drain(factory, settings, clock)["accepted"] == 1
+    send.assert_called_once()
+    assert send.call_args.args[3] == "cleaner@example.test"
+    assert session.scalar(select(EmailDelivery.status)) == "accepted"
+    status = current_status()
+    assert status["schedule_email_status"] == "accepted"
+    assert status["status"] == "scheduled"
+
+    # Supply a synthetic routing baseline marker. Acceptance still checks the
+    # published assignment and route using the same fixture matrix as preview.
+    monkeypatch.setattr(cleaner_coordination, "current_local_baseline", lambda *_: object())
+    worker = cleaner_coordination.authenticate_portal(session, settings, clock, token)
+    cleaner_coordination.assignment_action(
+        session, settings, clock, worker, "accept", assignment.id, assignment.version
+    )
+    session.commit()
+    assert current_status()["status"] == "accepted"
+    cleaner_coordination.assignment_action(
+        session, settings, FrozenClock(assignment.planned_end), worker, "complete", assignment.id, assignment.version
+    )
+    session.commit()
+    assert current_status()["status"] == "completed"
+
+
+def test_shared_stay_change_applies_policy_without_replacing_imported_times(client, session, settings, clock):
+    from app.api.routes.ingestion import OperationsStayChangeWrite, operations_stay_change
+    from app.models.tables import CleaningTask, Property, Reservation, ReservationSyncRun
+    from app.services.task_generation import recompute_property_tasks
+    from sqlalchemy import select
+    from tests.test_scheduling import _approve, _sync
+
+    _approve(client)
+    _sync(client, [], "shared-timing-fixture")
+    run = session.scalar(select(ReservationSyncRun))
+    assert run is not None
+    run.provider = "hospitable"
+    home = Property(
+        id=uuid4(),
+        created_at=clock.now(),
+        updated_at=clock.now(),
+        provider="hospitable",
+        external_id="fixture-stay-home",
+        name="Fixture stay house",
+        timezone="America/New_York",
+        bedrooms=2,
+        location_ciphertext=b"fixture",
+        geocode_status="synthetic",
+        active=True,
+    )
+    session.add(home)
+    session.flush()
+    original = clock.now() + timedelta(hours=1)
+    incoming = original + timedelta(hours=7)
+    stays = []
+    for name, arrival, departure in (
+        ("current", clock.now() - timedelta(days=1), original),
+        ("upcoming", incoming, incoming + timedelta(days=2)),
+    ):
+        booking = Reservation(
+            id=uuid4(),
+            created_at=clock.now(),
+            updated_at=clock.now(),
+            provider="hospitable",
+            property_id=home.id,
+            external_id=name,
+            status="active",
+            checkin_at=arrival,
+            checkout_at=departure,
+            observed_at=clock.now(),
+            timestamp_provenance="source",
+            payload_digest="a" * 64,
+        )
+        session.add(booking)
+        stays.append(booking)
+    session.flush()
+    recompute_property_tasks(session, clock=clock, property_id=home.id)
+    session.commit()
+
+    stay = stays[0]
+    shared = settings.model_copy(
+        update={
+            "workspace_signup_enabled": True,
+            "operations_login_enabled": True,
+            "operations_touchup_enabled": True,
+            "local_scheduling_enabled": True,
+        }
+    )
+    request = OperationsStayChangeWrite(
+        request_id=uuid4(),
+        property_external_id=home.external_id,
+        reservation_external_id=stay.external_id,
+        kind="late_checkout",
+        target_at=original + timedelta(hours=1),
+        booked_check_in=stay.checkin_at,
+        booked_check_out=original,
+    )
+    changed_booking = request.model_copy(update={"booked_check_out": original - timedelta(minutes=15)})
+    with pytest.raises(AppError) as stale:
+        operations_stay_change(changed_booking, None, session, shared, clock)
+    assert stale.value.status_code == 422
+    assert stay.approved_guest_checkout_at is None
+    decision = operations_stay_change(request, None, session, shared, clock)
+    assert json.loads(decision.body)["decision"] == "approved"
+    assert stay.checkout_at == original
+    assert stay.approved_guest_checkout_at == request.target_at
+    task = session.scalar(select(CleaningTask).where(CleaningTask.source_reservation_id == stay.id))
+    assert task is not None and task.release_at == request.target_at

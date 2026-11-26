@@ -111,18 +111,6 @@ def now():
     return dt.datetime.now(dt.UTC).isoformat()
 
 
-def stay_time(value):
-    if not isinstance(value, str):
-        return ''
-    try:
-        timestamp = dt.datetime.fromisoformat(value)
-    except ValueError:
-        return value
-    if timestamp.tzinfo is None:
-        return value
-    eastern = timestamp.astimezone(ZoneInfo('America/New_York'))
-    return eastern.strftime('%b %d, %I:%M %p %Z').replace(' 0', ' ')
-
 
 def required(data, field, maximum=200):
     value = data.get(field)
@@ -331,14 +319,14 @@ class Handler(BaseHTTPRequestHandler):
         from operations_login import (
             cleaning_status, guest_messages, has_repair_access, has_touchup_access, redeem, remember_membership, remember_read_access,
             repair_status, selected_workspace,
-            send_repair, send_touchup, start, stays, turnover_origin, verify_membership, workspace_cookie,
+            send_repair, send_stay_change, send_touchup, start, stays, turnover_origin, verify_membership, workspace_cookie,
         )
         from workspace_database import provision
 
         issuer = turnover_origin()
         if not issuer or not origin.startswith('https://'):
             raise AuthError(503, 'Private Guest Messages is unavailable.')
-        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/stay-change'):
             raise AuthError(405, 'This action is not available in the shared workspace yet.')
         if self.path == '/api/action-inbox':
             from action_inbox import items
@@ -369,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/style.css':
             self.respond(200, (ROOT / 'web' / 'style.css').read_bytes(), 'text/css')
             return
-        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/stay-change'):
             raise AuthError(404, 'Not found.')
         workspace = selected_workspace(self.headers)
         actor = None
@@ -387,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
         page = (ROOT / 'web' / 'private-workspace.html').read_text().replace(
             '<!-- turnover-link -->', '<a href="' + escape(issuer, quote=True) + '">Back to Cleaner</a>'
         )
-        from private_handoffs import case_links, lookup as lookup_handoff, remember as remember_handoff, render_status
+        from private_handoffs import case_links, lookup as lookup_handoff, remember as remember_handoff, render_status, stay_time
 
         if self.path == '/handoff-status':
             with connect(database) as db:
@@ -403,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
             content = render_status(handoff['kind'], result, actor['csrf'], payload)
             self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
             return
-        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft'):
+        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/stay-change'):
             if self.command != 'POST':
                 raise AuthError(405, 'Submit the request from the guest case.')
             if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
@@ -425,6 +413,15 @@ class Handler(BaseHTTPRequestHandler):
                 }))
                 content = '<h2>Reply draft saved</h2><p>The reply has not been sent.</p>'
                 content += '<p><a href="/messages?' + back + '">Back to guest messages</a></p>'
+                self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+                return
+            if self.path == '/stay-change':
+                from private_handoffs import render_stay_decision
+                from private_touchup import stay_change_payload
+
+                payload = stay_change_payload(parsed)
+                result = send_stay_change(issuer, actor['token_hash'], payload)
+                content = render_stay_decision(result, payload)
                 self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
                 return
             if self.path == '/cleaning-touchup':
@@ -481,8 +478,9 @@ class Handler(BaseHTTPRequestHandler):
                     content += '<p>Showing the latest 10 guest messages.</p>'
                 content += case_history
                 if has_touchup_access(actor['token_hash']):
-                    from private_touchup import cleaning_form
+                    from private_touchup import cleaning_form, stay_change_form
                     content += cleaning_form(actor['csrf'], query)
+                    content += stay_change_form(actor['csrf'], fields, data)
                 if has_repair_access(actor['token_hash']):
                     from private_repair import repair_form
                     content += repair_form(actor['csrf'], query)

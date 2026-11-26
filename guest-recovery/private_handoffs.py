@@ -1,7 +1,9 @@
 """Case references for requests handed off from the shared Guest Messages inbox."""
 
+from datetime import datetime
 from html import escape
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from auth import AuthError
 
@@ -56,6 +58,43 @@ def lookup(db, query):
     return row
 
 
+def stay_time(value):
+    if not isinstance(value, str):
+        return ''
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    if timestamp.tzinfo is None:
+        return value
+    eastern = timestamp.astimezone(ZoneInfo('America/New_York'))
+    return eastern.strftime('%b %d, %I:%M %p %Z').replace(' 0', ' ')
+
+def render_cleaning_assignment(result):
+    assignment = result.get('assignment')
+    if not isinstance(assignment, dict):
+        return ''
+    content = ''
+    name = assignment.get('cleaner_name')
+    if isinstance(name, str) and name:
+        content += f'<p>Cleaner · {escape(name)}</p>'
+    start, end = (stay_time(assignment.get(field)) for field in ('start_at', 'end_at'))
+    if start and end:
+        content += f'<p>{escape(start)} to {escape(end)}</p>'
+    notices = {
+        'queued': 'Schedule email queued.',
+        'sending': 'Schedule email is being submitted.',
+        'accepted': 'Email provider accepted the schedule email.',
+        'uncertain': 'Email outcome is uncertain. Check in Cleaner before resending.',
+        'failed': 'Schedule email failed. Review it in Cleaner.',
+        'stale': 'Schedule email is out of date. Review the current schedule in Cleaner.',
+    }
+    status = result.get('schedule_email_status')
+    if isinstance(status, str) and status in notices:
+        content += f'<p>{notices[status]}</p>'
+    return content
+
+
 def render_status(kind, result, csrf, payload):
     from private_repair import answer_form
 
@@ -69,6 +108,8 @@ def render_status(kind, result, csrf, payload):
     status = str(result.get('status') or 'Status unavailable')
     label = statuses.get(status, status.replace('_', ' ').capitalize())
     content = f'<h2>{heading}</h2><p>{escape(label)}</p>'
+    if kind == 'cleaning':
+        content += render_cleaning_assignment(result)
     if kind == 'repair' and result.get('ticket_number') is not None:
         content += f'<p>Ticket {escape(str(result["ticket_number"]))}</p>'
     question = result.get('next_question')
@@ -81,3 +122,32 @@ def render_status(kind, result, csrf, payload):
         'reservation_external_id': payload['reservation_id'],
     }))
     return content + f'<p><a href="/messages?{back}">Back to guest messages</a></p>'
+
+
+def render_stay_decision(result, payload):
+    reasons = {
+        'reservation_sync_unconfirmed': 'Refresh the Hospitable import in Cleaner.',
+        'outside_checkin_day': 'Choose an earlier time on the check-in date.',
+        'outside_checkout_day': 'Choose a later time on the checkout date.',
+        'checkin_already_due': 'The original check-in time has passed.',
+        'checkout_already_due': 'The original checkout time has passed.',
+        'cleaning_completion_unconfirmed': 'Cleaner needs a recorded turnover completion.',
+        'property_not_ready': 'The property is still awaiting turnover completion.',
+        'cleaning_window_unconfirmed': 'The remaining cleaning window could not be verified.',
+        'cleaning_assignment_conflicts': 'The requested time conflicts with the cleaning assignment.',
+        'cleaning_offer_requires_review': 'A cleaner offer needs review in Cleaner.',
+        'schedule_confirmation_required': 'The cleaning schedule does not currently support this request.',
+        'another_guest_stay_conflicts': 'The requested time overlaps another guest’s stay.',
+    }
+    label = 'Early check-in' if payload['kind'] == 'early_checkin' else 'Late checkout'
+    if result.get('decision') == 'approved' and isinstance(result.get('target_at'), str):
+        content = f'<h2>{label} approved in Cleaner</h2><p>{escape(stay_time(result["target_at"]))}</p>'
+        content += '<p>Confirm the approved time with the guest.</p>'
+    else:
+        reason = reasons.get(result.get('reason'), 'Check the schedule in Cleaner before confirming this request.')
+        content = f'<h2>{label} is pending</h2><p>{escape(reason)}</p>'
+    query = escape(urlencode({
+        'property_external_id': payload['property_external_id'],
+        'reservation_external_id': payload['reservation_external_id'],
+    }))
+    return content + f'<p><a href="/messages?{query}">Back to guest messages</a></p>'

@@ -18,7 +18,12 @@ from app.domain.errors import AppError
 from app.domain.principal import Principal
 from app.models import OperatorProfile
 from app.services.audit import write_audit
-from app.services.operations_access import OPERATIONS_READ_PATHS, REPAIR_CONTEXT_PATH, TOUCHUP_PATH, read_session_digest
+from app.services.operations_access import (
+    OPERATIONS_READ_PATHS,
+    OPERATIONS_SCHEDULE_WRITES,
+    REPAIR_CONTEXT_PATH,
+    read_session_digest,
+)
 from app.services.rate_limit import enforce_rate_limit
 
 _bearer = HTTPBearer(auto_error=False)
@@ -74,11 +79,11 @@ def get_db(request: Request) -> Generator[Session, None, None]:
                 allowed_read = (
                     token.startswith("ops_") and request.method == "GET" and request.url.path in OPERATIONS_READ_PATHS
                 )
-                allowed_touchup = (
+                allowed_schedule_write = (
                     token.startswith("opc_")
                     and settings.operations_touchup_enabled
                     and request.method == "POST"
-                    and request.url.path == TOUCHUP_PATH
+                    and request.url.path in OPERATIONS_SCHEDULE_WRITES
                 )
                 allowed_repair = (
                     token.startswith("opr_")
@@ -86,7 +91,9 @@ def get_db(request: Request) -> Generator[Session, None, None]:
                     and request.method == "GET"
                     and request.url.path == REPAIR_CONTEXT_PATH
                 )
-                if not settings.operations_login_enabled or not (allowed_read or allowed_touchup or allowed_repair):
+                if not settings.operations_login_enabled or not (
+                    allowed_read or allowed_schedule_write or allowed_repair
+                ):
                     raise AppError("invalid_session", "Sign in to continue.", 401)
             with catalog_session_factory(settings)() as catalog:
                 now = request.app.state.clock.now()

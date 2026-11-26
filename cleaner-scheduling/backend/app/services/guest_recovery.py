@@ -1,14 +1,18 @@
 """Trusted, workspace-scoped commands for the co-located guest inbox."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid5
 
+from cryptography.exceptions import InvalidTag
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clock import SystemClock
-from app.models.tables import Assignment, Cleaner, CleaningTask, Property, Reservation
+from app.clock import Clock, SystemClock
+from app.config import Settings
+from app.models.tables import Assignment, Cleaner, CleaningTask, EmailDelivery, Property, Reservation
+from app.services.field_cipher import reveal_text
 from app.services.guest_stay_policy import assess
 from app.services.instructions import latest_instruction
 from app.services.task_generation import _revise
@@ -54,7 +58,37 @@ def _find_touchup(session: Session, identifier: str, *, lock: bool = False) -> C
     return session.scalar(query.with_for_update() if lock else query)
 
 
-def touchup_status(session: Session, identifier: str, *, reservation_id: UUID | None = None) -> dict[str, object]:
+def _assignment_email_status(session: Session, assignment: Assignment, settings: Settings) -> str | None:
+    deliveries = session.scalars(
+        select(EmailDelivery)
+        .where(
+            EmailDelivery.cleaner_id == assignment.cleaner_id,
+            EmailDelivery.cleaner_schedule_version_id == assignment.cleaner_schedule_version_id,
+            EmailDelivery.service_date == assignment.service_date,
+            EmailDelivery.kind == "assignment",
+        )
+        .order_by(EmailDelivery.created_at.desc(), EmailDelivery.id.desc())
+        .limit(20)
+    )
+    for delivery in deliveries:
+        try:
+            snapshot = json.loads(reveal_text(delivery.snapshot_ciphertext, settings.field_encryption_secret))
+        except (InvalidTag, ValueError, TypeError):
+            continue
+        if isinstance(snapshot, dict):
+            identifiers = snapshot.get("assignment_ids")
+            if (
+                snapshot.get("notification") != "reservation_change"
+                and isinstance(identifiers, list)
+                and str(assignment.id) in identifiers
+            ):
+                return delivery.status
+    return None
+
+
+def touchup_status(
+    session: Session, identifier: str, *, reservation_id: UUID | None = None, settings: Settings | None = None
+) -> dict[str, object]:
     task = _find_touchup(session, identifier)
     if not task or task.kind != "guest_touchup" or (reservation_id and task.source_reservation_id != reservation_id):
         raise LookupError(identifier)
@@ -83,10 +117,12 @@ def touchup_status(session: Session, identifier: str, *, reservation_id: UUID | 
                     "end_at": assignment.planned_end.isoformat(),
                 },
             )
+            if settings is not None:
+                result["schedule_email_status"] = _assignment_email_status(session, assignment, settings)
     return result
 
 
-def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]:
+def _create_touchup(session: Session, body: dict[str, Any], clock: Clock) -> dict[str, object]:
     identifier = body["external_request_id"]
     key = _touchup_id(session, identifier)
     acquire_workspace_lock(session, get_workspace_id(session), SCHEDULE_PUBLICATION_LOCK)
@@ -106,7 +142,7 @@ def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]
         if previous != (reservation.id, start, end, duration, scope):
             raise ValueError("This touch-up was already created with different details.")
         return touchup_status(session, identifier)
-    now = datetime.now(UTC)
+    now = clock.now()
     if (
         body.get("guest_access_confirmed") is not True
         or not 1 <= len(scope) <= 1000
@@ -137,13 +173,12 @@ def _create_touchup(session: Session, body: dict[str, Any]) -> dict[str, object]
     return touchup_status(session, identifier)
 
 
-def _withdraw_touchup(session: Session, identifier: str) -> dict[str, object]:
+def _withdraw_touchup(session: Session, identifier: str, clock: Clock) -> dict[str, object]:
     acquire_workspace_lock(session, get_workspace_id(session), SCHEDULE_PUBLICATION_LOCK)
     task = _find_touchup(session, identifier, lock=True)
     if task is None or task.kind != "guest_touchup":
         raise LookupError(identifier)
     if task.status not in {"completed", "canceled"}:
-        clock = SystemClock()
         task.status = "canceled"
         task.updated_at = clock.now()
         task.version += 1
@@ -159,12 +194,15 @@ def _withdraw_touchup(session: Session, identifier: str) -> dict[str, object]:
     return touchup_status(session, identifier)
 
 
-def handle(session: Session, method: str, path: str, body: dict[str, Any] | None) -> dict[str, object]:
+def handle(
+    session: Session, method: str, path: str, body: dict[str, Any] | None, *, clock: Clock | None = None
+) -> dict[str, object]:
     if method == "POST" and body is not None:
+        clock = clock or SystemClock()
         if path.startswith("/v1/cleaner-returns/") and path.endswith("/withdraw"):
-            return _withdraw_touchup(session, path.split("/")[-2])
+            return _withdraw_touchup(session, path.split("/")[-2], clock)
         if path == "/v1/cleaner-returns":
-            return _create_touchup(session, body)
+            return _create_touchup(session, body, clock)
         if path == "/v1/stay-adjustments":
             acquire_workspace_lock(session, get_workspace_id(session), SCHEDULE_PUBLICATION_LOCK)
             reservation = _reservation(session, body)
@@ -173,9 +211,7 @@ def handle(session: Session, method: str, path: str, body: dict[str, Any] | None
                 or _time(body["booked_check_out"]) != reservation.checkout_at
             ):
                 raise ValueError("The booking times changed. Refresh both reservation sources before confirming.")
-            return assess(
-                session, reservation, body["request_id"], body["kind"], _time(body["target_at"]), datetime.now(UTC)
-            )
+            return assess(session, reservation, body["request_id"], body["kind"], _time(body["target_at"]), clock.now())
     if method == "GET" and path.startswith("/v1/cleaner-returns/"):
         return touchup_status(session, path.rsplit("/", 1)[1])
     raise ValueError("Use Cleaner Scheduling to review this operation.")

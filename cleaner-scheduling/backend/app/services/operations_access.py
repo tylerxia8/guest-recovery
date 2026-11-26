@@ -16,6 +16,8 @@ TOUCHUP_STATUS_PATH = "/v1/workspace/operations/cleaning-status"
 OPERATIONS_READ_PATHS = frozenset({STAY_CONTEXT_PATH, STAYS_PATH, MESSAGES_PATH, TOUCHUP_STATUS_PATH})
 REPAIR_CONTEXT_PATH = "/v1/workspace/operations/repair-context"
 TOUCHUP_PATH = "/v1/workspace/operations/cleaning-touchup"
+STAY_CHANGE_PATH = "/v1/workspace/operations/stay-change"
+OPERATIONS_SCHEDULE_WRITES = frozenset({TOUCHUP_PATH, STAY_CHANGE_PATH})
 ACCESS_SECONDS = 900
 
 

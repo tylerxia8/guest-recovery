@@ -6,6 +6,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 import redis
 from app.adapters.errors import AdapterError
@@ -45,6 +46,7 @@ from app.services.instructions import (
 from app.services.operations_access import (
     MESSAGES_PATH,
     REPAIR_CONTEXT_PATH,
+    STAY_CHANGE_PATH,
     STAY_CONTEXT_PATH,
     STAYS_PATH,
     TOUCHUP_PATH,
@@ -59,7 +61,7 @@ from app.services.reservation_sync import (
 from app.services.workspace_accounts import workspace_owner_id
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from redis.exceptions import RedisError
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
@@ -310,6 +312,8 @@ def operations_guest_messages(
                 for message in ordered[-10:]
             ],
             "has_older": len(ordered) > 10,
+            "booked_check_in": dump_utc(stay.checkin_at),
+            "booked_check_out": dump_utc(stay.checkout_at),
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -399,6 +403,7 @@ def operations_cleaning_touchup(
     _principal: Principal = Depends(require_manager),
     session: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
 ) -> JSONResponse:
     if not (
         settings.workspace_signup_enabled
@@ -408,7 +413,9 @@ def operations_cleaning_touchup(
     ):
         raise AppError("not_found", "Cleaning handoff is unavailable.", 404)
     try:
-        result = guest_recovery.handle(session, "POST", "/v1/cleaner-returns", payload.model_dump(mode="json"))
+        result = guest_recovery.handle(
+            session, "POST", "/v1/cleaner-returns", payload.model_dump(mode="json"), clock=clock
+        )
     except (ValueError, LookupError) as exc:
         raise AppError("touchup_unavailable", str(exc), 422) from exc
     session.commit()
@@ -430,9 +437,47 @@ def operations_cleaning_status(
         raise AppError("not_found", "Cleaning handoff is unavailable.", 404)
     _, reservation = _operations_stay(session, property_external_id, reservation_external_id)
     try:
-        result = guest_recovery.touchup_status(session, str(request_id), reservation_id=reservation.id)
+        result = guest_recovery.touchup_status(
+            session, str(request_id), reservation_id=reservation.id, settings=settings
+        )
     except LookupError as exc:
         raise AppError("not_found", "This cleaning request does not match the stay.", 404) from exc
+    return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+
+class OperationsStayChangeWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: uuid.UUID
+    property_external_id: str = Field(min_length=1, max_length=120)
+    reservation_external_id: str = Field(min_length=1, max_length=120)
+    kind: Literal["early_checkin", "late_checkout"]
+    target_at: AwareDatetime
+    booked_check_in: AwareDatetime
+    booked_check_out: AwareDatetime
+
+
+@router.post(STAY_CHANGE_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_stay_change(
+    payload: OperationsStayChangeWrite,
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+) -> JSONResponse:
+    if not (
+        settings.workspace_signup_enabled
+        and settings.operations_login_enabled
+        and settings.operations_touchup_enabled
+        and settings.local_scheduling_enabled
+    ):
+        raise AppError("not_found", "Stay changes are unavailable.", 404)
+    try:
+        result = guest_recovery.handle(
+            session, "POST", "/v1/stay-adjustments", payload.model_dump(mode="json"), clock=clock
+        )
+    except ValueError as exc:
+        raise AppError("stay_change_unavailable", str(exc), 422) from exc
+    session.commit()
     return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
 

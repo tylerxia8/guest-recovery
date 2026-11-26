@@ -33,8 +33,12 @@ password login and the demo session disabled.
 Managers connect Hospitable in Cleaner. The shared inbox reads stay messages
 through that connection and saves references to cleaning and repair requests
 in the matching Guest Messages workspace. Reopen each request from its guest
-case to see the current status. Cleaner controls cleaning publication and
-notifications. Maintenance controls repair intake and assignment.
+case to see the current status. Cleaning requests show the assigned cleaner,
+planned window, schedule email status, and cleaner response. Cleaner controls
+publication and notifications. Maintenance controls repair intake and assignment.
+Managers can also submit early check-in and late checkout requests from a
+verified stay. Cleaner applies the stay-change policy and keeps the imported
+reservation times. The manager can then communicate the outcome to the guest.
 
 The shared inbox currently saves guest reply drafts. The existing standalone
 Guest Messages installation retains its outbound, manual supply, and safety

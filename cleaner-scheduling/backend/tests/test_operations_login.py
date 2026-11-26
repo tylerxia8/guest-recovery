@@ -88,6 +88,8 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
     [
         ("POST", "/v1/workspace/operations/stay-context", True, b"ops_"),
         ("POST", "/v1/workspace/operations/cleaning-touchup", True, b"ops_"),
+        ("POST", "/v1/workspace/operations/stay-change", True, b"ops_"),
+        ("POST", "/v1/workspace/operations/stay-change", True, b"opr_"),
         ("GET", "/v1/workspace/operations/stays", True, b"opc_"),
         ("GET", "/v1/workspace/setup", True, b"ops_"),
         ("GET", "/v1/workspace/setup", True, b"opm_"),
@@ -105,7 +107,10 @@ def test_operations_read_token_cannot_be_used_outside_its_scope(monkeypatch, met
     catalog = Mock()
     monkeypatch.setattr(db, "catalog_session_factory", catalog)
     settings = SimpleNamespace(
-        workspace_signup_enabled=True, operations_login_enabled=enabled, operations_touchup_enabled=True
+        workspace_signup_enabled=True,
+        operations_login_enabled=enabled,
+        operations_touchup_enabled=True,
+        operations_repair_enabled=True,
     )
     app = SimpleNamespace(state=SimpleNamespace(settings=settings, session_factory=Mock(), redis=Mock(), clock=Mock()))
     request = Request(

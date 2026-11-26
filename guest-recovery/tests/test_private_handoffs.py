@@ -33,3 +33,33 @@ class PrivateHandoffTest(unittest.TestCase):
         self.assertIn('&lt;Where?&gt;', html)
         self.assertIn('action="/repair-answer"', html)
         self.assertIn('/messages?property_external_id=home&amp;reservation_external_id=stay', html)
+
+    def test_cleaning_email_submission_and_acceptance_are_separate(self):
+        payload = {'external_property_id': 'home', 'reservation_id': 'stay', 'issue_id': 'cleaning'}
+        result = {
+            'status': 'scheduled',
+            'schedule_email_status': 'accepted',
+            'assignment': {
+                'cleaner_name': '<Fixture Cleaner>',
+                'start_at': '2026-11-23T16:00:00+00:00',
+                'end_at': '2026-11-23T17:00:00+00:00',
+            },
+        }
+        html = render_status('cleaning', result, 'csrf', payload)
+        self.assertIn('Scheduled', html)
+        self.assertIn('Email provider accepted the schedule email', html)
+        self.assertIn('11:00 AM EST', html)
+        self.assertIn('&lt;Fixture Cleaner&gt;', html)
+        self.assertNotIn('Cleaner accepted', html)
+        self.assertIn('Cleaner accepted', render_status('cleaning', {**result, 'status': 'accepted'}, 'csrf', payload))
+
+    def test_stay_decision_describes_approval_or_constraint(self):
+        from private_handoffs import render_stay_decision
+
+        payload = {'property_external_id': 'home', 'reservation_external_id': 'stay', 'kind': 'late_checkout'}
+        approved = render_stay_decision({'decision': 'approved', 'target_at': '2026-11-23T16:00:00Z'}, payload)
+        self.assertIn('Late checkout approved in Cleaner', approved)
+        self.assertIn('11:00 AM EST', approved)
+        pending = render_stay_decision({'decision': 'pending', 'reason': 'another_guest_stay_conflicts'}, payload)
+        self.assertIn('Late checkout is pending', pending)
+        self.assertIn('overlaps another guest’s stay', pending)
