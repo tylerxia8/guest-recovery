@@ -277,7 +277,7 @@ def operations_guest_messages(
         and settings.hospitable_read_only
     ):
         raise AppError("not_found", "Guest messages are unavailable.", 404)
-    _, stay = _operations_stay(session, property_external_id, reservation_external_id)
+    prop, stay = _operations_stay(session, property_external_id, reservation_external_id)
     now = clock.now()
     if (
         stay.status != "active"
@@ -327,6 +327,9 @@ def operations_guest_messages(
                 for message in ordered[-10:]
             ],
             "has_older": len(ordered) > 10,
+            "property_name": prop.name,
+            "effective_check_in": (stay.approved_guest_checkin_at or stay.checkin_at).isoformat(),
+            "effective_check_out": (stay.approved_guest_checkout_at or stay.checkout_at).isoformat(),
             **({"thread_fingerprint": thread_fingerprint} if thread_fingerprint else {}),
             # These are exact booking anchors for detecting stale stay-change requests.
             "booked_check_in": stay.checkin_at.astimezone(UTC).isoformat(),

@@ -28,9 +28,9 @@ RESOLUTION = re.compile(r'\b(?:found|located|fixed|resolved|sorted|got.{0,20}\bw
 NEGATED_RESOLUTION = re.compile(r'\b(?:not|never|still|cannot|can.t|couldn.t|isn.t|is not|hasn.t|haven.t|didn.t|doesn.t|don.t|won.t|without)\b', re.IGNORECASE)
 
 
-def analyze(snapshot, db=None):
+def analyze(snapshot, db=None, *, current=None):
     issues = []
-    current = dt.datetime.now(dt.UTC)
+    current = current or dt.datetime.now(dt.UTC)
     active = set(snapshot.get('active_reservation_ids', []))
     upcoming = set(snapshot.get('upcoming_reservation_ids', []))
     for conversation in snapshot['conversations']:

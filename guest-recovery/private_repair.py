@@ -38,7 +38,7 @@ def repair_form(csrf, query):
         f'<input type="hidden" name="{name}" value="{escape(value, quote=True)}">' for name, value in values.items()
     )
     return (
-        '<form action="/repair-request" method="post"><h2>Send to Maintenance</h2>' + fields
+        '<form action="/repair-request" method="post" id="repair-request"><h2>Send to Maintenance</h2>' + fields
         + '<label>Repair needed<textarea name="description" maxlength="5000" required></textarea></label>'
         + '<button type="submit">Create repair request</button></form>'
     )

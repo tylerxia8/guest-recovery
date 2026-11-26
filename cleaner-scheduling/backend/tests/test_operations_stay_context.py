@@ -109,7 +109,7 @@ def test_guest_messages_use_workspace_connection_and_one_provider_attempt(monkey
         checkout_at=now + timedelta(hours=12, microseconds=713000),
     )
     session = Mock(info={"workspace_id": workspace})
-    session.execute.return_value.one_or_none.return_value = (Mock(), stay)
+    session.execute.return_value.one_or_none.return_value = (SimpleNamespace(name="Fixture home"), stay)
     session.get.return_value = SimpleNamespace(token_ciphertext=b"encrypted")
     cache = Mock()
     provider = Mock()

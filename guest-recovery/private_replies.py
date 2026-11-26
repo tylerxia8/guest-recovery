@@ -116,7 +116,7 @@ def save(db, fields):
     """, (*key, fingerprint, version + 1, body))
 
 
-def form(csrf, fields, message_id, draft):
+def form(csrf, fields, message_id, draft, suggestion=""):
     if draft.get('outcome') in REPLY_STATUS:
         return '<p>' + escape(REPLY_STATUS[draft['outcome']]) + '</p>'
     hidden = {
@@ -134,7 +134,8 @@ def form(csrf, fields, message_id, draft):
     return (
         '<details><summary>Draft a reply</summary><form action="/reply-draft" method="post">'
         + inputs + stale + '<label>Reply<textarea name="body" maxlength="3000" required>'
-        + escape(draft['body']) + '</textarea></label><button type="submit">Save draft</button></form></details>'
+        + escape(draft['body'] if draft['version'] else suggestion)
+        + '</textarea></label><button type="submit">Save draft</button></form></details>'
     )
 
 

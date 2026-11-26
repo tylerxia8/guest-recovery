@@ -47,10 +47,20 @@ Review the current conversation and the saved text before approving. The inbox
 shows whether Hospitable accepted the request, rejected it, or returned an
 uncertain outcome. Check an uncertain outcome in Hospitable.
 
-The standalone Guest Messages installation still owns the automatic reply,
-manual supply ordering, and safety workflows. Keep access to its historical
-case records during migration. Coordinate the switch so two installations
-cannot send replies for the same reservation.
+Opening a shared case checks the recent guest messages for cleaning, repair,
+stay-change, supply, and safety issues. Active supply requests have catalog
+suggestions. Pending requests appear in the manager action inbox after a
+manager opens the guest case. Approving the proposal records the decision.
+The manager checks stock, price, and arrival and places the order in Amazon.
+Safety reports show a suggested response for the manager to review. Managers
+can save reusable parking, trash, and checkout instructions for the current
+property. Matching answers appear in the reply draft for review. Access codes
+and passwords require a stay-specific source.
+
+The standalone Guest Messages installation still owns the background
+automation, outbound safety replies, and email order notices. Keep access to
+its historical case records during migration. Coordinate the switch so two
+installations cannot send replies for the same reservation.
 
 ### Co-located Cleaner
 

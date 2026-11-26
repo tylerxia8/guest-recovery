@@ -229,3 +229,7 @@ body:has(#inbox-workspace[hidden]) #reply-attention { display: none; }
 .shared-inbox a{display:inline-flex;align-items:center}
 .shared-inbox form button{justify-self:start}
 @media(max-width:500px){.shared-inbox{margin:12px auto;padding:0 12px}.shared-inbox .detail-card{padding:14px}.shared-inbox li,.shared-inbox form{padding:12px}.shared-inbox form button{width:100%}}
+
+.shared-inbox .case-action{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px}
+.shared-inbox .case-action-urgent{border-color:#b43c32;background:#fff4f2;color:#631f19}
+.shared-inbox .case-action p{margin:4px 0}

@@ -52,7 +52,7 @@ def cleaning_form(csrf, query):
         for name, value in hidden.items()
     )
     return (
-        '<form action="/cleaning-touchup" method="post"><h2>Request a cleaning touch-up</h2>'
+        '<form action="/cleaning-touchup" method="post" id="cleaning-touchup"><h2>Request a cleaning touch-up</h2>'
         + fields
         + '<label>Cleaning needed<textarea name="scope" maxlength="1000" required></textarea></label>'
         + '<label>Earliest entry (Eastern)<input type="datetime-local" name="release_at" required></label>'
@@ -102,7 +102,7 @@ def stay_change_form(csrf, fields, stay_times):
         f'<input type="hidden" name="{name}" value="{escape(value, quote=True)}">' for name, value in hidden.items()
     )
     return (
-        '<form action="/stay-change" method="post"><h2>Check-in or checkout request</h2>' + inputs
+        '<form action="/stay-change" method="post" id="stay-change"><h2>Check-in or checkout request</h2>' + inputs
         + '<p>Booked stay · ' + escape(stay_time(booked['booked_check_in']))
         + ' to ' + escape(stay_time(booked['booked_check_out'])) + '</p>'
         + '<label><span id="stay-change-kind-label">Request type</span><select name="kind" aria-labelledby="stay-change-kind-label" required>'

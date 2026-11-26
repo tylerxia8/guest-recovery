@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import stat
+import time
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
@@ -60,6 +61,13 @@ def items(directory, issuer, authorization):
             SELECT id, property FROM purchase_requests WHERE decision='pending'
             ORDER BY created_at DESC LIMIT 100
         """).fetchall()
+        shared_orders = []
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='private_supply_proposals'").fetchone():
+            shared_orders = db.execute("""
+                SELECT property_id, booking_id, property_name
+                FROM private_supply_proposals WHERE state='pending' AND checkout_at>?
+                ORDER BY checkout_at LIMIT 100
+            """, (time.time(),)).fetchall()
     return [{
         'source': 'guest-replies',
         'id': str(uuid5(NAMESPACE_URL, f'lucena-draft:{workspace}:{property_id}:{booking_id}')),
@@ -78,4 +86,13 @@ def items(directory, issuer, authorization):
         'due_at': None,
         'urgent': False,
         'path': '/',
-    } for identifier, property_name in orders]
+    } for identifier, property_name in orders] + [{
+        'source': 'supplies',
+        'id': str(uuid5(NAMESPACE_URL, f'lucena-shared-supply:{workspace}:{property_id}:{booking_id}')),
+        'title': 'Guest supply request',
+        'property': property_name,
+        'next_action': 'Review the selected supplies and delivery',
+        'due_at': None,
+        'urgent': False,
+        'path': '/messages?' + urlencode({'property_external_id': property_id, 'reservation_external_id': booking_id}),
+    } for property_id, booking_id, property_name in shared_orders]

@@ -326,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
         issuer = turnover_origin()
         if not issuer or not origin.startswith('https://'):
             raise AuthError(503, 'Private Guest Messages is unavailable.')
-        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change'):
+        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change', '/supply-approval', '/property-guide'):
             raise AuthError(405, 'This action is not available in the shared workspace yet.')
         if self.path == '/api/action-inbox':
             from action_inbox import items
@@ -357,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/style.css':
             self.respond(200, (ROOT / 'web' / 'style.css').read_bytes(), 'text/css')
             return
-        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change'):
+        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change', '/supply-approval', '/property-guide'):
             raise AuthError(404, 'Not found.')
         workspace = selected_workspace(self.headers)
         actor = None
@@ -391,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
             content = render_status(handoff['kind'], result, actor['csrf'], payload)
             self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
             return
-        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change'):
+        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change', '/supply-approval', '/property-guide'):
             if self.command != 'POST':
                 raise AuthError(405, 'Submit the request from the guest case.')
             if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
@@ -431,6 +431,29 @@ class Handler(BaseHTTPRequestHandler):
                 }))
                 content = '<h2>Reply status</h2><p>' + escape(notice) + '</p>'
                 content += '<p><a href="/messages?' + back + '">Back to guest messages</a></p>'
+                self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+                return
+            if self.path == '/property-guide':
+                from private_property_guide import approve
+
+                with connect(database) as db:
+                    approve(db, parsed)
+                back = escape(urlencode({
+                    key: parsed[key] for key in ('property_external_id', 'reservation_external_id')
+                }))
+                content = '<h2>Property instruction saved</h2><p><a href="/messages?' + back + '">Back to guest messages</a></p>'
+                self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+                return
+            if self.path == '/supply-approval':
+                from private_supply import approve
+
+                with connect(database) as db:
+                    approve(db, parsed)
+                back = escape(urlencode({
+                    key: parsed[key] for key in ('property_external_id', 'reservation_external_id')
+                }))
+                content = '<h2>Supplies approved</h2><p>Use the selected products to place the order in Amazon.</p>'
+                content += '<p><a href="/messages?' + back + '">Back to the supply proposal</a></p>'
                 self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
                 return
             if self.path == '/stay-change':
@@ -478,30 +501,50 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(messages, list) or len(messages) > 10 or any(not isinstance(item, dict) for item in messages):
                     raise AuthError(503, 'Guest messages are temporarily unavailable.')
                 from private_replies import form as reply_form, observe_messages, send_form
+                from private_triage import case_actions, render_actions
+                from private_property_guide import guide_form, guides
 
+                cleaning_access = has_touchup_access(actor['token_hash'])
+                repair_access = has_repair_access(actor['token_hash'])
                 with connect(database) as db:
                     drafts = observe_messages(db, fields, messages)
+                    actions = case_actions(db, fields, data)
+                    property_guides = {
+                        message['id']: guides(db, fields['property_external_id'], message)
+                        for message in messages
+                        if isinstance(message.get('body'), str) and isinstance(message.get('id'), str)
+                        and message['id'] in drafts and actions.get(message['id'], {}).get('instructions')
+                    }
                 thread = data.get('thread_fingerprint') if has_reply_access(actor['token_hash']) else None
-                rows = ''.join(
-                    '<li><strong>' + escape(stay_time(message.get('sent_at'))) + '</strong><p class="guest-text">'
-                    + escape(str(message.get('body', '')))
-                    + ('…' if message.get('truncated') is True else '') + '</p>'
-                    + (reply_form(actor['csrf'], fields, message['id'], drafts[message['id']])
-                       + send_form(actor['csrf'], fields, message['id'], drafts[message['id']], thread)
-                       if isinstance(message.get('id'), str) and message['id'] in drafts else '')
-                    + '</li>'
-                    for message in messages
-                )
+                rows = []
+                for message in messages:
+                    identifier = message.get('id')
+                    action = actions.get(identifier, {}) if isinstance(identifier, str) else {}
+                    row = ('<li><strong>' + escape(stay_time(message.get('sent_at')))
+                           + '</strong><p class="guest-text">' + escape(str(message.get('body', '')))
+                           + ('…' if message.get('truncated') is True else '') + '</p>'
+                           + render_actions(action, cleaning_access=cleaning_access, repair_access=repair_access,
+                                            csrf=actor['csrf'], fields=fields))
+                    if isinstance(identifier, str) and identifier in drafts:
+                        draft = drafts[identifier]
+                        options = property_guides.get(identifier, [])
+                        suggestion = action.get('safety', '')
+                        if options and all(option['body'] for option in options) and not suggestion:
+                            suggestion = '\n\n'.join(option['body'] for option in options)
+                        row += reply_form(actor['csrf'], fields, identifier, draft, suggestion)
+                        row += send_form(actor['csrf'], fields, identifier, draft, thread)
+                        row += ''.join(guide_form(actor['csrf'], fields, identifier, draft, guide) for guide in options)
+                    rows.append(row + '</li>')
                 content = '<p><a href="/">Back to stays</a></p><h2>Guest messages</h2>'
-                content += '<ul>' + rows + '</ul>' if rows else '<p>No plain-text guest messages for this stay.</p>'
+                content += '<ul>' + ''.join(rows) + '</ul>' if rows else '<p>No plain-text guest messages for this stay.</p>'
                 if data.get('has_older') is True:
                     content += '<p>Showing the latest 10 guest messages.</p>'
                 content += case_history
-                if has_touchup_access(actor['token_hash']):
+                if cleaning_access:
                     from private_touchup import cleaning_form, stay_change_form
                     content += cleaning_form(actor['csrf'], query)
                     content += stay_change_form(actor['csrf'], fields, data)
-                if has_repair_access(actor['token_hash']):
+                if repair_access:
                     from private_repair import repair_form
                     content += repair_form(actor['csrf'], query)
             else:
