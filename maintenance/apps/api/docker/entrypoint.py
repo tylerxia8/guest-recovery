@@ -29,6 +29,8 @@ def main() -> None:
     demo = settings.demo_fixture == "sample"
     if demo and not settings.allows_demo_session:
         raise SystemExit("Demo startup requires a fictional database and a local environment.")
+    if not settings.migration_database_url:
+        raise SystemExit("Maintenance startup requires a migration database URL.")
     _wait()
     subprocess.check_call([sys.executable, "-m", "alembic", "upgrade", "head"], cwd="/app", timeout=120)
     if demo:
@@ -43,6 +45,8 @@ def main() -> None:
             ensure_demo_maintenance(engine, settings.app_env)
         finally:
             engine.dispose()
+    if not demo:
+        os.environ.pop("MIGRATION_DATABASE_URL", None)
     os.execvp(
         sys.executable,
         [sys.executable, "-m", "uvicorn", "grok_bot.main:app", "--host", os.environ.get("API_HOST", "0.0.0.0"), "--port", "8000"],

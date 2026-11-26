@@ -17,7 +17,11 @@ def launcher():
 
 
 def test_production_migrates_and_serves_without_demo_data(launcher, monkeypatch):
-    monkeypatch.setattr(launcher, "get_settings", lambda: SimpleNamespace(demo_fixture="unset"))
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", "fixture-only")
+    monkeypatch.setattr(
+        launcher, "get_settings",
+        lambda: SimpleNamespace(demo_fixture="unset", migration_database_url="fixture-only"),
+    )
     wait = Mock()
     migrate = Mock()
     start = Mock()
@@ -32,6 +36,7 @@ def test_production_migrates_and_serves_without_demo_data(launcher, monkeypatch)
     wait.assert_called_once_with()
     assert migrate.call_args.args[0][1:] == ["-m", "alembic", "upgrade", "head"]
     assert "grok_bot.main:app" in start.call_args.args[1]
+    assert "MIGRATION_DATABASE_URL" not in launcher.os.environ
     seed_engine.assert_not_called()
 
 
