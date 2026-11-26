@@ -76,7 +76,11 @@ intended unprivileged role.
 
 ## Deploy Notes
 
-**Merging to `main` auto-deploys.** No environment changes or new roles are needed.
+Railway watches `Lucena-Systems/airbnb-management-bot:main` for the production
+Cleaner API and web services. The `tylerxia8/guest-recovery:main` branch
+triggers the standalone Guest Messages service. Merging into that branch
+does not migrate the Cleaner database. Release the replacement Cleaner API
+and its schema together using the cutover process below.
 
 The existing `cleaning_app` role is a LOGIN role with:
 - No SUPERUSER, BYPASSRLS, or CREATEROLE
