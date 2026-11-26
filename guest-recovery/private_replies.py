@@ -10,6 +10,13 @@ from uuid import UUID
 from auth import AuthError
 
 
+REPLY_STATUS = {
+    'accepted': 'Hospitable accepted your reply. Check the conversation for delivery.',
+    'rejected': 'Hospitable rejected the reply. Check the account’s message permissions and the reservation.',
+    'unknown': 'The reply may have been sent. Check the conversation in Hospitable before sending again.',
+}
+
+
 def initialize(db):
     db.execute("""
         CREATE TABLE IF NOT EXISTS private_reply_sources (
@@ -22,6 +29,14 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS private_reply_drafts (
             property_id TEXT NOT NULL, booking_id TEXT NOT NULL, message_id TEXT NOT NULL,
             fingerprint TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL,
+            PRIMARY KEY (property_id, booking_id, message_id)
+        )
+    """)
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS private_reply_outcomes (
+            property_id TEXT NOT NULL, booking_id TEXT NOT NULL, message_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('accepted','rejected','unknown')),
             PRIMARY KEY (property_id, booking_id, message_id)
         )
     """)
@@ -41,6 +56,10 @@ def observe_messages(db, fields, messages):
     db.execute('DELETE FROM private_reply_sources WHERE expires_at <= ?', (current,))
     db.execute('DELETE FROM private_reply_sources WHERE property_id=? AND booking_id=?', (property_id, booking_id))
     result = {}
+    outcomes = dict(db.execute(
+        'SELECT message_id, status FROM private_reply_outcomes WHERE property_id=? AND booking_id=?',
+        (property_id, booking_id),
+    ).fetchall())
     for message in messages:
         message_id = message.get('id')
         if not isinstance(message_id, str) or not 1 <= len(message_id) <= 256 or message.get('truncated'):
@@ -57,6 +76,7 @@ def observe_messages(db, fields, messages):
             'body': draft['body'] if draft else '',
             'version': draft['version'] if draft else 0,
             'stale': bool(draft and draft['fingerprint'] != fingerprint),
+            'outcome': outcomes.get(message_id),
         }
     return result
 
@@ -97,6 +117,8 @@ def save(db, fields):
 
 
 def form(csrf, fields, message_id, draft):
+    if draft.get('outcome') in REPLY_STATUS:
+        return '<p>' + escape(REPLY_STATUS[draft['outcome']]) + '</p>'
     hidden = {
         'csrf': csrf,
         'property_external_id': fields['property_external_id'],
@@ -144,7 +166,7 @@ def send_payload(db, fields):
 
 
 def send_form(csrf, fields, message_id, draft, thread):
-    if not draft['version'] or draft['stale'] or not isinstance(thread, str) or not re.fullmatch(r'[a-f0-9]{64}', thread):
+    if draft.get('outcome') or not draft['version'] or draft['stale'] or not isinstance(thread, str) or not re.fullmatch(r'[a-f0-9]{64}', thread):
         return ''
     values = {
         **fields,
@@ -165,3 +187,12 @@ def send_form(csrf, fields, message_id, draft, thread):
         + ' Send this saved reply to the guest</label>'
         + '<button type="submit">Send through Hospitable</button></form></details>'
     )
+
+
+def record_outcome(db, payload, status):
+    property_id, booking_id = stay_ids(payload)
+    db.execute("""
+        INSERT INTO private_reply_outcomes VALUES (?, ?, ?, ?)
+        ON CONFLICT(property_id, booking_id, message_id) DO UPDATE SET status=excluded.status
+        WHERE private_reply_outcomes.status='unknown'
+    """, (property_id, booking_id, payload['message_id'], status))

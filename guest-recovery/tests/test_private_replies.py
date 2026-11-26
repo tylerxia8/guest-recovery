@@ -35,7 +35,7 @@ class PrivateReplyTests(unittest.TestCase):
                 save(first, details)
 
     def test_send_only_reads_an_approved_current_saved_draft(self):
-        from private_replies import send_form, send_payload
+        from private_replies import form, record_outcome, send_form, send_payload
 
         with closing(sqlite3.connect(':memory:')) as db:
             db.row_factory = sqlite3.Row
@@ -63,6 +63,13 @@ class PrivateReplyTests(unittest.TestCase):
             self.assertIn('Send through Hospitable', markup)
             self.assertIn('&lt;fixture answer&gt;', markup)
             self.assertNotIn('<fixture answer>', markup)
+            with db:
+                record_outcome(db, approved, 'unknown')
+                record_outcome(db, approved, 'accepted')
+                record_outcome(db, approved, 'unknown')
+                accepted = observe_messages(db, stay, [message])[message['id']]
+            self.assertIn('Hospitable accepted', form('fixture', stay, message['id'], accepted))
+            self.assertEqual(send_form('fixture', stay, message['id'], accepted, thread), '')
             with db:
                 observe_messages(db, stay, [{**message, 'body': 'Corrected question'}])
             with self.assertRaisesRegex(AuthError, 'Reload'):

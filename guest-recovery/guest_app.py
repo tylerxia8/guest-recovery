@@ -416,18 +416,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
                 return
             if self.path == '/reply-send':
-                from private_replies import send_payload
+                from private_replies import REPLY_STATUS, record_outcome, send_payload
 
                 if not has_reply_access(actor['token_hash']):
                     raise AuthError(404, 'Guest replies are unavailable in this workspace.')
                 with connect(database) as db:
                     payload = send_payload(db, parsed)
                 status = send_guest_reply(issuer, actor['token_hash'], payload)
-                notice = {
-                    'accepted': 'Hospitable accepted your reply. Check the conversation for delivery.',
-                    'rejected': 'Hospitable rejected the reply. Check the account’s message permissions and the reservation.',
-                    'unknown': 'The reply may have been sent. Check the conversation in Hospitable before sending again.',
-                }[status]
+                with connect(database) as db:
+                    record_outcome(db, payload, status)
+                notice = REPLY_STATUS[status]
                 back = escape(urlencode({
                     key: payload[key] for key in ('property_external_id', 'reservation_external_id')
                 }))

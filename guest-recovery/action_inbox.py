@@ -41,9 +41,19 @@ def items(directory, issuer, authorization):
             raise AuthError(403, 'The inbox workspace could not be verified.')
         drafts = []
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='private_reply_drafts'").fetchone():
-            drafts = db.execute("""
+            outcome_filter = ""
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='private_reply_outcomes'").fetchone():
+                outcome_filter = """
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM private_reply_outcomes o
+                        WHERE o.property_id=d.property_id AND o.booking_id=d.booking_id
+                            AND o.message_id=d.message_id AND o.status='accepted'
+                    )
+                """
+            drafts = db.execute(f"""
                 SELECT d.property_id, d.booking_id, u.name
                 FROM private_reply_drafts d LEFT JOIN rental_units u ON u.id=d.property_id
+                {outcome_filter}
                 GROUP BY d.property_id, d.booking_id, u.name ORDER BY max(d.rowid) DESC LIMIT 100
             """).fetchall()
         orders = db.execute("""
