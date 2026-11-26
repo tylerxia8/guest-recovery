@@ -221,7 +221,9 @@ body:has(#inbox-workspace[hidden]) #reply-attention { display: none; }
 .shared-inbox form{display:grid;gap:14px;margin:14px 0}
 .shared-inbox form h2{margin:0}
 .shared-inbox form input:not([type=checkbox]),.shared-inbox form textarea{width:100%;min-width:0}
-.shared-inbox form label{min-width:0}
+.shared-inbox form label{min-width:0;margin:0}
+.shared-inbox .entry-confirmation{display:flex;align-items:center;gap:10px;min-height:44px}
+.shared-inbox .entry-confirmation input{width:20px;height:20px;margin:0;flex:none;accent-color:var(--cta)}
 .shared-inbox a,.shared-inbox form button{min-height:44px}
 .shared-inbox a{display:inline-flex;align-items:center}
 .shared-inbox form button{justify-self:start}

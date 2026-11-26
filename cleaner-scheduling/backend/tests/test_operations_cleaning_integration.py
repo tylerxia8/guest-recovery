@@ -119,6 +119,19 @@ def check_cleaning_handoff_isolation(settings, migrator):
                 UUID(request), property_source, "unrelated-stay", None, session, touchup_settings
             )
 
+    legacy_request = uuid4()
+    with migrator.begin() as connection:
+        connection.execute(
+            text("UPDATE cleaning_tasks SET external_return_request_id = :request WHERE id = :task"),
+            {"request": legacy_request, "task": task_a["task_id"]},
+        )
+    with first.begin() as session:
+        result = operations_cleaning_status(legacy_request, property_source, booking, None, session, touchup_settings)
+        assert json.loads(result.body) == task_a
+    with second.begin() as session, pytest.raises(AppError) as denied:
+        operations_cleaning_status(legacy_request, property_source, booking, None, session, touchup_settings)
+    assert denied.value.status_code == 404
+
 
 def test_cleaning_handoff_isolation():
     check_cleaning_handoff_isolation(get_settings(), get_engine(os.environ["MIGRATION_DATABASE_URL"]))

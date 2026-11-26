@@ -58,6 +58,6 @@ def cleaning_form(csrf, query):
         + '<label>Earliest entry (Eastern)<input type="datetime-local" name="release_at" required></label>'
         + '<label>Latest finish (Eastern)<input type="datetime-local" name="deadline_at" required></label>'
         + '<label>Duration (minutes)<input type="number" name="duration_minutes" min="15" max="240" required></label>'
-        + '<label><input type="checkbox" name="guest_access_confirmed" value="yes" required> Guest agreed to this entry window</label>'
+        + '<label class="entry-confirmation"><input type="checkbox" name="guest_access_confirmed" value="yes" required> Guest agreed to this entry window</label>'
         + '<button type="submit">Create Cleaner task</button></form>'
     )

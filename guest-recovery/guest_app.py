@@ -467,7 +467,7 @@ class Handler(BaseHTTPRequestHandler):
                 with connect(database) as db:
                     drafts = observe_messages(db, fields, messages)
                 rows = ''.join(
-                    '<li><strong>' + escape(str(message.get('sent_at', ''))) + '</strong><p class="guest-text">'
+                    '<li><strong>' + escape(stay_time(message.get('sent_at'))) + '</strong><p class="guest-text">'
                     + escape(str(message.get('body', '')))
                     + ('…' if message.get('truncated') is True else '') + '</p>'
                     + (reply_form(actor['csrf'], fields, message['id'], drafts[message['id']])
