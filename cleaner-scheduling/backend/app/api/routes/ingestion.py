@@ -260,6 +260,15 @@ def _operations_stay(
     return result[0], result[1]
 
 
+def _require_current_message_stay(stay: Reservation, now: datetime) -> None:
+    if (
+        stay.status != "active"
+        or (stay.approved_guest_checkout_at or stay.checkout_at) <= now
+        or (stay.approved_guest_checkin_at or stay.checkin_at) >= now + timedelta(hours=48)
+    ):
+        raise AppError("stay_not_found", "This stay is outside the shared inbox window.", 404)
+
+
 @router.get(MESSAGES_PATH.removeprefix("/v1"), include_in_schema=False)
 def operations_guest_messages(
     property_external_id: str = Query(min_length=1, max_length=120),
@@ -278,13 +287,7 @@ def operations_guest_messages(
     ):
         raise AppError("not_found", "Guest messages are unavailable.", 404)
     prop, stay = _operations_stay(session, property_external_id, reservation_external_id)
-    now = clock.now()
-    if (
-        stay.status != "active"
-        or (stay.approved_guest_checkout_at or stay.checkout_at) <= now
-        or (stay.approved_guest_checkin_at or stay.checkin_at) >= now + timedelta(hours=48)
-    ):
-        raise AppError("stay_not_found", "This stay is outside the shared inbox window.", 404)
+    _require_current_message_stay(stay, clock.now())
     workspace = session.info["workspace_id"]
     connection = session.get(WorkspaceConnection, workspace)
     if connection is None or not connection.token_ciphertext:
@@ -368,13 +371,7 @@ def operations_guest_reply(
     ):
         raise AppError("not_found", "Guest replies are unavailable.", 404)
     _, stay = _operations_stay(session, str(payload.property_external_id), str(payload.reservation_external_id))
-    current = clock.now()
-    if (
-        stay.status != "active"
-        or (stay.approved_guest_checkout_at or stay.checkout_at) <= current
-        or (stay.approved_guest_checkin_at or stay.checkin_at) >= current + timedelta(hours=48)
-    ):
-        raise AppError("stay_not_found", "This stay is outside the shared inbox window.", 404)
+    _require_current_message_stay(stay, clock.now())
 
     # One attempt per guest message, shared by all managers in the workspace.
     # Persist the uncertain state before dispatch so a restart cannot resend.
@@ -417,6 +414,8 @@ def operations_guest_reply(
         raise AppError("conversation_changed", "Review the latest Hospitable conversation before sending.", 409)
 
     acquire_workspace_lock(session, workspace, subject)
+    _, current_stay = _operations_stay(session, str(payload.property_external_id), reservation_id)
+    _require_current_message_stay(current_stay, clock.now())
     latest = session.get(WorkspaceConnection, workspace, populate_existing=True)
     if latest is None or latest.token_ciphertext != ciphertext:
         raise AppError("hospitable_connection_changed", "The Hospitable connection changed. Try again.", 409)

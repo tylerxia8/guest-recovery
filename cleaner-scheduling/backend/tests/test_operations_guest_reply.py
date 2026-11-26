@@ -5,12 +5,13 @@ from uuid import uuid4
 import pytest
 from app.adapters.reservations.hospitable_read import SourceMessage
 from app.api.routes import ingestion
+from app.db import session_factory
 from app.domain.errors import AppError
 from app.models import IdempotencyRecord, Property, Reservation
 from app.models.workspace_connection import WorkspaceConnection
 from app.services.field_cipher import protect_text
 from app.workspaces import LEGACY_WORKSPACE_ID
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 
 @pytest.mark.parametrize("first_status", ["accepted", "unknown", "rejected"])
@@ -97,6 +98,30 @@ def test_private_reply_claim_survives_retries_and_never_stores_guest_text(
     assert stale.value.status_code == 409
     assert session.scalar(select(IdempotencyRecord)) is None
     send.assert_not_called()
+
+    if first_status == "accepted":
+        independent = session_factory(settings, workspace_id=LEGACY_WORKSPACE_ID)
+
+        def set_booking_status(status):
+            with independent() as concurrent:
+                concurrent.execute(
+                    update(Reservation).where(Reservation.external_id == str(booking)).values(status=status)
+                )
+                concurrent.commit()
+
+        def withdraw_during_verification(_):
+            set_booking_status("canceled")
+            return messages, "b" * 64
+
+        reads.return_value.message_context.side_effect = withdraw_during_verification
+        with pytest.raises(AppError) as canceled:
+            post()
+        assert canceled.value.status_code == 404
+        assert session.scalar(select(IdempotencyRecord)) is None
+        send.assert_not_called()
+        session.rollback()
+        set_booking_status("active")
+        reads.return_value.message_context.side_effect = None
 
     assert post().body == ('{"status":"' + first_status + '"}').encode()
     assert post().body == ('{"status":"' + first_status + '"}').encode()

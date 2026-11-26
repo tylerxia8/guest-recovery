@@ -1,6 +1,7 @@
 """Single-attempt text replies through Hospitable's reservation message endpoint."""
 
 import json
+import time
 from typing import Literal
 from uuid import UUID
 
@@ -13,6 +14,7 @@ def submit_reply(token: str, reservation_id: UUID, body: str) -> ReplyStatus:
     """Return API acceptance only. A transport failure may still have sent."""
     if not token or len(token) > 16384 or not token.isascii() or any(char.isspace() for char in token):
         return "rejected"
+    deadline = time.monotonic() + 5
     try:
         with httpx.Client(follow_redirects=False, trust_env=False, timeout=httpx.Timeout(4, connect=2)) as client:
             with client.stream(
@@ -28,7 +30,7 @@ def submit_reply(token: str, reservation_id: UUID, body: str) -> ReplyStatus:
                 content = bytearray()
                 for chunk in response.iter_bytes():
                     content.extend(chunk)
-                    if len(content) > 16384:
+                    if len(content) > 16384 or time.monotonic() >= deadline:
                         return "unknown"
                 result = json.loads(content)
     except (httpx.HTTPError, ValueError):
