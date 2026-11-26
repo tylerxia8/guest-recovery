@@ -46,7 +46,12 @@ def principal_from_request(request: Request, session: Session) -> Principal:
     except TokenError:
         problem(401, "UNAUTHENTICATED", "Sign-in is required.")
     method = payload.get("amr")
-    if method not in ("local_dev", "operations", "operations_member") or not settings.allows_local_auth or payload.get("env") != settings.app_env:
+    if payload.get("env") != settings.app_env:
+        problem(401, "UNAUTHENTICATED", "Sign-in is required.")
+    if method == "operations_member":
+        if not settings.allows_operations_membership:
+            problem(401, "UNAUTHENTICATED", "Sign in with Cleaner again.")
+    elif method not in ("local_dev", "operations") or not settings.allows_local_auth:
         problem(401, "UNAUTHENTICATED", "Sign-in is required.")
     try:
         user_id = UUID(payload["sub"])
@@ -58,8 +63,6 @@ def principal_from_request(request: Request, session: Session) -> Principal:
         if not settings.allows_demo_session or organization_id != DEMO_ORG:
             problem(401, "UNAUTHENTICATED", "Sign-in is required.")
     if method == "operations_member":
-        if not settings.operations_workspace_provisioning:
-            problem(401, "UNAUTHENTICATED", "Sign in with Cleaner again.")
         require_active_membership(settings.operations_turnover_origin, payload.get("membership"), organization_id, user_id)
     set_tenant(session, organization_id, user_id)
     user = session.execute(

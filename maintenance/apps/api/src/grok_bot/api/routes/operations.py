@@ -61,7 +61,7 @@ def _count(session, sql: str, organization_id) -> int:
 @router.get("/operations/action-inbox", include_in_schema=False)
 def action_inbox(request: Request, session: Session = Depends(get_session, scope="function")):
     settings = request.app.state.settings
-    if not settings.operations_workspace_provisioning:
+    if not settings.allows_operations_membership:
         problem(404, "NOT_FOUND", "Shared Maintenance is unavailable.")
     authorization = request.headers.get("authorization", "")
     if not authorization.startswith("Bearer "):

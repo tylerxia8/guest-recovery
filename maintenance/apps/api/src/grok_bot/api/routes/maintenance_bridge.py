@@ -356,9 +356,7 @@ def verify_operations_repair(request, session, property_id, reservation_id):
     issuer = urlsplit(settings.operations_turnover_origin)
     if (
         not settings.operations_repair_handoff_enabled
-        or not settings.operations_workspace_provisioning
-        or not settings.allows_local_auth
-        or settings.allows_demo_session
+        or not settings.allows_operations_membership
         or issuer.scheme != "https"
         or not issuer.hostname
         or any((issuer.username, issuer.password, issuer.path, issuer.query, issuer.fragment))

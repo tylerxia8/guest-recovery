@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
 from grok_bot.api.routes.accounting import router as accounting_router
+from grok_bot.api.routes.auth import operations_router as operations_auth_router
 from grok_bot.api.routes.auth import router as auth_router
 from grok_bot.api.routes.controls import router as controls_router
 from grok_bot.api.routes.demo import router as demo_router
@@ -76,6 +77,8 @@ def create_app(settings: Settings, *, pool_size: int = 5, max_overflow: int = 5)
         app.include_router(stripe_router, prefix="/v1")
         if settings.allows_demo_session:
             app.include_router(demo_router, prefix="/v1")
+    if settings.allows_local_auth or settings.allows_operations_membership:
+        app.include_router(operations_auth_router, prefix="/v1")
     app.include_router(health_router, prefix="/v1")
     app.include_router(me_router, prefix="/v1")
     app.include_router(properties_router, prefix="/v1")

@@ -25,8 +25,10 @@ configure `OPERATIONS_WORKSPACE_DIRECTORY` on the private volume,
 `OPERATIONS_MAINTENANCE_ORIGIN` as the Maintenance bridge HTTPS origin. The
 Maintenance API verifies the same Cleaner issuer through its
 `OPERATIONS_TURNOVER_ORIGIN` setting and requires shared workspace provisioning
-and repair handoff to be enabled. Keep the Maintenance demo session disabled for
-a shared manager workspace.
+and repair handoff to be enabled. Build the Maintenance web image with a
+non-demo `NEXT_PUBLIC_DEMO_FIXTURE` and its private API origin configured.
+The production API accepts verified Cleaner membership while keeping local
+password login and the demo session disabled.
 
 Managers connect Hospitable in Cleaner. The shared inbox reads stay messages
 through that connection and saves references to cleaning and repair requests

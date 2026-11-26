@@ -3,13 +3,32 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
+
+from grok_bot.api.app import create_app
 
 from grok_bot.api.routes import auth, maintenance_bridge, operations as operations_routes
 from grok_bot.auth import operations
 
 
-def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(client, app, migrator_engine, monkeypatch):
+@pytest.mark.parametrize("environment", ["test", "production"])
+def test_operations_provisioning_and_repair_handoff_are_tenant_scoped(
+    client, app, migrator_engine, monkeypatch, request, environment,
+):
+    if environment == "production":
+        settings = app.state.settings.model_copy(update={
+            "app_env": "production", "operations_workspace_provisioning": True,
+        })
+        app = create_app(settings)
+        client = TestClient(app)
+        client.__enter__()
+        request.addfinalizer(app.state.engine.dispose)
+        request.addfinalizer(lambda: client.__exit__(None, None, None))
+        assert client.post("/v1/auth/local/login", json={
+            "subject": "fictional@example.test", "password": "fixture-only-password",
+        }).status_code == 404
     settings = app.state.settings
     monkeypatch.setattr(settings, "operations_workspace_provisioning", True)
     monkeypatch.setattr(settings, "operations_repair_handoff_enabled", True)
