@@ -105,7 +105,7 @@ def stay_change_form(csrf, fields, stay_times):
         '<form action="/stay-change" method="post"><h2>Check-in or checkout request</h2>' + inputs
         + '<p>Booked stay · ' + escape(stay_time(booked['booked_check_in']))
         + ' to ' + escape(stay_time(booked['booked_check_out'])) + '</p>'
-        + '<label>Request type<select name="kind" required>'
+        + '<label><span id="stay-change-kind-label">Request type</span><select name="kind" aria-labelledby="stay-change-kind-label" required>'
         + '<option value="early_checkin">Early check-in</option><option value="late_checkout">Late checkout</option>'
         + '</select></label>'
         + '<label>Requested time (Eastern)<input type="datetime-local" name="target_at" required></label>'
