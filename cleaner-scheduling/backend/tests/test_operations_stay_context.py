@@ -97,6 +97,7 @@ def test_guest_messages_use_workspace_connection_and_one_provider_attempt(monkey
         operations_guest_messages_enabled=True,
         hospitable_read_only=True,
         hospitable_token_file="/unused",
+        operations_guest_reply_workspace=None,
         field_encryption_secret="fixture",
     )
     stay = SimpleNamespace(

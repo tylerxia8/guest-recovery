@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
-import { postOperationsSchedule } from "../../../../lib/operations-schedule-proxy";
+import { postOperationsCommand } from "../../../../lib/operations-schedule-proxy";
 
 export function POST(request: NextRequest) {
-  return postOperationsSchedule(request, "cleaning-touchup");
+  return postOperationsCommand(request, "cleaning-touchup");
 }

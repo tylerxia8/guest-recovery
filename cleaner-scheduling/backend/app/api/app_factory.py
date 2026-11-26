@@ -29,7 +29,7 @@ from app.clock import Clock, SystemClock
 from app.config import Settings, validate_startup
 from app.db import get_engine, session_factory, validate_app_role
 from app.logging_redaction import install_redaction
-from app.services.operations_access import OPERATIONS_SCHEDULE_WRITES
+from app.services.operations_access import GUEST_REPLY_PATH, OPERATIONS_SCHEDULE_WRITES
 from app.workspaces import LEGACY_WORKSPACE_ID
 
 logger = logging.getLogger("app.api")
@@ -117,6 +117,7 @@ def create_app(settings: Settings, clock: Clock | None = None) -> FastAPI:
                         "/v1/accounts/operations/redeem",
                         "/v1/accounts/operations/inbox-grant",
                     }
+                    or (path == GUEST_REPLY_PATH and settings.operations_guest_reply_workspace is not None)
                     or (
                         path in OPERATIONS_SCHEDULE_WRITES
                         and settings.operations_touchup_enabled

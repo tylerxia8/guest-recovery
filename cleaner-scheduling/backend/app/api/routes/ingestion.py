@@ -12,6 +12,7 @@ import redis
 from app.adapters.errors import AdapterError
 from app.adapters.reservations.calendar import assert_feed_url_allowed
 from app.adapters.reservations.hospitable_read import HospitableReadClient
+from app.adapters.reservations.hospitable_reply import submit_reply
 from app.adapters.reservations.import_csv import MAX_BYTES, parse_reservation_csv
 from app.adapters.types import NormalizedReservation
 from app.api.deps import (
@@ -31,7 +32,14 @@ from app.domain.errors import AppError
 from app.domain.principal import Principal
 from app.domain.tasks import resolve_duration
 from app.domain.timeutil import dump_utc
-from app.models import CleaningTask, Property, Reservation, ReservationImportPreview, ReservationSyncRun
+from app.models import (
+    CleaningTask,
+    IdempotencyRecord,
+    Property,
+    Reservation,
+    ReservationImportPreview,
+    ReservationSyncRun,
+)
 from app.models.workspace_connection import WorkspaceConnection
 from app.services import guest_recovery
 from app.services.audit import write_audit
@@ -44,6 +52,7 @@ from app.services.instructions import (
     serialize_instruction,
 )
 from app.services.operations_access import (
+    GUEST_REPLY_PATH,
     MESSAGES_PATH,
     REPAIR_CONTEXT_PATH,
     STAY_CHANGE_PATH,
@@ -52,6 +61,7 @@ from app.services.operations_access import (
     TOUCHUP_PATH,
     TOUCHUP_STATUS_PATH,
 )
+from app.services.rate_limit import enforce_rate_limit
 from app.services.reservation_sync import (
     apply_normalized,
     create_sync_run,
@@ -59,11 +69,12 @@ from app.services.reservation_sync import (
     publication_blocked,
 )
 from app.services.workspace_accounts import workspace_owner_id
+from app.services.workspace_lock import acquire_workspace_lock
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from redis.exceptions import RedisError
-from sqlalchemy import select, tuple_
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/v1", tags=["ingestion"])
@@ -291,7 +302,11 @@ def operations_guest_messages(
             budget_seconds=5,
         )
         try:
-            messages = client.guest_messages(external_id)
+            thread_fingerprint = None
+            if settings.operations_guest_reply_workspace == workspace:
+                messages, thread_fingerprint = client.message_context(external_id)
+            else:
+                messages = client.guest_messages(external_id)
         finally:
             client.close()
     except (ValueError, AdapterError, RedisError) as exc:
@@ -312,12 +327,130 @@ def operations_guest_messages(
                 for message in ordered[-10:]
             ],
             "has_older": len(ordered) > 10,
+            **({"thread_fingerprint": thread_fingerprint} if thread_fingerprint else {}),
             # These are exact booking anchors for detecting stale stay-change requests.
             "booked_check_in": stay.checkin_at.astimezone(UTC).isoformat(),
             "booked_check_out": stay.checkout_at.astimezone(UTC).isoformat(),
         },
         headers={"Cache-Control": "no-store"},
     )
+
+
+class OperationsGuestReply(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    property_external_id: uuid.UUID
+    reservation_external_id: uuid.UUID
+    message_id: str = Field(min_length=1, max_length=256, repr=False)
+    thread_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    body: str = Field(min_length=1, max_length=3000, repr=False)
+    approved: Literal[True]
+
+
+@router.post(GUEST_REPLY_PATH.removeprefix("/v1"), include_in_schema=False)
+def operations_guest_reply(
+    payload: OperationsGuestReply,
+    _principal: Principal = Depends(require_manager),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    clock: Clock = Depends(get_clock),
+    cache: redis.Redis = Depends(get_redis),
+) -> JSONResponse:
+    workspace = session.info["workspace_id"]
+    if not (
+        settings.workspace_signup_enabled
+        and settings.operations_login_enabled
+        and settings.operations_guest_messages_enabled
+        and settings.hospitable_read_only
+        and settings.operations_guest_reply_workspace == workspace
+    ):
+        raise AppError("not_found", "Guest replies are unavailable.", 404)
+    _, stay = _operations_stay(session, str(payload.property_external_id), str(payload.reservation_external_id))
+    current = clock.now()
+    if (
+        stay.status != "active"
+        or (stay.approved_guest_checkout_at or stay.checkout_at) <= current
+        or (stay.approved_guest_checkin_at or stay.checkin_at) >= current + timedelta(hours=48)
+    ):
+        raise AppError("stay_not_found", "This stay is outside the shared inbox window.", 404)
+
+    # One attempt per guest message, shared by all managers in the workspace.
+    # Persist the uncertain state before dispatch so a restart cannot resend.
+    subject = "operations-guest-reply"
+    key = request_digest({"reservation_id": str(payload.reservation_external_id), "message_id": payload.message_id})
+    digest = request_digest({"property_id": str(payload.property_external_id), "body": payload.body})
+    private_headers = {"Cache-Control": "no-store"}
+    replay = resolve_idempotency(
+        session, principal_subject=subject, route=GUEST_REPLY_PATH, key=key, digest=digest, clock=clock
+    )
+    if replay.outcome == "replay":
+        return JSONResponse(replay.body, headers=private_headers)
+    if replay.outcome == "conflict":
+        raise AppError("reply_already_processed", "Check the previous reply outcome in Hospitable.", 409)
+
+    connection = session.get(WorkspaceConnection, workspace)
+    if connection is None or not connection.token_ciphertext:
+        raise AppError("hospitable_not_connected", "Connect Hospitable in Cleaner before sending.", 409)
+    ciphertext = connection.token_ciphertext
+    reservation_id = str(payload.reservation_external_id)
+    # End the initial transaction before the provider call. The attempt is
+    # serialized and the connection revalidated in the following transaction.
+    session.rollback()
+    try:
+        if not cache.set(f"turnover:guest-departure:{reservation_id}", "1", nx=True, ex=31):
+            raise AppError("message_read_limited", "Wait 31 seconds after opening the case, then try again.", 429)
+        token = reveal_text(ciphertext, settings.field_encryption_secret)
+        client = HospitableReadClient(settings.hospitable_token_file, access_token=token, attempts=1, budget_seconds=5)
+        try:
+            messages, fingerprint = client.message_context(reservation_id)
+        finally:
+            client.close()
+    except (AdapterError, RedisError, ValueError):
+        raise AppError("hospitable_unavailable", "The current conversation could not be verified.", 503) from None
+    if fingerprint != payload.thread_fingerprint or payload.message_id not in {
+        item.external_id
+        for item in sorted(messages, key=lambda item: (item.sent_at, item.external_id))[-10:]
+        if len(item.body) <= 5000
+    }:
+        raise AppError("conversation_changed", "Review the latest Hospitable conversation before sending.", 409)
+
+    acquire_workspace_lock(session, workspace, subject)
+    latest = session.get(WorkspaceConnection, workspace, populate_existing=True)
+    if latest is None or latest.token_ciphertext != ciphertext:
+        raise AppError("hospitable_connection_changed", "The Hospitable connection changed. Try again.", 409)
+    replay = resolve_idempotency(
+        session, principal_subject=subject, route=GUEST_REPLY_PATH, key=key, digest=digest, clock=clock
+    )
+    if replay.outcome == "replay":
+        return JSONResponse(replay.body, headers=private_headers)
+    if replay.outcome == "conflict":
+        raise AppError("reply_already_processed", "Check the previous reply outcome in Hospitable.", 409)
+    enforce_rate_limit(cache, clock=clock, subject=str(workspace), bucket="guest-reply", limit=5)
+    attempt_id = uuid.uuid4()
+    store_idempotency(
+        session,
+        settings=settings,
+        clock=clock,
+        principal_subject=subject,
+        route=GUEST_REPLY_PATH,
+        key=key,
+        digest=digest,
+        status=200,
+        body={"status": "unknown"},
+        resource_id=attempt_id,
+    )
+    session.commit()
+    status = submit_reply(token, payload.reservation_external_id, payload.body)
+    result = {"status": status}
+    session.execute(
+        update(IdempotencyRecord)
+        .where(
+            IdempotencyRecord.route == GUEST_REPLY_PATH,
+            IdempotencyRecord.resource_id == attempt_id,
+        )
+        .values(response_body=result)
+    )
+    session.commit()
+    return JSONResponse(result, headers=private_headers)
 
 
 def _repair_home(prop: Property, settings: Settings) -> dict[str, str] | None:

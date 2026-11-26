@@ -19,6 +19,7 @@ from app.domain.principal import Principal
 from app.models import OperatorProfile
 from app.services.audit import write_audit
 from app.services.operations_access import (
+    GUEST_REPLY_PATH,
     OPERATIONS_READ_PATHS,
     OPERATIONS_SCHEDULE_WRITES,
     REPAIR_CONTEXT_PATH,
@@ -74,7 +75,7 @@ def get_db(request: Request) -> Generator[Session, None, None]:
             if not hmac.compare_digest(expected, token):
                 raise AppError("link_unavailable", "Open your original private cleaner link.", 401)
         else:
-            delegated = token.startswith(("ops_", "opc_", "opr_", "opm_", "opq_"))
+            delegated = token.startswith(("ops_", "opc_", "opr_", "opm_", "opq_", "opg_"))
             if delegated:
                 allowed_read = (
                     token.startswith("ops_") and request.method == "GET" and request.url.path in OPERATIONS_READ_PATHS
@@ -91,8 +92,14 @@ def get_db(request: Request) -> Generator[Session, None, None]:
                     and request.method == "GET"
                     and request.url.path == REPAIR_CONTEXT_PATH
                 )
+                allowed_reply = (
+                    token.startswith("opg_")
+                    and settings.operations_guest_reply_workspace is not None
+                    and request.method == "POST"
+                    and request.url.path == GUEST_REPLY_PATH
+                )
                 if not settings.operations_login_enabled or not (
-                    allowed_read or allowed_schedule_write or allowed_repair
+                    allowed_read or allowed_schedule_write or allowed_repair or allowed_reply
                 ):
                     raise AppError("invalid_session", "Sign in to continue.", 401)
             with catalog_session_factory(settings)() as catalog:
@@ -102,6 +109,8 @@ def get_db(request: Request) -> Generator[Session, None, None]:
                     account = authenticate_session_digest(catalog, digest, now)
                 else:
                     account = authenticate_session(catalog, token, now)
+                if request.url.path == GUEST_REPLY_PATH and not token.startswith("opg_"):
+                    raise AppError("invalid_session", "Shared reply access is required.", 401)
                 workspace_id = account.workspace_id
                 request.state.account_subject = account_subject(account)
         factories = request.app.state.workspace_factories

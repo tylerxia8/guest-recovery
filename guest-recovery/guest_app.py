@@ -317,16 +317,16 @@ class Handler(BaseHTTPRequestHandler):
     def private_workspace(self, directory, origin, query):
         from auth import AuthError, cookie, new_session, require_csrf, session
         from operations_login import (
-            cleaning_status, guest_messages, has_repair_access, has_touchup_access, redeem, remember_membership, remember_read_access,
+            cleaning_status, guest_messages, has_reply_access, has_repair_access, has_touchup_access, redeem, remember_membership, remember_read_access,
             repair_status, selected_workspace,
-            send_repair, send_stay_change, send_touchup, start, stays, turnover_origin, verify_membership, workspace_cookie,
+            send_guest_reply, send_repair, send_stay_change, send_touchup, start, stays, turnover_origin, verify_membership, workspace_cookie,
         )
         from workspace_database import provision
 
         issuer = turnover_origin()
         if not issuer or not origin.startswith('https://'):
             raise AuthError(503, 'Private Guest Messages is unavailable.')
-        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/stay-change'):
+        if self.command != 'GET' and self.path not in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change'):
             raise AuthError(405, 'This action is not available in the shared workspace yet.')
         if self.path == '/api/action-inbox':
             from action_inbox import items
@@ -357,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/style.css':
             self.respond(200, (ROOT / 'web' / 'style.css').read_bytes(), 'text/css')
             return
-        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/stay-change'):
+        if self.path not in ('/', '/login', '/messages', '/handoff-status', '/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change'):
             raise AuthError(404, 'Not found.')
         workspace = selected_workspace(self.headers)
         actor = None
@@ -391,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
             content = render_status(handoff['kind'], result, actor['csrf'], payload)
             self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
             return
-        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/stay-change'):
+        if self.path in ('/cleaning-touchup', '/repair-request', '/repair-answer', '/reply-draft', '/reply-send', '/stay-change'):
             if self.command != 'POST':
                 raise AuthError(405, 'Submit the request from the guest case.')
             if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
@@ -412,6 +412,26 @@ class Handler(BaseHTTPRequestHandler):
                     name: parsed[name] for name in ('property_external_id', 'reservation_external_id')
                 }))
                 content = '<h2>Reply draft saved</h2><p>The reply has not been sent.</p>'
+                content += '<p><a href="/messages?' + back + '">Back to guest messages</a></p>'
+                self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
+                return
+            if self.path == '/reply-send':
+                from private_replies import send_payload
+
+                if not has_reply_access(actor['token_hash']):
+                    raise AuthError(404, 'Guest replies are unavailable in this workspace.')
+                with connect(database) as db:
+                    payload = send_payload(db, parsed)
+                status = send_guest_reply(issuer, actor['token_hash'], payload)
+                notice = {
+                    'accepted': 'Hospitable accepted your reply. Check the conversation for delivery.',
+                    'rejected': 'Hospitable rejected the reply. Check the account’s message permissions and the reservation.',
+                    'unknown': 'The reply may have been sent. Check the conversation in Hospitable before sending again.',
+                }[status]
+                back = escape(urlencode({
+                    key: payload[key] for key in ('property_external_id', 'reservation_external_id')
+                }))
+                content = '<h2>Reply status</h2><p>' + escape(notice) + '</p>'
                 content += '<p><a href="/messages?' + back + '">Back to guest messages</a></p>'
                 self.respond(200, page.replace('<!-- stays -->', content).encode(), 'text/html; charset=utf-8')
                 return
@@ -459,15 +479,17 @@ class Handler(BaseHTTPRequestHandler):
                 messages = data.get('messages')
                 if not isinstance(messages, list) or len(messages) > 10 or any(not isinstance(item, dict) for item in messages):
                     raise AuthError(503, 'Guest messages are temporarily unavailable.')
-                from private_replies import form as reply_form, observe_messages
+                from private_replies import form as reply_form, observe_messages, send_form
 
                 with connect(database) as db:
                     drafts = observe_messages(db, fields, messages)
+                thread = data.get('thread_fingerprint') if has_reply_access(actor['token_hash']) else None
                 rows = ''.join(
                     '<li><strong>' + escape(stay_time(message.get('sent_at'))) + '</strong><p class="guest-text">'
                     + escape(str(message.get('body', '')))
                     + ('…' if message.get('truncated') is True else '') + '</p>'
                     + (reply_form(actor['csrf'], fields, message['id'], drafts[message['id']])
+                       + send_form(actor['csrf'], fields, message['id'], drafts[message['id']], thread)
                        if isinstance(message.get('id'), str) and message['id'] in drafts else '')
                     + '</li>'
                     for message in messages

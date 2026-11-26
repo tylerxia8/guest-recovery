@@ -24,7 +24,9 @@ FLOW_VALUE = re.compile(r'[A-Za-z0-9_-]{43}')
 READ_TOKEN = re.compile(r'ops_[A-Za-z0-9_-]{43}')
 TOUCHUP_TOKEN = re.compile(r'opc_[A-Za-z0-9_-]{43}')
 REPAIR_TOKEN = re.compile(r'opr_[A-Za-z0-9_-]{43}')
+REPLY_TOKEN = re.compile(r'opg_[A-Za-z0-9_-]{43}')
 READ_SESSIONS = {}
+EMPTY_ACCESS = (0, '', '', '', '')
 MEMBERSHIP_SESSIONS = {}
 MEMBERSHIP_TOKEN = re.compile(r'opm_[A-Za-z0-9_-]{43}')
 READ_LOCK = threading.Lock()
@@ -106,7 +108,7 @@ def remember_read_access(token, identity):
     if isinstance(read_token, str) and READ_TOKEN.fullmatch(read_token) and type(expires_in) is int and 0 < expires_in <= 900:
         now = time.monotonic()
         with READ_LOCK:
-            for key, (expiry, _, _, _) in list(READ_SESSIONS.items()):
+            for key, (expiry, _, _, _, _) in list(READ_SESSIONS.items()):
                 if expiry <= now:
                     del READ_SESSIONS[key]
             if len(READ_SESSIONS) >= 100:
@@ -117,7 +119,10 @@ def remember_read_access(token, identity):
             repair = identity.get('repair_token')
             if not isinstance(repair, str) or not REPAIR_TOKEN.fullmatch(repair):
                 repair = ''
-            READ_SESSIONS[hashlib.sha256(token.encode()).hexdigest()] = (now + expires_in, read_token, touchup, repair)
+            reply = identity.get('reply_token')
+            if not isinstance(reply, str) or not REPLY_TOKEN.fullmatch(reply):
+                reply = ''
+            READ_SESSIONS[hashlib.sha256(token.encode()).hexdigest()] = (now + expires_in, read_token, touchup, repair, reply)
 
 
 def remember_membership(session_token, membership):
@@ -160,7 +165,7 @@ def verify_membership(issuer, session_hash, workspace, account):
 
 def has_read_access(session_hash):
     with READ_LOCK:
-        expiry, _, _, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, _, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
         return expiry > time.monotonic()
 
 
@@ -202,7 +207,7 @@ def stays(issuer, session_hash):
 
 def read_turnover(issuer, session_hash, path):
     with READ_LOCK:
-        expiry, token, _, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, token, _, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     if expiry <= time.monotonic():
         forget_read_access(session_hash)
         raise AuthError(401, 'Sign in with Cleaner again to view shared stay details.')
@@ -246,7 +251,7 @@ def selected_workspace(headers):
 
 def has_touchup_access(session_hash):
     with READ_LOCK:
-        expiry, _, token, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, token, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     return bool(token and expiry > time.monotonic())
 
 
@@ -260,7 +265,7 @@ def send_stay_change(issuer, session_hash, payload):
 
 def post_schedule_change(issuer, session_hash, operation, payload, result_key):
     with READ_LOCK:
-        expiry, _, token, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, token, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     if not token or expiry <= time.monotonic():
         raise AuthError(401, 'Reconnect with Cleaner to request a schedule change.')
     request = Request(
@@ -286,6 +291,42 @@ def post_schedule_change(issuer, session_hash, operation, payload, result_key):
     return result
 
 
+
+def has_reply_access(session_hash):
+    with READ_LOCK:
+        expires, _, _, _, token = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
+    return bool(token and expires > time.monotonic())
+
+
+def send_guest_reply(issuer, session_hash, payload):
+    with READ_LOCK:
+        expires, _, _, _, token = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
+    if not token or expires <= time.monotonic():
+        raise AuthError(401, 'Reconnect with Cleaner before sending a reply.')
+    request = Request(
+        issuer + '/auth/operations/guest-reply',
+        data=json.dumps(payload).encode(),
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    )
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=16) as response:
+            result = json.loads(response.read(2048))
+        if isinstance(result, dict) and result.get('status') in ('accepted', 'rejected', 'unknown'):
+            return result['status']
+    except HTTPError as error:
+        status = error.code
+        error.close()
+        if status in (401, 403):
+            raise AuthError(401, 'Reconnect with Cleaner before sending a reply.') from None
+        if status == 429:
+            raise AuthError(429, 'Wait 31 seconds after opening the conversation, then return to the form and try again.') from None
+        if status in (400, 404, 409, 422):
+            raise AuthError(status, 'Cleaner blocked this attempt. Check the latest conversation and any previous reply in Hospitable.') from None
+    except (URLError, OSError, ValueError):
+        pass
+    return 'unknown'
+
+
 def maintenance_origin():
     target = os.environ.get('OPERATIONS_MAINTENANCE_ORIGIN', '')
     parsed = urlsplit(target)
@@ -296,7 +337,7 @@ def maintenance_origin():
 
 def has_repair_access(session_hash):
     with READ_LOCK:
-        expiry, _, _, token = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, _, token, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     return bool(token and expiry > time.monotonic() and maintenance_origin())
 
 
@@ -313,7 +354,7 @@ def repair_status(session_hash, payload):
 def request_repair(session_hash, resource, payload=None, key=None):
     origin = maintenance_origin()
     with READ_LOCK:
-        expiry, _, _, token = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, _, token, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     if not origin or not token or expiry <= time.monotonic():
         raise AuthError(401, 'Reconnect with Cleaner to send a repair request.')
     authorization = 'Bearer ' + token

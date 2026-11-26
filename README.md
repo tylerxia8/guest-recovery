@@ -40,10 +40,17 @@ Managers can also submit early check-in and late checkout requests from a
 verified stay. Cleaner applies the stay-change policy and keeps the imported
 reservation times. The manager can then communicate the outcome to the guest.
 
-The shared inbox currently saves guest reply drafts. The existing standalone
-Guest Messages installation retains its outbound, manual supply, and safety
-workflows. Preserve that installation during migration so those workflows and
-the existing case records stay available.
+The shared inbox saves guest reply drafts. A private workspace can also submit
+an explicitly approved draft through its existing Hospitable connection when
+the reply pilot is configured and the connection has verified write access.
+Review the current conversation and the saved text before approving. The inbox
+shows whether Hospitable accepted the request, rejected it, or returned an
+uncertain outcome. Check an uncertain outcome in Hospitable.
+
+The standalone Guest Messages installation still owns the automatic reply,
+manual supply ordering, and safety workflows. Keep access to its historical
+case records during migration. Coordinate the switch so two installations
+cannot send replies for the same reservation.
 
 ### Co-located Cleaner
 

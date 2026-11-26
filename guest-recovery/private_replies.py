@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import time
 from html import escape
 from uuid import UUID
@@ -112,4 +113,55 @@ def form(csrf, fields, message_id, draft):
         '<details><summary>Draft a reply</summary><form action="/reply-draft" method="post">'
         + inputs + stale + '<label>Reply<textarea name="body" maxlength="3000" required>'
         + escape(draft['body']) + '</textarea></label><button type="submit">Save draft</button></form></details>'
+    )
+
+
+def send_payload(db, fields):
+    property_id, booking_id = stay_ids(fields)
+    message_id = fields.get('message_id', '')
+    fingerprint = fields.get('fingerprint', '')
+    thread = fields.get('thread_fingerprint', '')
+    if fields.get('approved') != 'yes' or not re.fullmatch(r'[a-f0-9]{64}', thread):
+        raise AuthError(400, 'Approve the saved reply for this conversation.')
+    initialize(db)
+    row = db.execute(
+        """SELECT draft.body, draft.version FROM private_reply_drafts AS draft
+           JOIN private_reply_sources AS source USING (property_id, booking_id, message_id, fingerprint)
+           WHERE draft.property_id=? AND draft.booking_id=? AND draft.message_id=?
+               AND draft.fingerprint=? AND source.expires_at>?""",
+        (property_id, booking_id, message_id, fingerprint, time.time()),
+    ).fetchone()
+    if not row or str(row['version']) != fields.get('version'):
+        raise AuthError(409, 'Reload the conversation and review the saved reply.')
+    return {
+        'property_external_id': property_id,
+        'reservation_external_id': booking_id,
+        'message_id': message_id,
+        'thread_fingerprint': thread,
+        'body': row['body'],
+        'approved': True,
+    }
+
+
+def send_form(csrf, fields, message_id, draft, thread):
+    if not draft['version'] or draft['stale'] or not isinstance(thread, str) or not re.fullmatch(r'[a-f0-9]{64}', thread):
+        return ''
+    values = {
+        **fields,
+        'csrf': csrf,
+        'message_id': message_id,
+        'fingerprint': draft['fingerprint'],
+        'version': str(draft['version']),
+        'thread_fingerprint': thread,
+    }
+    inputs = ''.join(
+        f'<input type="hidden" name="{name}" value="{escape(value, quote=True)}">'
+        for name, value in values.items()
+    )
+    return (
+        '<details><summary>Review saved reply</summary><form action="/reply-send" method="post">'
+        + inputs + '<p class="guest-text">' + escape(draft['body'])
+        + '</p><label class="entry-confirmation"><input type="checkbox" name="approved" value="yes" required>'
+        + ' Send this saved reply to the guest</label>'
+        + '<button type="submit">Send through Hospitable</button></form></details>'
     )
