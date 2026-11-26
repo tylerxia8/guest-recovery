@@ -1,3 +1,3 @@
 """Alembic revision the running process expects."""
 
-EXPECTED_SCHEMA_REVISION = "0032_account_workspaces"
+EXPECTED_SCHEMA_REVISION = "0034_legacy_return_lookup"

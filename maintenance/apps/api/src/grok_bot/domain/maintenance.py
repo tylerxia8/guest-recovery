@@ -782,8 +782,11 @@ def record_estimate(session, organization_id, work_order_id, estimate_cents: int
     return {"authorization_state": "WAITING_APPROVAL", "spending_limit": None}
 
 
-def get_ticket(session, organization_id, ticket_id, secret: str, viewer: str, persist_questions: bool = False) -> dict:
-    ticket = _lock_ticket(session, organization_id, ticket_id)
+def get_ticket(
+    session, organization_id, ticket_id, secret: str, viewer: str,
+    persist_questions: bool = False, *, shared_lock: bool = False,
+) -> dict:
+    ticket = _lock_ticket(session, organization_id, ticket_id, shared=shared_lock and not persist_questions)
     fields = session.execute(
         text(
             """
@@ -1352,9 +1355,10 @@ def _field_status(fields, key: str):
     return None
 
 
-def _lock_ticket(session, organization_id, ticket_id):
+def _lock_ticket(session, organization_id, ticket_id, *, shared: bool = False):
+    lock = "FOR SHARE" if shared else "FOR UPDATE"
     row = session.execute(
-        text("SELECT * FROM maintenance_tickets WHERE organization_id = :organization_id AND id = :id FOR UPDATE"),
+        text(f"SELECT * FROM maintenance_tickets WHERE organization_id = :organization_id AND id = :id {lock}"),
         {"organization_id": organization_id, "id": ticket_id},
     ).mappings().first()
     if row is None:

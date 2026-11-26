@@ -302,7 +302,8 @@ def get_one(ticket_id: UUID, request: Request, principal: Principal = Depends(ge
     viewer = can_view_ticket(session, principal.organization_id, ticket_id, principal.user_id, principal.roles)
     if viewer is None:
         problem(404, "NOT_FOUND", "Ticket not found.")
-    result = get_ticket(session, principal.organization_id, ticket_id, request.app.state.settings.session_secret, viewer)
+    # Let managers read the same repair concurrently while preserving the lock against updates.
+    result = get_ticket(session, principal.organization_id, ticket_id, request.app.state.settings.session_secret, viewer, shared_lock=True)
     result["request_id"] = request_id_of(request)
     return result
 

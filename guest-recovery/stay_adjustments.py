@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 
+import local_scheduler
 from cleaner_returns import SchedulerNotFound, configuration
 from cleaner_returns import request as scheduler_request
 from reply_library import question_parts
@@ -200,14 +201,12 @@ def synchronize(connect, stop):
                     continue
                 settings = configuration()
                 try:
-                    origin = row['scheduler_url'] or settings['url']
-                    if origin != settings['url']:
-                        raise ValueError('The scheduler connection changed. Review this request in the scheduler.')
+                    origin = local_scheduler.resolve_origin(row['scheduler_url'], settings['url'])
                     with connect() as db:
                         conversation, message = current_request(db, row, timestamp)
                         if invalidate_changed_request(db, row, conversation, message, timestamp):
                             continue
-                        db.execute('UPDATE stay_requests SET scheduler_url = ? WHERE id = ? AND scheduler_url = ?', (origin, row['id'], ''))
+                        db.execute('UPDATE stay_requests SET scheduler_url = ? WHERE id = ? AND scheduler_url = ?', (origin, row['id'], row['scheduler_url']))
                     if not settings['stay_configured']:
                         raise ValueError('Connect the cleaning scheduler before confirming this change.')
                     try:
@@ -219,7 +218,7 @@ def synchronize(connect, stop):
                         if settings.get('internal'):
                             payload.update(booked_check_in=plan['check_in'], booked_check_out=plan['check_out'])
                         remote = scheduler_request(origin, 'POST', '/v1/stay-adjustments', payload, row['id'])
-                    result = validate_remote(remote, row)
+                    result = validate_remote(remote, {**dict(row), "scheduler_url": origin})
                 except (ValueError, TypeError, KeyError, sqlite3.Error) as error:
                     with connect() as db:
                         db.execute('UPDATE stay_requests SET error = ?, next_poll = ?, updated_at = ? WHERE id = ?', (str(error) if isinstance(error, ValueError) else 'Could not verify the cleaning schedule. No change is confirmed.', (dt.datetime.now(dt.UTC) + dt.timedelta(seconds=30)).isoformat(), timestamp, row['id']))
@@ -268,14 +267,15 @@ def verify_for_reply(connect, identifiers):
             raise ValueError('The stay change is not connected to the scheduler.')
         if changed or row['state'] == 'invalidated' or not message:
             raise ValueError('Review the guest’s latest request before confirming a stay change.')
-        if row['scheduler_url'].startswith('internal-scheduler:'):
+        origin = local_scheduler.resolve_origin(row['scheduler_url'], configuration()['url'])
+        if origin.startswith('internal-scheduler:'):
             plan = json.loads(row['plan'])
             payload = json.loads(row['payload'])
             payload.update(booked_check_in=plan['check_in'], booked_check_out=plan['check_out'])
-            response = scheduler_request(row['scheduler_url'], 'POST', '/v1/stay-adjustments', payload, identifier)
+            response = scheduler_request(origin, 'POST', '/v1/stay-adjustments', payload, identifier)
         else:
-            response = scheduler_request(row['scheduler_url'], 'GET', '/v1/stay-adjustments/' + identifier)
-        remote = validate_remote(response, row)
+            response = scheduler_request(origin, 'GET', '/v1/stay-adjustments/' + identifier)
+        remote = validate_remote(response, {**dict(row), "scheduler_url": origin})
         previous = json.loads(row['remote']) if row['remote'] else None
         with connect() as db:
             checked = dt.datetime.now(dt.UTC).isoformat()

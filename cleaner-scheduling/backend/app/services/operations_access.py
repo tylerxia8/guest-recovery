@@ -12,9 +12,13 @@ from app.services.workspace_accounts import token_digest
 STAY_CONTEXT_PATH = "/v1/workspace/operations/stay-context"
 STAYS_PATH = "/v1/workspace/operations/stays"
 MESSAGES_PATH = "/v1/workspace/operations/guest-messages"
-OPERATIONS_READ_PATHS = frozenset({STAY_CONTEXT_PATH, STAYS_PATH, MESSAGES_PATH})
+GUEST_REPLY_PATH = "/v1/workspace/operations/guest-reply"
+TOUCHUP_STATUS_PATH = "/v1/workspace/operations/cleaning-status"
+OPERATIONS_READ_PATHS = frozenset({STAY_CONTEXT_PATH, STAYS_PATH, MESSAGES_PATH, TOUCHUP_STATUS_PATH})
 REPAIR_CONTEXT_PATH = "/v1/workspace/operations/repair-context"
 TOUCHUP_PATH = "/v1/workspace/operations/cleaning-touchup"
+STAY_CHANGE_PATH = "/v1/workspace/operations/stay-change"
+OPERATIONS_SCHEDULE_WRITES = frozenset({TOUCHUP_PATH, STAY_CHANGE_PATH})
 ACCESS_SECONDS = 900
 
 
@@ -42,7 +46,7 @@ def issue_access(cache: redis.Redis, session_digest: str, prefix: str, *, ttl: i
 
 
 def read_session_digest(cache: redis.Redis, token: str) -> str:
-    if re.fullmatch(r"(?:ops|opc|opr|opm|opq)_[A-Za-z0-9_-]{43}", token) is None:
+    if re.fullmatch(r"(?:ops|opc|opr|opm|opq|opg)_[A-Za-z0-9_-]{43}", token) is None:
         raise AppError("invalid_session", "Sign in to continue.", 401)
     try:
         value = cache.get(f"operations-access:{token_digest(token)}")

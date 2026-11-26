@@ -23,3 +23,20 @@ class PrivateTouchupTests(unittest.TestCase):
         form['release_at'] = '2026-11-01T01:30'
         with self.assertRaises(AuthError):
             cleaning_payload(form)
+
+    def test_stay_change_keeps_the_original_booking_and_uses_eastern_time(self):
+        from private_touchup import stay_change_form, stay_change_payload
+
+        fields = {
+            'kind': 'late_checkout', 'property_external_id': 'fixture-home',
+            'reservation_external_id': 'fixture-stay', 'target_at': '2026-11-23T11:00',
+            'booked_check_in': '2026-11-22T21:00Z', 'booked_check_out': '2026-11-23T15:00Z',
+        }
+        payload = stay_change_payload(fields)
+        self.assertEqual(payload['target_at'], '2026-11-23T11:00:00-05:00')
+        self.assertEqual(payload['booked_check_out'], '2026-11-23T15:00:00+00:00')
+        self.assertEqual(payload, stay_change_payload(fields))
+        self.assertIn('action="/stay-change"', stay_change_form('csrf', {}, fields))
+        self.assertEqual(stay_change_form('csrf', {}, {}), '')
+        with self.assertRaises(AuthError):
+            stay_change_payload({**fields, 'booked_check_out': '2026-11-23T15:00'})

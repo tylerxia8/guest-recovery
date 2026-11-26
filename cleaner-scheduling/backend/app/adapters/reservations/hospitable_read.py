@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import stat
@@ -103,8 +105,6 @@ class HospitableReadClient:
                             content.extend(chunk)
                             if len(content) > 8_000_000 or time.monotonic() >= self._deadline:
                                 raise AdapterError("Hospitable response exceeded the read limit.")
-                        import json
-
                         try:
                             result = json.loads(content)
                         except ValueError:
@@ -120,11 +120,28 @@ class HospitableReadClient:
         raise AssertionError("unreachable")
 
     def guest_messages(self, reservation_id: str) -> list[SourceMessage]:
+        identity, rows = self._message_rows(reservation_id)
+        return self._parse_guest_messages(identity, rows)
+
+    def message_context(self, reservation_id: str) -> tuple[list[SourceMessage], str]:
+        identity, rows = self._message_rows(reservation_id)
+        messages = self._parse_guest_messages(identity, rows)
+        # Include host messages and attachments so a reply cannot silently
+        # proceed after someone else updates the conversation in Hospitable.
+        encoded = sorted(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows)
+        fingerprint = hashlib.sha256(json.dumps(encoded).encode()).hexdigest()
+        return messages, fingerprint
+
+    def _message_rows(self, reservation_id: str) -> tuple[str, list[object]]:
         identity = str(uuid.UUID(reservation_id))
         response = self._get(f"reservations/{identity}/messages", [])
         rows = response.get("data")
         if not isinstance(rows, list) or len(rows) > 10000:
             raise AdapterError("Hospitable messages exceeded the read limit or have an invalid schema.")
+        return identity, rows
+
+    @staticmethod
+    def _parse_guest_messages(identity: str, rows: list[object]) -> list[SourceMessage]:
         messages: list[SourceMessage] = []
         identities: set[str] = set()
         for row in rows:

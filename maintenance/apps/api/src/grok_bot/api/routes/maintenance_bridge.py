@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -356,9 +356,7 @@ def verify_operations_repair(request, session, property_id, reservation_id):
     issuer = urlsplit(settings.operations_turnover_origin)
     if (
         not settings.operations_repair_handoff_enabled
-        or not settings.operations_workspace_provisioning
-        or not settings.allows_local_auth
-        or settings.allows_demo_session
+        or not settings.allows_operations_membership
         or issuer.scheme != "https"
         or not issuer.hostname
         or any((issuer.username, issuer.password, issuer.path, issuer.query, issuer.fragment))
@@ -427,18 +425,35 @@ def operations_answer(
 ):
     key = require_idempotency_key(key)
     principal, _ = verify_operations_repair(request, session, body.external_property_id, body.reservation_id)
+    require_repair_stay(session, principal, body.issue_id, body.external_property_id, body.reservation_id)
+    answer = GuestMessageBody(body=body.body, field_key=body.field_key)
+    return import_guest_message(body.issue_id, answer, request, principal, session, key)
+
+
+def require_repair_stay(session, principal, issue_id, property_id, reservation_id):
     if not session.scalar(
         text("""
             SELECT 1 FROM maintenance_source_requests
             WHERE organization_id=:org AND source='guest_recovery' AND issue_id=:issue
               AND external_property_id=:property AND reservation_id=:reservation
         """),
-        {"org": principal.organization_id, "issue": body.issue_id,
-         "property": body.external_property_id, "reservation": body.reservation_id},
+        {"org": principal.organization_id, "issue": issue_id,
+         "property": property_id, "reservation": reservation_id},
     ):
         problem(404, "NOT_FOUND", "This repair does not match the verified stay.")
-    answer = GuestMessageBody(body=body.body, field_key=body.field_key)
-    return import_guest_message(body.issue_id, answer, request, principal, session, key)
+
+
+@router.get("/maintenance-bridge/operations-status", include_in_schema=False, response_model=SourceRepairOut)
+def operations_status(
+    request: Request,
+    external_property_id: UUID,
+    reservation_id: str = Query(min_length=1, max_length=200),
+    issue_id: str = Query(min_length=1, max_length=200),
+    session: Session = Depends(get_session, scope="function"),
+):
+    principal, _ = verify_operations_repair(request, session, external_property_id, reservation_id)
+    require_repair_stay(session, principal, issue_id, external_property_id, reservation_id)
+    return source_repair(session, principal.organization_id, issue_id)
 
 
 @router.post("/maintenance-bridge/messages/{issue_id:path}", response_model=SourceRepairOut)

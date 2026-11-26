@@ -29,6 +29,7 @@ from app.clock import Clock, SystemClock
 from app.config import Settings, validate_startup
 from app.db import get_engine, session_factory, validate_app_role
 from app.logging_redaction import install_redaction
+from app.services.operations_access import GUEST_REPLY_PATH, OPERATIONS_SCHEDULE_WRITES
 from app.workspaces import LEGACY_WORKSPACE_ID
 
 logger = logging.getLogger("app.api")
@@ -89,6 +90,41 @@ def create_app(settings: Settings, clock: Clock | None = None) -> FastAPI:
                 )
                 is not None
             )
+            manager_workspace_write = settings.workspace_signup_enabled and (
+                (
+                    request.method == "POST"
+                    and path
+                    in {
+                        "/v1/accounts/join",
+                        "/v1/accounts/switch-workspace",
+                        "/v1/workspace/manager-invitations",
+                    }
+                )
+                or (
+                    request.method == "DELETE"
+                    and re.fullmatch(r"/v1/workspace/managers/[0-9a-f-]{36}", path) is not None
+                )
+                or (request.method == "PATCH" and path == "/v1/workspace/action-inbox/claim")
+            )
+            operations_write = (
+                settings.workspace_signup_enabled
+                and settings.operations_login_enabled
+                and request.method == "POST"
+                and (
+                    path
+                    in {
+                        "/v1/accounts/operations/grants",
+                        "/v1/accounts/operations/redeem",
+                        "/v1/accounts/operations/inbox-grant",
+                    }
+                    or (path == GUEST_REPLY_PATH and settings.operations_guest_reply_workspace is not None)
+                    or (
+                        path in OPERATIONS_SCHEDULE_WRITES
+                        and settings.operations_touchup_enabled
+                        and settings.local_scheduling_enabled
+                    )
+                )
+            )
             local_schedule = (
                 settings.local_scheduling_enabled
                 and request.method == "POST"
@@ -105,6 +141,8 @@ def create_app(settings: Settings, clock: Clock | None = None) -> FastAPI:
                 and not local_setup
                 and not cleaning_time
                 and not local_schedule
+                and not manager_workspace_write
+                and not operations_write
                 and not (request.method == "PATCH" and path == "/v1/accounts/me")
             ):
                 from starlette.responses import JSONResponse

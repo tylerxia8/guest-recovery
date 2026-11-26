@@ -111,6 +111,14 @@ def solution(db, issue, message):
     return result
 
 
+def validated_answer(body):
+    if not isinstance(body, str) or not 1 <= len(body.strip()) <= 2000:
+        raise ValueError('Enter an answer of 1 to 2000 characters')
+    if re.search(r'@|https?://|\b(?:\+?\d[\d ().-]{7,}\d|\d{4,}|\d{1,2}[/-]\d{1,2}|today|tomorrow|tonight|yesterday|password|passcode|keypad|lockbox|pin|code|refund|discount|ordered|purchased|gas leak|early check.?in|late check.?out)\b', body, re.IGNORECASE) or re.match(r'^\s*(?:hi|hey|hello)\b', body, re.IGNORECASE):
+        raise ValueError('Save general property facts only, without guest names, greetings, contacts, access details, or one-stay exceptions')
+    return body.strip()
+
+
 def save(db, data, timestamp):
     from research import analyze
     row = db.execute('SELECT body FROM research_snapshot WHERE id = 1').fetchone()
@@ -126,11 +134,7 @@ def save(db, data, timestamp):
     intent = data.get('intent')
     if not isinstance(intent, str) or intent not in [item['intent'] for item in solution(db, issue, message)['library']]:
         raise ValueError('Choose a supported recurring question from this conversation')
-    body = data.get('body')
-    if not isinstance(body, str) or not 1 <= len(body.strip()) <= 2000:
-        raise ValueError('Enter an answer of 1 to 2000 characters')
-    if re.search(r'@|https?://|\b(?:\+?\d[\d ().-]{7,}\d|\d{4,}|\d{1,2}[/-]\d{1,2}|today|tomorrow|tonight|yesterday|password|passcode|keypad|lockbox|pin|code|refund|discount|ordered|purchased|gas leak|early check.?in|late check.?out)\b', body, re.IGNORECASE) or re.match(r'^\s*(?:hi|hey|hello)\b', body, re.IGNORECASE):
-        raise ValueError('Save general property facts only, without guest names, greetings, contacts, access details, or one-stay exceptions')
+    body = validated_answer(data.get('body'))
     if data.get('approved') is not True:
         raise ValueError('Approve this exact answer for future similar questions at this property')
     property_id = issue['property_ids'][0]

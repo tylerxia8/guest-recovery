@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import stat
+import time
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
@@ -41,15 +42,32 @@ def items(directory, issuer, authorization):
             raise AuthError(403, 'The inbox workspace could not be verified.')
         drafts = []
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='private_reply_drafts'").fetchone():
-            drafts = db.execute("""
+            outcome_filter = ""
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='private_reply_outcomes'").fetchone():
+                outcome_filter = """
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM private_reply_outcomes o
+                        WHERE o.property_id=d.property_id AND o.booking_id=d.booking_id
+                            AND o.message_id=d.message_id AND o.status='accepted'
+                    )
+                """
+            drafts = db.execute(f"""
                 SELECT d.property_id, d.booking_id, u.name
                 FROM private_reply_drafts d LEFT JOIN rental_units u ON u.id=d.property_id
+                {outcome_filter}
                 GROUP BY d.property_id, d.booking_id, u.name ORDER BY max(d.rowid) DESC LIMIT 100
             """).fetchall()
         orders = db.execute("""
             SELECT id, property FROM purchase_requests WHERE decision='pending'
             ORDER BY created_at DESC LIMIT 100
         """).fetchall()
+        shared_orders = []
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='private_supply_proposals'").fetchone():
+            shared_orders = db.execute("""
+                SELECT property_id, booking_id, property_name
+                FROM private_supply_proposals WHERE state='pending' AND checkout_at>?
+                ORDER BY checkout_at LIMIT 100
+            """, (time.time(),)).fetchall()
     return [{
         'source': 'guest-replies',
         'id': str(uuid5(NAMESPACE_URL, f'lucena-draft:{workspace}:{property_id}:{booking_id}')),
@@ -68,4 +86,13 @@ def items(directory, issuer, authorization):
         'due_at': None,
         'urgent': False,
         'path': '/',
-    } for identifier, property_name in orders]
+    } for identifier, property_name in orders] + [{
+        'source': 'supplies',
+        'id': str(uuid5(NAMESPACE_URL, f'lucena-shared-supply:{workspace}:{property_id}:{booking_id}')),
+        'title': 'Guest supply request',
+        'property': property_name,
+        'next_action': 'Review the selected supplies and delivery',
+        'due_at': None,
+        'urgent': False,
+        'path': '/messages?' + urlencode({'property_external_id': property_id, 'reservation_external_id': booking_id}),
+    } for property_id, booking_id, property_name in shared_orders]

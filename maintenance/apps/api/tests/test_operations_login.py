@@ -14,6 +14,7 @@ def settings_for_login():
     return SimpleNamespace(
         allows_local_auth=True,
         operations_workspace_provisioning=False,
+        allows_operations_membership=False,
         operations_turnover_origin="https://turnover.example",
         operations_workspace_id=uuid4(),
         operations_account_id=uuid4(),
@@ -59,7 +60,7 @@ def test_operations_exchange_requires_linked_manager(monkeypatch, matching, mana
     assert json.loads(open_request.call_args.args[0].data)["client"] == "maintenance"
 
 
-def test_operations_exchange_is_unavailable_outside_local_auth(monkeypatch):
+def test_legacy_prelinked_operations_exchange_is_unavailable_outside_local_auth(monkeypatch):
     settings = settings_for_login()
     settings.allows_local_auth = False
     request = Request({"type": "http", "app": SimpleNamespace(state=SimpleNamespace(settings=settings))})

@@ -52,12 +52,63 @@ def cleaning_form(csrf, query):
         for name, value in hidden.items()
     )
     return (
-        '<form action="/cleaning-touchup" method="post"><h2>Request a cleaning touch-up</h2>'
+        '<form action="/cleaning-touchup" method="post" id="cleaning-touchup"><h2>Request a cleaning touch-up</h2>'
         + fields
         + '<label>Cleaning needed<textarea name="scope" maxlength="1000" required></textarea></label>'
         + '<label>Earliest entry (Eastern)<input type="datetime-local" name="release_at" required></label>'
         + '<label>Latest finish (Eastern)<input type="datetime-local" name="deadline_at" required></label>'
         + '<label>Duration (minutes)<input type="number" name="duration_minutes" min="15" max="240" required></label>'
-        + '<label><input type="checkbox" name="guest_access_confirmed" value="yes" required> Guest agreed to this entry window</label>'
+        + '<label class="entry-confirmation"><input type="checkbox" name="guest_access_confirmed" value="yes" required> Guest agreed to this entry window</label>'
         + '<button type="submit">Create Cleaner task</button></form>'
+    )
+
+
+def stay_change_payload(fields):
+    try:
+        kind = fields['kind']
+        property_id = fields['property_external_id']
+        reservation_id = fields['reservation_external_id']
+        booked_start = dt.datetime.fromisoformat(fields['booked_check_in'])
+        booked_end = dt.datetime.fromisoformat(fields['booked_check_out'])
+        if (
+            kind not in ('early_checkin', 'late_checkout')
+            or not 1 <= len(property_id) <= 120
+            or not 1 <= len(reservation_id) <= 120
+            or booked_start.tzinfo is None
+            or booked_end.tzinfo is None
+            or booked_start >= booked_end
+        ):
+            raise ValueError('Invalid booking or stay change')
+        body = {
+            'kind': kind, 'property_external_id': property_id, 'reservation_external_id': reservation_id,
+            'booked_check_in': booked_start.astimezone(dt.UTC).isoformat(),
+            'booked_check_out': booked_end.astimezone(dt.UTC).isoformat(),
+            'target_at': eastern_time(fields['target_at']),
+        }
+    except (KeyError, ValueError):
+        raise AuthError(400, 'Choose a stay and enter the requested Eastern time.') from None
+    body['request_id'] = str(uuid5(NAMESPACE_URL, 'lucena:stay-change:' + json.dumps(body, sort_keys=True)))
+    return body
+
+
+def stay_change_form(csrf, fields, stay_times):
+    from private_handoffs import stay_time
+
+    booked = {key: stay_times.get(key) for key in ('booked_check_in', 'booked_check_out')}
+    if not all(isinstance(value, str) and value for value in booked.values()):
+        return ''
+    hidden = {**fields, **booked, 'csrf': csrf}
+    inputs = ''.join(
+        f'<input type="hidden" name="{name}" value="{escape(value, quote=True)}">' for name, value in hidden.items()
+    )
+    return (
+        '<form action="/stay-change" method="post" id="stay-change"><h2>Check-in or checkout request</h2>' + inputs
+        + '<p>Booked stay · ' + escape(stay_time(booked['booked_check_in']))
+        + ' to ' + escape(stay_time(booked['booked_check_out'])) + '</p>'
+        + '<label><span id="stay-change-kind-label">Request type</span><select name="kind" aria-labelledby="stay-change-kind-label" required>'
+        + '<option value="early_checkin">Early check-in</option><option value="late_checkout">Late checkout</option>'
+        + '</select></label>'
+        + '<label>Requested time (Eastern)<input type="datetime-local" name="target_at" required></label>'
+        + '<p>Cleaner updates the schedule when the request meets the rules.</p>'
+        + '<button type="submit">Check and apply</button></form>'
     )

@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from functools import lru_cache
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,6 +47,7 @@ class Settings(BaseSettings):
     workspace_signup_enabled: bool = False
     operations_login_enabled: bool = False
     operations_guest_messages_enabled: bool = False
+    operations_guest_reply_workspace: UUID | None = None
     operations_touchup_enabled: bool = False
     operations_repair_enabled: bool = False
     workspace_registration_enabled: bool = True
@@ -245,6 +247,16 @@ def validate_startup(settings: Settings) -> None:
         )
     if settings.workspace_signup_enabled and not settings.hospitable_read_only:
         raise ConfigError("workspace_signup_isolation_required", "Workspace signup requires read-only Hospitable mode.")
+    if settings.operations_guest_reply_workspace and not (
+        settings.workspace_signup_enabled
+        and not settings.workspace_registration_enabled
+        and settings.operations_login_enabled
+        and settings.operations_guest_messages_enabled
+        and settings.hospitable_read_only
+    ):
+        raise ConfigError(
+            "guest_reply_requires_private_workspace", "Guest replies require a private connected workspace."
+        )
     if settings.local_email_automation_enabled and not (
         settings.local_scheduling_enabled and settings.gmail_assignment_send_enabled and settings.gmail_credentials_file
     ):

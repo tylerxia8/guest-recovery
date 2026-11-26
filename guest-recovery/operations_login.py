@@ -24,7 +24,9 @@ FLOW_VALUE = re.compile(r'[A-Za-z0-9_-]{43}')
 READ_TOKEN = re.compile(r'ops_[A-Za-z0-9_-]{43}')
 TOUCHUP_TOKEN = re.compile(r'opc_[A-Za-z0-9_-]{43}')
 REPAIR_TOKEN = re.compile(r'opr_[A-Za-z0-9_-]{43}')
+REPLY_TOKEN = re.compile(r'opg_[A-Za-z0-9_-]{43}')
 READ_SESSIONS = {}
+EMPTY_ACCESS = (0, '', '', '', '')
 MEMBERSHIP_SESSIONS = {}
 MEMBERSHIP_TOKEN = re.compile(r'opm_[A-Za-z0-9_-]{43}')
 READ_LOCK = threading.Lock()
@@ -106,7 +108,7 @@ def remember_read_access(token, identity):
     if isinstance(read_token, str) and READ_TOKEN.fullmatch(read_token) and type(expires_in) is int and 0 < expires_in <= 900:
         now = time.monotonic()
         with READ_LOCK:
-            for key, (expiry, _, _, _) in list(READ_SESSIONS.items()):
+            for key, (expiry, _, _, _, _) in list(READ_SESSIONS.items()):
                 if expiry <= now:
                     del READ_SESSIONS[key]
             if len(READ_SESSIONS) >= 100:
@@ -117,7 +119,10 @@ def remember_read_access(token, identity):
             repair = identity.get('repair_token')
             if not isinstance(repair, str) or not REPAIR_TOKEN.fullmatch(repair):
                 repair = ''
-            READ_SESSIONS[hashlib.sha256(token.encode()).hexdigest()] = (now + expires_in, read_token, touchup, repair)
+            reply = identity.get('reply_token')
+            if not isinstance(reply, str) or not REPLY_TOKEN.fullmatch(reply):
+                reply = ''
+            READ_SESSIONS[hashlib.sha256(token.encode()).hexdigest()] = (now + expires_in, read_token, touchup, repair, reply)
 
 
 def remember_membership(session_token, membership):
@@ -160,7 +165,7 @@ def verify_membership(issuer, session_hash, workspace, account):
 
 def has_read_access(session_hash):
     with READ_LOCK:
-        expiry, _, _, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, _, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
         return expiry > time.monotonic()
 
 
@@ -187,13 +192,22 @@ def read_stay(issuer, session_hash, query, resource):
     return read_turnover(issuer, session_hash, resource + '?' + urlencode(payload))
 
 
+def cleaning_status(issuer, session_hash, payload):
+    query = urlencode({
+        'property_external_id': payload['external_property_id'],
+        'reservation_external_id': payload['reservation_id'],
+        'request_id': payload['issue_id'],
+    })
+    return read_turnover(issuer, session_hash, '/cleaning-status?' + query)
+
+
 def stays(issuer, session_hash):
     return read_turnover(issuer, session_hash, '/stays')
 
 
 def read_turnover(issuer, session_hash, path):
     with READ_LOCK:
-        expiry, token, _, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, token, _, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     if expiry <= time.monotonic():
         forget_read_access(session_hash)
         raise AuthError(401, 'Sign in with Cleaner again to view shared stay details.')
@@ -212,6 +226,8 @@ def read_turnover(issuer, session_hash, path):
         if status in (401, 403):
             forget_read_access(session_hash)
             raise AuthError(401, 'Sign in with Cleaner again to view shared stay details.') from None
+        if status == 429:
+            raise AuthError(429, 'Wait a moment before refreshing guest messages.') from None
         if status == 404:
             raise AuthError(404, 'This Hospitable stay was not found in your workspace.') from None
         raise AuthError(503, 'Cleaner stay details are temporarily unavailable.') from None
@@ -235,36 +251,80 @@ def selected_workspace(headers):
 
 def has_touchup_access(session_hash):
     with READ_LOCK:
-        expiry, _, token, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, token, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     return bool(token and expiry > time.monotonic())
 
 
 def send_touchup(issuer, session_hash, payload):
+    return post_schedule_change(issuer, session_hash, 'cleaning-touchup', payload, 'task_id')
+
+
+def send_stay_change(issuer, session_hash, payload):
+    return post_schedule_change(issuer, session_hash, 'stay-change', payload, 'request_id')
+
+
+def post_schedule_change(issuer, session_hash, operation, payload, result_key):
     with READ_LOCK:
-        expiry, _, token, _ = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, token, _, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     if not token or expiry <= time.monotonic():
-        raise AuthError(401, 'Reconnect with Cleaner to send a cleaning request.')
+        raise AuthError(401, 'Reconnect with Cleaner to request a schedule change.')
     request = Request(
-        issuer + '/auth/operations/cleaning-touchup',
+        issuer + '/auth/operations/' + operation,
         data=json.dumps(payload).encode(),
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
     )
     try:
         with build_opener(NoRedirect()).open(request, timeout=12) as response:
             result = json.loads(response.read(8192))
-        if not isinstance(result, dict) or not result.get('task_id'):
-            raise ValueError('Invalid cleaning task response')
+        if not isinstance(result, dict) or not result.get(result_key):
+            raise ValueError('Invalid scheduling response')
     except HTTPError as error:
         status = error.code
         error.close()
         if status in (401, 403):
-            raise AuthError(401, 'Reconnect with Cleaner to send a cleaning request.') from None
+            raise AuthError(401, 'Reconnect with Cleaner to request a schedule change.') from None
         if status == 422:
-            raise AuthError(422, 'Cleaner could not validate the booking or proposed cleaning window.') from None
-        raise AuthError(503, 'Cleaner could not confirm the cleaning request.') from None
+            raise AuthError(422, 'Cleaner could not verify the stay or the requested time. Refresh the case and try again.') from None
+        raise AuthError(503, 'Cleaner could not confirm the scheduling request.') from None
     except (URLError, OSError, ValueError):
-        raise AuthError(503, 'Cleaner could not confirm the cleaning request.') from None
+        raise AuthError(503, 'Cleaner could not confirm the scheduling request.') from None
     return result
+
+
+
+def has_reply_access(session_hash):
+    with READ_LOCK:
+        expires, _, _, _, token = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
+    return bool(token and expires > time.monotonic())
+
+
+def send_guest_reply(issuer, session_hash, payload):
+    with READ_LOCK:
+        expires, _, _, _, token = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
+    if not token or expires <= time.monotonic():
+        raise AuthError(401, 'Reconnect with Cleaner before sending a reply.')
+    request = Request(
+        issuer + '/auth/operations/guest-reply',
+        data=json.dumps(payload).encode(),
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    )
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=16) as response:
+            result = json.loads(response.read(2048))
+        if isinstance(result, dict) and result.get('status') in ('accepted', 'rejected', 'unknown'):
+            return result['status']
+    except HTTPError as error:
+        status = error.code
+        error.close()
+        if status in (401, 403):
+            raise AuthError(401, 'Reconnect with Cleaner before sending a reply.') from None
+        if status == 429:
+            raise AuthError(429, 'Wait 31 seconds after opening the conversation, then return to the form and try again.') from None
+        if status in (400, 404, 409, 422):
+            raise AuthError(status, 'Cleaner blocked this attempt. Check the latest conversation and any previous reply in Hospitable.') from None
+    except (URLError, OSError, ValueError):
+        pass
+    return 'unknown'
 
 
 def maintenance_origin():
@@ -277,26 +337,34 @@ def maintenance_origin():
 
 def has_repair_access(session_hash):
     with READ_LOCK:
-        expiry, _, _, token = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, _, token, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     return bool(token and expiry > time.monotonic() and maintenance_origin())
 
 
 def send_repair(session_hash, payload, *, answer=False):
+    resource = 'operations-answers' if answer else 'operations-requests'
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() if answer else payload['issue_id']
+    return request_repair(session_hash, resource, payload, key)
+
+
+def repair_status(session_hash, payload):
+    return request_repair(session_hash, 'operations-status?' + urlencode(payload))
+
+
+def request_repair(session_hash, resource, payload=None, key=None):
     origin = maintenance_origin()
     with READ_LOCK:
-        expiry, _, _, token = READ_SESSIONS.get(session_hash, (0, '', '', ''))
+        expiry, _, _, token, _ = READ_SESSIONS.get(session_hash, EMPTY_ACCESS)
     if not origin or not token or expiry <= time.monotonic():
         raise AuthError(401, 'Reconnect with Cleaner to send a repair request.')
     authorization = 'Bearer ' + token
-    resource = 'operations-answers' if answer else 'operations-requests'
-    key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() if answer else payload['issue_id']
+    headers = {'Authorization': authorization, 'X-Grok-Authorization': authorization, 'Accept': 'application/json'}
+    if payload is not None:
+        headers.update({'Content-Type': 'application/json', 'Idempotency-Key': key})
     request = Request(
         origin + '/v1/maintenance-bridge/' + resource,
-        data=json.dumps(payload).encode(),
-        headers={
-            'Authorization': authorization, 'X-Grok-Authorization': authorization,
-            'Content-Type': 'application/json', 'Idempotency-Key': key,
-        },
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers=headers,
     )
     try:
         with build_opener(NoRedirect()).open(request, timeout=12) as response:
@@ -306,6 +374,8 @@ def send_repair(session_hash, payload, *, answer=False):
     except HTTPError as error:
         status = error.code
         error.close()
+        if status == 404:
+            raise AuthError(404, 'This repair was not found for the verified stay.') from None
         if status == 409:
             raise AuthError(409, 'Maintenance could not accept this case. Check the property link and whether the case requires the safety workflow.') from None
         if status in (401, 403):

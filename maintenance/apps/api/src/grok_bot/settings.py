@@ -159,6 +159,14 @@ class Settings(BaseSettings):
         return self.app_env in {"development", "test"}
 
     @property
+    def allows_operations_membership(self) -> bool:
+        return (
+            self.operations_workspace_provisioning
+            and self.demo_fixture != "sample"
+            and self.database_name != "grok_demo_sample"
+        )
+
+    @property
     def allows_local_password_login(self) -> bool:
         return self.allows_local_auth and not os.getenv("RAILWAY_ENVIRONMENT_ID")
 

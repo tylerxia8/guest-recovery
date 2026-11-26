@@ -23,3 +23,23 @@ class InternalSchedulerTest(unittest.TestCase):
                 opener.assert_not_called()
             with self.assertRaisesRegex(ValueError, 'uses the internal scheduler'):
                 cleaner_returns.prepare_configuration({})
+
+    def test_only_a_matching_legacy_origin_and_workspace_can_be_reconciled(self):
+        workspace = '11111111-1111-4111-8111-111111111111'
+        legacy = 'https://cleaner.example.test'
+        current = local_scheduler.origin(workspace)
+        with patch.dict(os.environ, {
+            'INTERNAL_SCHEDULER_WORKSPACE_ID': workspace,
+            'CLEANER_SCHEDULER_WORKSPACE_ID': workspace,
+            'CLEANER_SCHEDULER_URL': legacy + '/',
+        }, clear=True):
+            self.assertEqual(local_scheduler.resolve_origin(legacy, current), current)
+            with self.assertRaisesRegex(ValueError, 'connection changed'):
+                local_scheduler.resolve_origin('https://another.example.test', current)
+            with patch.dict(os.environ, {'CLEANER_SCHEDULER_WORKSPACE_ID': 'another-workspace'}):
+                with self.assertRaisesRegex(ValueError, 'connection changed'):
+                    local_scheduler.resolve_origin(legacy, current)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(local_scheduler.resolve_origin(legacy, legacy), legacy)
+            with self.assertRaisesRegex(ValueError, 'connection changed'):
+                local_scheduler.resolve_origin(legacy, 'https://another.example.test')

@@ -42,6 +42,7 @@ class ManagerSession(AccountBase):
 
     token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'manager'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

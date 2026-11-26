@@ -7,5 +7,6 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --frozen --no-dev
 ENV PATH="/opt/venv/bin:$PATH"
 COPY backend/app ./app
 COPY backend/migrations ./migrations
+COPY backend/scripts/reconcile_hosted_schema.py ./scripts/reconcile_hosted_schema.py
 COPY backend/alembic.ini backend/hosted_startup.py ./
 CMD ["python", "hosted_startup.py"]

@@ -97,6 +97,7 @@ def test_guest_messages_use_workspace_connection_and_one_provider_attempt(monkey
         operations_guest_messages_enabled=True,
         hospitable_read_only=True,
         hospitable_token_file="/unused",
+        operations_guest_reply_workspace=None,
         field_encryption_secret="fixture",
     )
     stay = SimpleNamespace(
@@ -104,11 +105,11 @@ def test_guest_messages_use_workspace_connection_and_one_provider_attempt(monkey
         status="active",
         approved_guest_checkin_at=None,
         approved_guest_checkout_at=None,
-        checkin_at=now - timedelta(hours=1),
-        checkout_at=now + timedelta(hours=12),
+        checkin_at=now - timedelta(hours=1, microseconds=180000),
+        checkout_at=now + timedelta(hours=12, microseconds=713000),
     )
     session = Mock(info={"workspace_id": workspace})
-    session.execute.return_value.one_or_none.return_value = (Mock(), stay)
+    session.execute.return_value.one_or_none.return_value = (SimpleNamespace(name="Fixture home"), stay)
     session.get.return_value = SimpleNamespace(token_ciphertext=b"encrypted")
     cache = Mock()
     provider = Mock()
@@ -121,7 +122,10 @@ def test_guest_messages_use_workspace_connection_and_one_provider_attempt(monkey
         "house", booking, Mock(), session, settings, SimpleNamespace(now=lambda: now), cache
     )
     assert result.headers["Cache-Control"] == "no-store"
-    assert json.loads(result.body)["messages"][0]["body"] == "Fixture message"
+    body = json.loads(result.body)
+    assert body["messages"][0]["body"] == "Fixture message"
+    assert datetime.fromisoformat(body["booked_check_in"]) == stay.checkin_at
+    assert datetime.fromisoformat(body["booked_check_out"]) == stay.checkout_at
     assert "fixture-token" not in result.body.decode()
     assert session.get.call_args.args[1] == workspace
     assert session.get.call_args.kwargs == {"populate_existing": True}

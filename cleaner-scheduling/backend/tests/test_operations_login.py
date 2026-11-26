@@ -35,7 +35,10 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
     verifier = secrets.token_urlsafe(32)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     settings = SimpleNamespace(
-        operations_login_enabled=True, operations_touchup_enabled=False, operations_repair_enabled=False
+        operations_login_enabled=True,
+        operations_touchup_enabled=False,
+        operations_repair_enabled=False,
+        operations_guest_reply_workspace=identity.workspace_id,
     )
     clock = SimpleNamespace(now=lambda: datetime.now(UTC))
     request = SimpleNamespace(headers={"authorization": "Bearer manager-session"})
@@ -69,8 +72,10 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
     assert payload["workspace_id"] == str(identity.workspace_id)
     assert payload["read_token_expires_in"] == 900
     assert payload["workspace_owner_id"] == str(owner)
+    assert payload["reply_token"].startswith("opg_")
     cache.get.side_effect = saved.get
     assert accounts.token_digest("manager-session") == read_session_digest(cache, payload["read_token"])
+    assert accounts.token_digest("manager-session") == read_session_digest(cache, payload["reply_token"])
     assert all(payload["read_token"] not in key for key in saved)
     assert revalidate.call_args.args[1] == accounts.token_digest("manager-session")
     membership_request = SimpleNamespace(headers={"authorization": "Bearer " + payload["membership_token"]})
@@ -88,7 +93,12 @@ def test_operations_grant_is_bound_to_client_and_verifier_and_consumed(monkeypat
     [
         ("POST", "/v1/workspace/operations/stay-context", True, b"ops_"),
         ("POST", "/v1/workspace/operations/cleaning-touchup", True, b"ops_"),
+        ("POST", "/v1/workspace/operations/stay-change", True, b"ops_"),
+        ("POST", "/v1/workspace/operations/stay-change", True, b"opr_"),
         ("GET", "/v1/workspace/operations/stays", True, b"opc_"),
+        ("POST", "/v1/workspace/operations/guest-reply", True, b"ops_"),
+        ("POST", "/v1/workspace/operations/guest-reply", True, b"opc_"),
+        ("POST", "/v1/workspace/operations/stay-change", True, b"opg_"),
         ("GET", "/v1/workspace/setup", True, b"ops_"),
         ("GET", "/v1/workspace/setup", True, b"opm_"),
         ("GET", "/v1/workspace/operations/stay-context", False, b"ops_"),
@@ -105,7 +115,11 @@ def test_operations_read_token_cannot_be_used_outside_its_scope(monkeypatch, met
     catalog = Mock()
     monkeypatch.setattr(db, "catalog_session_factory", catalog)
     settings = SimpleNamespace(
-        workspace_signup_enabled=True, operations_login_enabled=enabled, operations_touchup_enabled=True
+        workspace_signup_enabled=True,
+        operations_login_enabled=enabled,
+        operations_touchup_enabled=True,
+        operations_repair_enabled=True,
+        operations_guest_reply_workspace=uuid4(),
     )
     app = SimpleNamespace(state=SimpleNamespace(settings=settings, session_factory=Mock(), redis=Mock(), clock=Mock()))
     request = Request(

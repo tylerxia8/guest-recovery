@@ -21,6 +21,7 @@ from grok_bot.errors import problem
 from grok_bot.api.success import ERROR_RESPONSES, LoginOut, StepUpOut
 
 router = APIRouter(responses=ERROR_RESPONSES)
+operations_router = APIRouter(responses=ERROR_RESPONSES)
 
 
 @router.post("/auth/local/login", response_model=LoginOut)
@@ -90,7 +91,7 @@ class OperationsLoginBody(BaseModel):
 
 
 
-@router.post("/auth/operations/redeem", include_in_schema=False, response_model=LoginOut)
+@operations_router.post("/auth/operations/redeem", include_in_schema=False, response_model=LoginOut)
 def operations_login(
     body: OperationsLoginBody, request: Request, session: Session = Depends(get_session, scope="function")
 ) -> dict:
@@ -101,8 +102,14 @@ def operations_login(
     organization = settings.operations_organization_id
     user = settings.operations_maintenance_user_id
     if (
-        not settings.allows_local_auth
-        or (not settings.operations_workspace_provisioning and not all((workspace, account, organization, user)))
+        not (
+            settings.allows_operations_membership
+            or (
+                settings.allows_local_auth
+                and not settings.operations_workspace_provisioning
+                and all((workspace, account, organization, user))
+            )
+        )
         or issuer.scheme != "https"
         or not issuer.hostname
         or any((issuer.username, issuer.password, issuer.path, issuer.query, issuer.fragment))

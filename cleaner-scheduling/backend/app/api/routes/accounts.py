@@ -348,6 +348,12 @@ def redeem_operations_grant(
             "workspace_owner_id": str(owner),
             "membership_token": issue_access(cache, digest, "opm_", ttl=43200),
             **(
+                {"reply_token": issue_access(cache, digest, "opg_")}
+                if payload.client == "guest-recovery"
+                and settings.operations_guest_reply_workspace == account.workspace_id
+                else {}
+            ),
+            **(
                 {"read_token": issue_read_access(cache, digest), "read_token_expires_in": ACCESS_SECONDS}
                 if payload.client == "guest-recovery"
                 else {}

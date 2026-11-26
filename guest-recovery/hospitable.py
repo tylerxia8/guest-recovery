@@ -12,7 +12,7 @@ import urllib.request
 import uuid
 from contextlib import closing
 
-from guest_app import DATABASE, ROOT, audit, connect, initialize, mutate
+from guest_app import DATABASE, audit, connect, initialize, mutate
 
 
 def get(path, token):
@@ -83,13 +83,21 @@ def sync(identifier):
     print(json.dumps({'event': 'hospitable_sync', 'imported_messages': imported}))
 
 
-def research():
+def configured_token():
+    from settings import ENV_PATH
+
     token = os.environ.get('HOSPITABLE_TOKEN', '')
-    if not token:
-        for line in (ROOT / '.env').read_text().splitlines():
-            key, separator, value = line.partition('=')
-            if separator and key.strip() == 'HOSPITABLE_TOKEN':
-                token = value.strip().strip('\"\'')
+    if token or not ENV_PATH.is_file():
+        return token
+    for line in ENV_PATH.read_text().splitlines():
+        key, separator, value = line.partition('=')
+        if separator and key.strip() == 'HOSPITABLE_TOKEN':
+            return value.strip().strip('"\'')
+    return ''
+
+
+def research():
+    token = configured_token()
     if not token:
         raise ValueError('HOSPITABLE_TOKEN is empty')
     properties = []
