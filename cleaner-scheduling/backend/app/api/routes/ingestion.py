@@ -312,8 +312,9 @@ def operations_guest_messages(
                 for message in ordered[-10:]
             ],
             "has_older": len(ordered) > 10,
-            "booked_check_in": dump_utc(stay.checkin_at),
-            "booked_check_out": dump_utc(stay.checkout_at),
+            # These are exact booking anchors for detecting stale stay-change requests.
+            "booked_check_in": stay.checkin_at.astimezone(UTC).isoformat(),
+            "booked_check_out": stay.checkout_at.astimezone(UTC).isoformat(),
         },
         headers={"Cache-Control": "no-store"},
     )
