@@ -48,7 +48,8 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
   }
 
   const toolNavigation = connected && workspaceSignup ? <nav aria-label="Workspace tools">
-    <Link href={pathname === "/signup" ? "/signup" : "/dashboard"} aria-current="page">Cleaner</Link>
+    <Link href="/home" aria-current={pathname === "/home" ? "page" : undefined}>Home</Link>
+    <Link href="/dashboard" aria-current={pathname === "/dashboard" ? "page" : undefined}>Cleaner</Link>
     <Link href="/action-inbox" aria-current={pathname === "/action-inbox" ? "page" : undefined}>Action inbox</Link>
     {operationsTools.map(tool => <a key={tool.label} href={tool.href}>{tool.label}</a>)}
   </nav> : null;
@@ -57,7 +58,7 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
   if (pathname === "/onboarding" || pathname === "/cleaner" || pathname === "/login" || pathname === "/join") return <>{children}</>;
 
   if (workspaceSignup) return <>
-    <header className="app-header"><Link href="/dashboard" className="brand"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Cleaner<small>Cleaning coordination</small></span></Link>{connected ? <div className="account-actions"><Link href="/workspaces">Switch workspace</Link><Link href="/security" aria-current={pathname === "/security" ? "page" : undefined}>Security</Link><button type="button" disabled={busy} onClick={async () => {
+    <header className="app-header"><Link href="/home" className="brand"><Image src="/brand/turnover-mark.svg" alt="" width={42} height={42} className="brand-symbol" aria-hidden="true" /><span className="brand-wordmark">Lucena Systems</span></Link>{connected ? <div className="account-actions"><Link href="/workspaces">Switch workspace</Link><Link href="/security" aria-current={pathname === "/security" ? "page" : undefined}>Security</Link><button type="button" disabled={busy} onClick={async () => {
       setBusy(true); setMessage("");
       try {
         const response = await fetch("/auth/logout", {method: "POST", signal: AbortSignal.timeout(20000)});
@@ -66,7 +67,7 @@ export function AppFrame({ children, demo = false, connected = false, sourceMode
       } catch { setMessage("Could not sign out. Try again."); setBusy(false); }
     }}>Sign out</button></div> : <Link href={pathname === "/login" ? "/signup" : "/login"}>{pathname === "/login" ? "Create account" : "Sign in"}</Link>}</header>
     {toolNavigation}
-    {connected ? <nav aria-label="Cleaner navigation">{NAV_LINKS.map(({ label, href, icon: Icon }) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined}><Icon size={16} strokeWidth={2} aria-hidden="true" />{label}</Link>)}</nav> : null}
+    {connected && pathname !== "/home" ? <nav aria-label="Cleaner navigation">{NAV_LINKS.map(({ label, href, icon: Icon }) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined}><Icon size={16} strokeWidth={2} aria-hidden="true" />{label}</Link>)}</nav> : null}
     {sessionExpired ? <p role="alert">Your session expired. <Link href="/login">Sign in to continue</Link>.</p> : null}
     {message ? <p role="alert">{message}</p> : null}{children}
   </>;
