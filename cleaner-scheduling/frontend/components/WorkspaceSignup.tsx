@@ -44,7 +44,7 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
     let active = true;
     void api<Setup>("/workspace/setup").then(async value => {
       if (!active) return;
-      if (value.completed) { router.replace("/dashboard"); return; }
+      if (value.completed) { router.replace("/home"); return; }
       if (value.connected) {
         const response = await api<{cleaners: SavedCleaner[]}>("/workspace/cleaners");
         if (!active) return;
@@ -106,7 +106,7 @@ export function WorkspaceSignup({login, authenticated, internalConnection = fals
         }
         keys.current.complete ||= crypto.randomUUID();
         await api("/workspace/complete", {method: "POST", headers: {"Idempotency-Key": keys.current.complete}, body: "{}"});
-        router.replace("/dashboard"); router.refresh();
+        router.replace("/home"); router.refresh();
       }
     } catch (failure) { if (step === 2 && (failure as ApiError).status === 422) keys.current.connection = ""; setError(failure instanceof Error ? failure.message : "Could not save. Please try again."); }
     finally { setBusy(false); }

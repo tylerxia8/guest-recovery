@@ -49,7 +49,7 @@ export function WorkspacePicker({authenticated, invitation = false}: {authentica
         window.history.replaceState(window.history.state, "", "/join");
         setJoined(true);
       } else {
-        window.location.replace("/dashboard");
+        window.location.replace("/home");
       }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Could not complete the request.");

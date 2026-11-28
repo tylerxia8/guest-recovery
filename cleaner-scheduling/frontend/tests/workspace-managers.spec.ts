@@ -61,5 +61,8 @@ test("an existing manager accepts an invitation and chooses the new company", as
   await page.getByRole("link", {name: "Choose workspace"}).click();
   await expect(page.getByText("Original Company · Current")).toBeVisible();
   await page.getByRole("button", {name: "Second Company"}).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/home$/);
+  await expect(page.getByRole("heading", {name: "Workspace home"})).toBeVisible();
+  await expect(page.getByRole("link", {name: "Open Cleaner"})).toHaveAttribute("href", "/dashboard");
+  await expect(page.getByRole("navigation", {name: "Cleaner navigation"})).toHaveCount(0);
 });

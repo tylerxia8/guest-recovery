@@ -78,8 +78,7 @@ async function workspaceAccess(request: NextRequest, requestHeaders: Headers) {
     return new NextResponse("Your workspace is unavailable. Please refresh to try again.", {status: 503});
   }
   if (!completed) return ["/signup", "/security", "/workspaces"].includes(path) ? NextResponse.next({request: {headers: requestHeaders}}) : NextResponse.redirect(new URL("/signup", origin));
-  if (accountPage) return NextResponse.redirect(new URL("/dashboard", origin));
-  if (path === "/") return NextResponse.redirect(new URL("/dashboard", origin));
+  if (accountPage) return NextResponse.redirect(new URL("/home", origin));
   return NextResponse.next({request: {headers: requestHeaders}});
 }
 
